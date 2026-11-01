@@ -1,6 +1,6 @@
 # Setup and Delivery Plan
 
-Status: planning baseline, 2026-11-01
+Status: planning baseline; GitHub and Neon setup complete; Vercel project creation pending, 2026-11-01
 
 This document separates authorized project setup from future implementation. Completing a provider setup step does not authorize application code or deployment.
 
@@ -37,22 +37,22 @@ Vercel's Hobby plan is currently free for personal projects within published lim
 
 ### Repository
 
-- [ ] Local Git repository initialized with `main`.
-- [ ] Documentation reviewed for private data and account identifiers.
-- [ ] Local secret-pattern scan passes.
-- [ ] Initial documentation commit created.
-- [ ] Public remote created in the verified account.
-- [ ] `origin` points to the exact intended repository.
-- [ ] Initial commit pushed and visible on `main`.
-- [ ] Remote visibility independently verified as public.
+- [x] Local Git repository initialized with `main`.
+- [x] Documentation reviewed for private data and account identifiers.
+- [x] Local secret-pattern scan passes.
+- [x] Initial documentation commit created.
+- [x] Public remote created in the verified account.
+- [x] `origin` points to the exact intended repository.
+- [x] Initial commit pushed and visible on `main`.
+- [x] Remote visibility independently verified as public.
 
 ### Neon project
 
-- [ ] Existing account and free-plan context verified.
-- [ ] No matching project exists.
-- [ ] Separate project created with the exact intended name.
-- [ ] No schema, migration, seed data, Auth provider, OAuth grant, or API key added.
-- [ ] Non-secret identifier and dashboard link recorded locally, outside Git.
+- [x] Existing account and free-plan context verified.
+- [x] No matching project exists.
+- [x] Separate project created with the exact intended name.
+- [x] No schema, migration, seed data, Auth provider, OAuth grant, or API key added.
+- [x] Non-secret identifier and dashboard link recorded locally, outside Git.
 
 ### Vercel project
 
@@ -62,6 +62,8 @@ Vercel's Hobby plan is currently free for personal projects within published lim
 - [ ] No placeholder deployment created.
 - [ ] No new persistent GitHub grant accepted without approval.
 - [ ] Non-secret identifier and dashboard link recorded locally, outside Git.
+
+Current blocker: the Vercel dashboard creates a project as part of importing and deploying a repository. A placeholder deployment is outside this milestone. Creating an empty project through the documented API requires an authenticated API or CLI session; that session must be explicitly approved before it is created.
 
 ## Delivery phases
 
