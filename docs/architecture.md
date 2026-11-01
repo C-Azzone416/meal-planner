@@ -45,8 +45,10 @@ Vercel officially supports Go HTTP functions, but documentation support is not p
 - Local tools use a narrow, authenticated draft interface.
 - The reusable local core contains provider-independent orchestration and domain transformations that are useful to both CLI and MCP adapters.
 - CLI and MCP layers remain thin transport adapters; they do not become separate business-logic implementations.
-- The web client can generate a plan from saved recipes without requiring a live agent.
+- The logged-in web experience lets the user generate a plan from stored saved recipes without requiring a live agent.
 - An existing agent host may call tools, but the product does not introduce a separate agent platform.
+
+The user-facing behavior above is settled; the computation placement is not. Plan generation may ultimately run in the web client or behind the hosted API. The implementation must select one authoritative placement rather than duplicate the generation rules in both. In either case, the hosted API remains responsible for authorization, validation at its trust boundary, and persisted plan writes.
 
 ## Proposed repository boundaries
 
@@ -72,7 +74,7 @@ Conceptual resource families:
 
 - **Recipe drafts** — submit an extracted draft, record provenance, review prep-ahead suggestions, approve or reject the structured result.
 - **Recipes** — read reviewed recipes and, if launch scope approves it, update reviewed content.
-- **Weekly plans** — generate from eligible saved recipes, read a plan, change meal placement, and recalculate affected derived lists.
+- **Weekly plans** — create and read a plan, change meal placement, and recalculate affected derived lists. The eventual contract will reflect the single selected generation placement: either a server-side generation operation or validation and persistence of a client-generated candidate, not both implementations.
 - **Shopping lists** — read derived ingredients and record progress if progress tracking is approved.
 - **Preparation lists** — read tasks grouped by time and meal ownership; record progress only if approved.
 - **Feedback** — record the minimal approved outcome and timing observations.
@@ -123,7 +125,7 @@ If source-note import is approved later, delegated Microsoft Graph access may re
 - Model active time, total ready time, attention, cleanup, and timing variability independently.
 - Preserve the meal ownership of ingredients and preparation tasks even when producing consolidated views.
 - Treat serving conversion and ingredient consolidation as domain rules with explicit tests, not display-only math.
-- Treat plan changes as versioned domain operations so shopping and preparation progress cannot silently drift.
+- **Proposed safeguard, pending the open versioning and concurrency decision:** plan changes need an explicit consistency mechanism so shopping and preparation progress cannot silently drift. Versioned domain operations are one candidate, not a settled requirement.
 - Do not encode storage or food-safety claims without a source and review policy.
 
 ## Verification checkpoints
