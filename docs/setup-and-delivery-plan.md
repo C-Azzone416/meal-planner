@@ -51,8 +51,9 @@ Vercel's Hobby plan is currently free for personal projects within published lim
 - [x] Existing account and free-plan context verified.
 - [x] No matching project exists.
 - [x] Separate project created with the exact intended name.
+- [x] A persistent `preview` child branch was created from the still-empty `production` branch so Preview never needs the production connection.
 - [x] No schema, migration, seed data, Auth provider, OAuth grant, or API key added.
-- [x] Non-secret identifier and dashboard link recorded locally, outside Git.
+- [x] Non-secret project and branch identifiers and the dashboard link recorded locally, outside Git.
 
 ### Vercel project
 
@@ -63,6 +64,25 @@ Vercel's Hobby plan is currently free for personal projects within published lim
 - [x] Git integration remains unconnected and no new persistent GitHub grant was accepted.
 - [x] No token, environment variable, or delivery workflow was created.
 - [x] Non-secret identifier and dashboard link recorded locally, outside Git.
+
+### CI/CD connection scaffold
+
+The following non-secret setup is complete:
+
+- GitHub deployment environments named `preview` and `production` exist. They do not yet contain secrets, protection rules, or branch restrictions.
+- The repository contains non-secret Actions variables named `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `NEON_PROJECT_ID`, `NEON_PRODUCTION_BRANCH_ID`, and `NEON_PREVIEW_BRANCH_ID`. Their values are managed in GitHub, not repeated in this public document.
+- Neon has separate persistent `production` and `preview` branches. The preview branch was created while production was empty, contains no application data, does not expire automatically, and has a separate branch endpoint.
+- The Vercel project remains disconnected from Git and has no environment variables or deployments.
+
+These steps prepare identifiers and isolation boundaries only. No connection has been exercised because there is no workflow or application build yet.
+
+The minimal protected material still requires explicit approval at the moment it is created or installed:
+
+- `VERCEL_TOKEN`: proposed as one Vercel-issued token stored as a GitHub Actions repository secret. Its scope would be the single `meal-planner` Vercel project, its expiry would be 90 days, and its only purpose would be trusted Preview and deliberate Production deployment. A project-scoped token can still act on both Vercel environments, so future workflow gates and protected branches remain part of the security boundary.
+- Preview database connection: proposed as a Neon connection whose endpoint targets the preview branch and whose role is limited to the application database, stored only in the Vercel Preview environment and in the GitHub `preview` environment if build or migration steps require it. Neon role isolation, password expiry, and the final rotation mechanism must be verified before approval; absent provider-enforced expiry, use a documented 90-day rotation.
+- Production database connection: the same model, with an endpoint targeting the production branch and storage only in the corresponding Production environments. Preview and CI must never receive this value.
+
+A Neon API key is not part of the initial minimum. Add a project-scoped `NEON_API_KEY` only if later workflow design actually automates branch creation, reset, or deletion. Neon Auth session keys, application login configuration, release signing keys, and package registry credentials are separate concerns and must not be bundled into deployment credentials.
 
 ## Approved branch and release policy
 
@@ -93,7 +113,7 @@ The exact rules, exceptions, administrator bypass policy, and release-branch nam
 - Production deployment is deliberate and manual after CI completes on `main`.
 - Production deploys the exact final `main` commit whose `main` CI passed. A pre-merge release-branch SHA is not sufficient, even when its content appears equivalent.
 
-The GitHub Actions workflows, Vercel credentials, environments, and approvals that enforce this policy are deferred implementation work.
+The GitHub Actions workflows, deployment credentials, environment protections, and approval gates that enforce this policy are deferred implementation work. The empty GitHub environments and non-secret identifiers already exist.
 
 ## Approved affected-component CI behavior
 
@@ -203,7 +223,8 @@ Exit gate:
 
 - Vercel deployment and production domain configuration.
 - GitHub Actions or any other CI workflow.
-- Neon schema, Auth enablement or configuration, database roles, and credentials.
+- Vercel token creation and installation.
+- Neon schema, Auth enablement or configuration, application database roles, connection installation, and API keys.
 - Microsoft Graph access and source-note import.
 - Object storage buckets or additional providers.
 - Monitoring, analytics, email, and other third-party integrations.
@@ -216,3 +237,8 @@ Exit gate:
 - Vercel Hobby plan: https://vercel.com/docs/plans/hobby
 - Creating Vercel projects through the API: https://vercel.com/docs/rest-api/projects/create-a-new-project
 - Vercel GitHub integration: https://vercel.com/docs/git/vercel-for-github
+- Vercel access-token scopes: https://vercel.com/docs/accounts/access-tokens
+- GitHub Actions variables: https://docs.github.com/actions/learn-github-actions/variables
+- GitHub deployment environments: https://docs.github.com/actions/deployment/targeting-different-environments/using-environments-for-deployment
+- Neon API keys: https://neon.com/docs/manage/api-keys
+- Neon branch automation: https://neon.com/docs/reference/api/branches
