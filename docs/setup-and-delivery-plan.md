@@ -1,6 +1,6 @@
 # Setup and Delivery Plan
 
-Status: planning baseline; GitHub and Neon setup complete; Vercel project creation pending, 2026-11-01
+Status: planning baseline and provider setup complete, 2026-11-01
 
 This document separates authorized project setup from future implementation. Completing a provider setup step does not authorize application code or deployment.
 
@@ -28,7 +28,7 @@ Neon's current public materials describe Free projects as including Postgres and
 - Create one separate project named `meal-planner` in the existing personal Hobby account.
 - Do not reuse or modify another application's project or deployment.
 - Do not deploy a placeholder application.
-- Do not connect GitHub if the connection flow requires a new persistent repository grant without explicit approval.
+- Leave the Vercel Git integration unconnected. Future delivery is expected to use GitHub Actions with narrowly scoped Vercel credentials; the workflow and credentials are deferred implementation work.
 - Record the dashboard link and non-secret project identifier only in the ignored local setup receipt.
 
 Vercel's Hobby plan is currently free for personal projects within published limits. Go HTTP functions are officially supported, but workload fit remains an implementation checkpoint.
@@ -56,14 +56,13 @@ Vercel's Hobby plan is currently free for personal projects within published lim
 
 ### Vercel project
 
-- [ ] Existing personal Hobby account verified.
-- [ ] No matching project exists.
-- [ ] Separate project created with the exact intended name.
-- [ ] No placeholder deployment created.
-- [ ] No new persistent GitHub grant accepted without approval.
-- [ ] Non-secret identifier and dashboard link recorded locally, outside Git.
-
-Current blocker: the Vercel dashboard creates a project as part of importing and deploying a repository. A placeholder deployment is outside this milestone. Creating an empty project through the documented API requires an authenticated API or CLI session; that session must be explicitly approved before it is created.
+- [x] Existing personal Hobby account verified.
+- [x] No matching project exists.
+- [x] Separate project created with the exact intended name.
+- [x] No placeholder deployment created; the project has no production or preview deployments.
+- [x] Git integration remains unconnected and no new persistent GitHub grant was accepted.
+- [x] No token, environment variable, or delivery workflow was created.
+- [x] Non-secret identifier and dashboard link recorded locally, outside Git.
 
 ## Delivery phases
 
