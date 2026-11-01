@@ -1,0 +1,12 @@
+# Local provider receipts may contain project identifiers and dashboard URLs.
+.setup/
+
+# Environment files and credentials must never be committed.
+.env
+.env.*
+!.env.example
+
+# Common local tooling artifacts.
+.DS_Store
+.idea/
+.vscode/
