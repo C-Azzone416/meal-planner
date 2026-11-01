@@ -64,6 +64,63 @@ Vercel's Hobby plan is currently free for personal projects within published lim
 - [x] No token, environment variable, or delivery workflow was created.
 - [x] Non-secret identifier and dashboard link recorded locally, outside Git.
 
+## Approved branch and release policy
+
+### Branch flow
+
+`main` and `develop` are long-lived branches. Normal changes follow this flow:
+
+```text
+feature branch -> develop -> temporary release branch -> main
+```
+
+The temporary release branch isolates the final promotion into `main`; it is not a replacement for `develop`. Only disposable feature and release branches are cleanup candidates. Long-lived branches are never part of routine merge cleanup.
+
+Recommended repository protection, not yet configured:
+
+- block deletion of both `main` and `develop`;
+- block force pushes to both `main` and `develop`;
+- require the stable CI gate before merging into protected branches; and
+- limit branch-cleanup automation to branches explicitly classified as disposable.
+
+The exact rules, exceptions, administrator bypass policy, and release-branch naming convention remain implementation decisions.
+
+### Preview and production deployment
+
+- Trusted pull requests that affect the hosted web client or API deploy an automatic Vercel Preview only after their relevant CI checks pass.
+- Documentation-only and local-tool-only changes do not deploy the hosted web application.
+- Pull requests from public forks receive secret-free checks only. Untrusted code never runs with deployment credentials or other protected secrets.
+- Production deployment is deliberate and manual after CI completes on `main`.
+- Production deploys the exact final `main` commit whose `main` CI passed. A pre-merge release-branch SHA is not sufficient, even when its content appears equivalent.
+
+The GitHub Actions workflows, Vercel credentials, environments, and approvals that enforce this policy are deferred implementation work.
+
+## Approved affected-component CI behavior
+
+CI runs the checks required by the affected components rather than running every job for every change.
+
+- Web changes run the relevant web checks.
+- Hosted Go API changes run the relevant Go API checks.
+- Local core, CLI, or MCP changes run the relevant local Go checks and API-compatibility checks.
+- Contract or cross-component changes run the relevant contract and integration checks.
+- Shared core, shared contracts, toolchain, dependency-management, or workflow changes fan out to every dependent component.
+- Independent relevant checks run in parallel.
+- Integration tests use temporary Postgres with synthetic data. Preview and CI never receive production recipes, production Auth state, or other production user data.
+
+A stable required gate is the single merge-facing result. It must fail closed: it reads the affected-component decision, understands intentional skips, requires every selected check to report success, and fails on a missing, unknown, or unexpectedly skipped result.
+
+### Proposed workflow topology
+
+The exact workflow files and job count are not approved yet. A proposed shape is:
+
+1. Detect affected components and publish a machine-readable check plan.
+2. Run independent web, hosted Go, local Go, and contract or integration groups in parallel when selected.
+3. Run an automatic Preview deployment for a trusted hosted change after the relevant checks succeed.
+4. Evaluate all selected and intentionally skipped work in the stable fail-closed required gate.
+5. Offer a manual Production action only for the exact `main` commit that passed the required gate.
+
+Implementation must preserve the behavior above even if the eventual workflow uses more or fewer jobs.
+
 ## Delivery phases
 
 ### Phase 0: planning and provider organization

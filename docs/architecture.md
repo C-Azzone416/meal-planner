@@ -38,6 +38,25 @@ The arrows describe responsibility boundaries, not implemented components.
 
 Vercel officially supports Go HTTP functions, but documentation support is not proof that this application's workload will fit its routing, duration, concurrency, observability, or cost constraints. A workload-fit checkpoint is required early in implementation.
 
+### Release units
+
+The monorepo has separate builds for the web client, hosted Go API, and local Go tools. The frontend and hosted API are initially one coordinated release unit, subject to the Vercel workload-fit checkpoint. The local CLI and MCP adapter are versioned and released separately. A local-tool release must prove compatibility with every supported hosted API version before publication.
+
+### Local-tool update behavior
+
+The approved user-facing update policy is:
+
+- The CLI discovers stable releases through GitHub Releases using CLI-specific release metadata rather than treating the web application's version as the CLI version.
+- A bounded update lookup may run when the CLI is used, but a cached result limits it to at most once per day.
+- A lookup failure never blocks a normal command.
+- Installation is user-controlled; the tool does not silently update itself.
+- Update notices do not pollute JSON output, scripted standard output, or the MCP protocol stream.
+- The MCP adapter exposes a status tool, and its skill convention can use that tool to report an available update. This does not guarantee that every MCP host will proactively notify the user.
+- An optional newer release and an unsupported operation are distinct states with different messages.
+- After updating the MCP executable, the host must restart the MCP process before the new version is active.
+
+The installer mechanism, artifact format, signature system, checksums, platform packaging, and exact GitHub Release metadata remain implementation decisions.
+
 ### Authority boundaries
 
 - The hosted API owns validation, authorization, and production database writes.
@@ -149,6 +168,8 @@ Prove transaction boundaries, pooled serverless connections, migrations, backup 
 ### Checkpoint E: local-tool boundary
 
 Prove one reviewed draft can travel through the reusable core and narrow API using an application-scoped identity. Verify that CLI and MCP adapters share the same core and permissions.
+
+Also prove that local release checks reject an incompatible hosted API or unsupported operation without confusing that state with an optional update notice.
 
 ### Checkpoint F: first product slice
 
