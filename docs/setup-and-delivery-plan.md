@@ -62,25 +62,27 @@ Vercel's Hobby plan is currently free for personal projects within published lim
 - [x] Separate project created with the exact intended name.
 - [x] No placeholder deployment created; the project has no production or preview deployments.
 - [x] Git integration remains unconnected and no new persistent GitHub grant was accepted.
-- [x] No token, environment variable, or delivery workflow was created.
+- [x] One project-scoped deployment token was created and installed as an encrypted GitHub Actions repository secret; no Vercel environment variable or delivery workflow was created.
 - [x] Non-secret identifier and dashboard link recorded locally, outside Git.
 
 ### CI/CD connection scaffold
 
 The following non-secret setup is complete:
 
-- GitHub deployment environments named `preview` and `production` exist. They do not yet contain secrets, protection rules, or branch restrictions.
+- GitHub deployment environments named `preview` and `production` exist. They do not yet contain environment-scoped secrets, protection rules, or branch restrictions.
 - The repository contains non-secret Actions variables named `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `NEON_PROJECT_ID`, `NEON_PRODUCTION_BRANCH_ID`, and `NEON_PREVIEW_BRANCH_ID`. Their values are managed in GitHub, not repeated in this public document.
+- The encrypted repository Actions secret `VERCEL_TOKEN` exists. Its value is not readable from GitHub and is not stored in this repository or the local setup receipt.
 - Neon has separate persistent `production` and `preview` branches. The preview branch was created while production was empty, contains no application data, does not expire automatically, and has a separate branch endpoint.
 - The Vercel project remains disconnected from Git and has no environment variables or deployments.
 
 These steps prepare identifiers and isolation boundaries only. No connection has been exercised because there is no workflow or application build yet.
 
-The minimal protected material still requires explicit approval at the moment it is created or installed:
+Protected material status:
 
-- `VERCEL_TOKEN`: proposed as one Vercel-issued token stored as a GitHub Actions repository secret. Its scope would be the single `meal-planner` Vercel project, its expiry would be 90 days, and its only purpose would be trusted Preview and deliberate Production deployment. A project-scoped token can still act on both Vercel environments, so future workflow gates and protected branches remain part of the security boundary.
-- Preview database connection: proposed as a Neon connection whose endpoint targets the preview branch and whose role is limited to the application database, stored only in the Vercel Preview environment and in the GitHub `preview` environment if build or migration steps require it. Neon role isolation, password expiry, and the final rotation mechanism must be verified before approval; absent provider-enforced expiry, use a documented 90-day rotation.
-- Production database connection: the same model, with an endpoint targeting the production branch and storage only in the corresponding Production environments. Preview and CI must never receive this value.
+- `VERCEL_TOKEN` is installed. Vercel identifies the token as `meal-planner-github-actions`, restricts it to the single `meal-planner` project, and expires it on January 30, 2027. Vercel does not offer deployment-only permissions for this token type, so future workflow gates and protected branches remain part of the security boundary. No workflow has used or validated the token yet.
+- The remaining database connections require explicit approval at the moment they are created or installed:
+  - Preview database connection: proposed as a Neon connection whose endpoint targets the preview branch and whose role is limited to the application database, stored only in the Vercel Preview environment and in the GitHub `preview` environment if build or migration steps require it. Neon role isolation, password expiry, and the final rotation mechanism must be verified before approval; absent provider-enforced expiry, use a documented 90-day rotation.
+  - Production database connection: the same model, with an endpoint targeting the production branch and storage only in the corresponding Production environments. Preview and CI must never receive this value.
 
 A Neon API key is not part of the initial minimum. Add a project-scoped `NEON_API_KEY` only if later workflow design actually automates branch creation, reset, or deletion. Neon Auth session keys, application login configuration, release signing keys, and package registry credentials are separate concerns and must not be bundled into deployment credentials.
 
@@ -223,7 +225,6 @@ Exit gate:
 
 - Vercel deployment and production domain configuration.
 - GitHub Actions or any other CI workflow.
-- Vercel token creation and installation.
 - Neon schema, Auth enablement or configuration, application database roles, connection installation, and API keys.
 - Microsoft Graph access and source-note import.
 - Object storage buckets or additional providers.
