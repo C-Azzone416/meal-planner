@@ -30,7 +30,7 @@ Neon's current public materials describe Free projects as including Postgres and
 - Create one separate project named `meal-planner` in the existing personal Hobby account.
 - Do not reuse or modify another application's project or deployment.
 - Do not deploy a placeholder application.
-- Leave the Vercel Git integration unconnected. Future delivery is expected to use GitHub Actions with narrowly scoped Vercel credentials; the workflow and credentials are deferred implementation work.
+- Leave the Vercel Git integration unconnected. Future delivery is expected to use GitHub Actions with narrowly scoped Vercel credentials; the deploy workflow and credentials are deferred implementation work, while secret-free CI scaffolding starts ahead of Phase 3.
 - Record the dashboard link and non-secret project identifier only in the ignored local setup receipt.
 
 Vercel's Hobby plan is currently free for personal projects within published limits. Go HTTP functions are officially supported, but workload fit remains an implementation checkpoint.
@@ -119,7 +119,7 @@ The exact rules, exceptions, administrator bypass policy, and release-branch nam
 - Production deployment is deliberate and manual after CI completes on `main`.
 - Production deploys the exact final `main` commit whose `main` CI passed. A pre-merge release-branch SHA is not sufficient, even when its content appears equivalent.
 
-The GitHub Actions workflows, deployment credentials, environment protections, and approval gates that enforce this policy are deferred implementation work. The empty GitHub environments and non-secret identifiers already exist.
+The deployment workflows, deployment credentials, environment protections, and approval gates that enforce this policy are deferred implementation work; secret-free CI starts ahead of Phase 3 on a hello-world verification slice. The empty GitHub environments and non-secret identifiers already exist.
 
 ## Approved affected-component CI behavior
 
@@ -185,7 +185,7 @@ Exit gate:
 
 ### Phase 3: contract and persistence foundation
 
-Create the executable API contract, generated clients where appropriate, database model, migrations, and contract tests. Add CI only after these artifacts exist and their required checks are understood.
+Create the executable API contract, generated clients where appropriate, database model, migrations, and contract tests. CI scaffolding starts ahead of this phase on a hello-world verification slice; Phase 3 extends it to the contract and persistence checks once those artifacts exist.
 
 Exit gate:
 
@@ -228,7 +228,7 @@ Exit gate:
 ## Explicitly deferred setup
 
 - Vercel deployment and production domain configuration.
-- GitHub Actions or any other CI workflow.
+- Production-grade CI beyond the hello-world verification slice (secret-free CI scaffolding starts ahead of Phase 3).
 - Neon schema, Auth enablement or configuration, application database roles, connection installation, and API keys.
 - Microsoft Graph access and source-note import.
 - Object storage buckets or additional providers.
