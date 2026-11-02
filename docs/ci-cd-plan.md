@@ -11,7 +11,7 @@ This is the configuration guide for the future GitHub Actions, Vercel, Neon, and
 - **Prior verified** — observed during provider setup before this document was written. It was not revalidated by a deployment or workflow and may drift.
 - **Unresolved** — a decision or provider capability that must be closed before the affected configuration is treated as ready.
 
-Preparation is not the same as a wired pipeline. The secret-free pull-request and branch CI (`.github/workflows/ci.yml`) and its classifier are implemented by the CI gate pull request. The repository still has no deployable application, database schema, migration runner, working Preview or Production workflow, or release process; `preview.yml` is a placeholder.
+Preparation is not the same as a wired pipeline. The secret-free pull-request and branch CI (`.github/workflows/ci.yml`) and its classifier are implemented by the CI gate pull request. The repository still has no deployable application, database schema, migration runner, working Preview or Production workflow, or release process. The Preview, Production and bootstrap deploy workflows are written but not yet enabled or exercised.
 
 ## Approved delivery model
 

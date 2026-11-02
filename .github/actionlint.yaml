@@ -1,0 +1,7 @@
+# actionlint types `secrets` in a reusable workflow from its workflow_call declarations only. The
+# `preview` job reads VERCEL_AUTOMATION_BYPASS_SECRET from its own GitHub environment (a caller cannot
+# pass environment secrets), so that one expected finding is ignored here.
+paths:
+  .github/workflows/preview.yml:
+    ignore:
+      - 'property "vercel_automation_bypass_secret" is not defined in object type'
