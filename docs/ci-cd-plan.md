@@ -11,7 +11,7 @@ This is the configuration guide for the future GitHub Actions, Vercel, Neon, and
 - **Prior verified** — observed during provider setup before this document was written. It was not revalidated by a deployment or workflow and may drift.
 - **Unresolved** — a decision or provider capability that must be closed before the affected configuration is treated as ready.
 
-Preparation is not the same as a wired pipeline. The repository currently has no GitHub Actions workflows, deployable application, database schema, migration runner, or release process.
+Preparation is not the same as a wired pipeline. The secret-free pull-request and branch CI (`.github/workflows/ci.yml`) and its classifier are implemented by the CI gate pull request. The repository still has no deployable application, database schema, migration runner, working Preview or Production workflow, or release process. The Preview, Production and bootstrap deploy workflows are written but not yet enabled or exercised.
 
 ## Approved delivery model
 
@@ -44,6 +44,8 @@ feature/* ---- pull request ----> develop
 - A temporary release branch is cut from `develop` and proposed to `main`.
 - Production is manually initiated only after CI succeeds for the exact final `main` commit to deploy.
 - Automatic Preview is limited to trusted pull requests that change hosted components and pass their selected checks. It must not run for every pull request.
+- Preview is **Approved in principle**. Automatic Preview stays disabled (the repository variable `PREVIEW_ENABLED` is unset) until the one-time Vercel bootstrap passes.
+- Rulesets that block deletion and force push on `main` and `develop` are **Approved**. The remaining ruleset options (required pull requests, approvals, bypass, merge method) are **Recommended** or **Unresolved**, as listed in the checklist.
 
 ## Proposed workflow boundaries and triggers
 
@@ -122,7 +124,26 @@ The classifier should emit a machine-readable plan with at least these booleans:
 - `hosted_preview`
 - `release_metadata`
 
-The directory mapping is **Unresolved** because the repository layout is not created. Until mappings are proven, an unknown application, dependency, toolchain, or workflow path must select all applicable checks rather than skip work.
+### Path map
+
+**Recommended**, implemented in `.github/scripts/classify.sh` and tested by `.github/scripts/classify_test.sh`. Any path that matches no rule selects everything (fail safe).
+
+| Path | Class | Selects |
+| --- | --- | --- |
+| `docs/**`, root `*.md` | docs | nothing (only the gate runs) |
+| `web/**` | web | `web` |
+| `api/**`, `hosted/**`, `vercel.json` | hosted Go | `hosted_go`, `local_go`, `contracts`, `integration` |
+| `cmd/**` | CLI / MCP | `local_go`, `contracts`, `integration` |
+| `internal/core/**` | core | `hosted_go`, `local_go`, `contracts`, `integration` |
+| `contracts/**` | contracts | everything |
+| `go.mod`, `go.sum`, `.github/**` | toolchain | everything |
+| anything else | unknown | everything |
+
+- Local Go compatibility runs on hosted changes, because the CLI consumes the hosted API. `cmd/**` also selects `contracts` and `integration` as compatibility checks, but never Preview.
+- `integration` is selected with `hosted_go`, `cmd/**`, core, contracts, or toolchain (and so for unknown paths).
+- `hosted_preview` = (`web` or `hosted_go` or core or contracts or toolchain) AND the event is a `pull_request` whose head repository equals this repository (not a fork) AND `vars.PREVIEW_ENABLED == 'true'`. Because the variable is unset, Preview is off.
+- Push events diff against `github.event.before`; pull requests diff against the base SHA. If the base cannot be found (new branch, force push) or the diff fails, everything is selected.
+- `release_metadata` is reserved for the CLI release workflow and currently mirrors toolchain/unknown changes.
 
 ### Selection matrix
 
@@ -163,13 +184,15 @@ Deploy / preview-smoke
 CI / required
 ```
 
-Only `CI / required` is configured as a ruleset requirement. It must:
+The workflow is named `CI` (file `.github/workflows/ci.yml`) and the gate job's `name:` is exactly `required`. GitHub displays that as `CI / required`, but `CI / required` is only the display form: the actual check context a ruleset requires, and the job that release and production workflows look up (workflow file `ci.yml`, job `required`, on a push to `main`), is `required`. Do not rename the workflow, file, or job. Other jobs likewise report as `CI / <job>`. `preview` is a call to the reusable `preview.yml`; its smoke test runs inside that workflow and `required` treats the `preview` job result as covering both Preview and Preview smoke. Pull requests cancel stale runs; push runs are keyed on the SHA and are never cancelled, so every `develop`/`main` commit keeps CI evidence.
+
+Only `CI / required` is configured as a ruleset requirement. It runs unconditionally (`always()`), needs every job, and must:
 
 1. read the classifier output;
 2. inspect every selected job result;
 3. accept an intentional skip only when the classifier did not select that job;
 4. require Preview and Preview smoke success when `hosted_preview` is selected;
-5. fail on cancellation, failure, missing output, unknown result, or an unexpectedly skipped selected job; and
+5. fail on cancellation, failure, missing output, unknown result, or an unexpectedly skipped selected job (and fail if `affected` itself did not succeed, or if a job ran although it was not selected); and
 6. publish a human-readable selection/result summary.
 
 Job display names must be unique across workflows. Renaming the stable job is a repository-settings migration: add the new check, prove it reports, then remove the old requirement.
@@ -197,9 +220,11 @@ Changes to workflow files, release metadata, migration tooling, and dependency-u
 
 Preview is **Approved** only for a same-repository trusted pull request with hosted changes.
 
+Preview runs in a separate trusted job (`preview`, a reusable-workflow call), tied to the exact pull-request head SHA. It starts only after `affected` and every selected check succeeded. Preview secrets (`VERCEL_TOKEN`) are referenced only by that job and never reach the `pull_request` check jobs.
+
 ### One-time first-deployment bootstrap
 
-This bootstrap is not needed now. It does not block repository setup, secret-free CI, or CLI/MCP implementation and testing. It is required only before enabling the first automatic hosted Preview, after a minimal non-sensitive hosted verification slice exists. The procedure below is a plan, not authorization to deploy or change provider settings.
+This bootstrap is an explicit, separately approved exception to "Production is manual and release-only": it creates a Production-class deployment of a disposable slice, not a product release, and needs its own approval at execution time. It is not needed now. It does not block repository setup, secret-free CI, or CLI/MCP implementation and testing. It is required only before enabling the first automatic hosted Preview, after a minimal non-sensitive hosted verification slice exists. The procedure below is a plan, not authorization to deploy or change provider settings.
 
 **Source-backed Vercel behavior:**
 
@@ -321,8 +346,8 @@ Statuses below are prior setup observations, not a live audit performed by this 
 | --- | --- | --- | --- | --- | --- |
 | GitHub repository | Actions permissions | Setting | Default read-only token; selectively elevate per job | Workflow design | **Recommended; not configured/verified here** |
 | GitHub repository | Actions allowed sources | Setting | Limit or pin Actions used by workflows | Selected Actions | **Unresolved** |
-| GitHub repository | `main` ruleset | Branch ruleset | Block deletion/force push; require PR and `CI / required` | First reporting CI run | **Approved; not configured** |
-| GitHub repository | `develop` ruleset | Branch ruleset | Same long-lived-branch protections | First reporting CI run | **Approved; not configured** |
+| GitHub repository | `main` ruleset | Branch ruleset | Block deletion/force push; require PR and `CI / required` | First reporting CI run | **Approved (block deletion and force push); other options Recommended; not configured** |
+| GitHub repository | `develop` ruleset | Branch ruleset | Same long-lived-branch protections | First reporting CI run | **Approved (block deletion and force push); other options Recommended; not configured** |
 | GitHub repository | Merge method, approvals, stale review, conversation resolution, bypass | Ruleset settings | Review policy | Collaboration model | **Unresolved** |
 | GitHub repository | Merge queue | Ruleset setting | Optional serialized merge validation | `merge_group` trigger | **Unresolved; do not enable alone** |
 | GitHub Actions | `VERCEL_ORG_ID` | Repository variable | Identify Vercel account/team without treating ID as a credential | Vercel CLI workflow | **Prior verified present** |
@@ -368,14 +393,16 @@ GitHub documents environments and deployment protection rules as available to pu
 
 ### Classifier and required gate
 
-- [ ] Docs-only pull request reports `CI / required` without app build or deploy.
-- [ ] Web-only pull request selects web checks but not unrelated local-tool checks.
-- [ ] CLI-only and MCP-only pull requests never request Vercel credentials or deploy Preview.
-- [ ] Contract/shared-core change fans out to all real consumers.
-- [ ] Unknown path fails safe by selecting broad checks.
-- [ ] A failed selected job makes `CI / required` fail.
-- [ ] A cancelled or unexpectedly skipped selected job makes `CI / required` fail.
-- [ ] An intentionally unselected job is explained and does not fail the gate.
+`[~]` means implemented and covered by the classifier/gate unit tests in CI, but not yet exercised by a live test pull request.
+
+- [~] Docs-only pull request reports `CI / required` without app build or deploy.
+- [~] Web-only pull request selects web checks but not unrelated local-tool checks.
+- [~] CLI-only and MCP-only pull requests never request Vercel credentials or deploy Preview.
+- [~] Contract/shared-core change fans out to all real consumers.
+- [~] Unknown path fails safe by selecting broad checks.
+- [~] A failed selected job makes `CI / required` fail.
+- [~] A cancelled or unexpectedly skipped selected job makes `CI / required` fail.
+- [~] An intentionally unselected job is explained and does not fail the gate.
 - [ ] Check names are unique and the configured requirement matches exactly.
 
 ### Fork and credential isolation
@@ -420,7 +447,7 @@ GitHub documents environments and deployment protection rules as available to pu
 
 ## Open decisions before implementation
 
-1. Final monorepo directories and the path-to-component map.
+1. ~~Final monorepo directories and the path-to-component map.~~ Proposed in the Path map; confirm once the skeleton merges.
 2. Whether CI and Preview are one workflow or use a privilege-separated handoff that preserves exact-SHA identity.
 3. Pull-request approval count, CODEOWNERS, bypass policy, merge method, stale-review behavior, and merge queue.
 4. Whether Preview success is required for every same-repository hosted pull request or only for release-candidate classes; the current recommendation requires it whenever selected.

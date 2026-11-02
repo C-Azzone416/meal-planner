@@ -1,0 +1,268 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+# Pull requests: cancel stale runs. Pushes: key on the SHA and never cancel, so every
+# develop/main commit keeps CI evidence for its exact SHA.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  affected:
+    name: affected
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      docs: ${{ steps.classify.outputs.docs }}
+      web: ${{ steps.classify.outputs.web }}
+      hosted_go: ${{ steps.classify.outputs.hosted_go }}
+      local_go: ${{ steps.classify.outputs.local_go }}
+      contracts: ${{ steps.classify.outputs.contracts }}
+      integration: ${{ steps.classify.outputs.integration }}
+      hosted_preview: ${{ steps.classify.outputs.hosted_preview }}
+      release_metadata: ${{ steps.classify.outputs.release_metadata }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Test classifier and gate scripts
+        run: |
+          bash .github/scripts/classify_test.sh
+          bash .github/scripts/gate_test.sh
+
+      - name: Classify changed paths
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+          PREVIEW_ENABLED: ${{ vars.PREVIEW_ENABLED }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base="$PR_BASE_SHA"
+          else
+            base="$PUSH_BEFORE_SHA"
+          fi
+
+          export CLASSIFY_ALL=false
+          export PREVIEW_TRUSTED=false
+          if [[ "$EVENT_NAME" == "pull_request" && "$PR_HEAD_REPO" == "$THIS_REPO" ]]; then
+            PREVIEW_TRUSTED=true
+          fi
+
+          git config core.quotepath off
+          # Unknown base (new branch, force push, missing history) or a failed diff => everything.
+          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            CLASSIFY_ALL=true
+            : > changed.txt
+          elif ! git diff --no-renames --name-only "$base" "$HEAD_SHA" > changed.txt; then
+            CLASSIFY_ALL=true
+            : > changed.txt
+          fi
+
+          {
+            echo "## CI affected"
+            echo
+            echo "Event: \`$EVENT_NAME\`; base: \`${base:-none}\`; head: \`$HEAD_SHA\`; CLASSIFY_ALL=\`$CLASSIFY_ALL\`; preview trusted=\`$PREVIEW_TRUSTED\` enabled=\`${PREVIEW_ENABLED:-unset}\`"
+            echo
+            echo '```text'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          PREVIEW_ENABLED="$PREVIEW_ENABLED" bash .github/scripts/classify.sh < changed.txt \
+            > classified.txt 2> reasons.txt
+
+          {
+            sed 's/^# //' reasons.txt
+            echo
+            cat classified.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          cat classified.txt >> "$GITHUB_OUTPUT"
+
+  web:
+    name: web
+    needs: affected
+    if: needs.affected.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --prefix web
+      - run: npm run --prefix web lint
+      - run: npm run --prefix web typecheck
+      - run: npm run --prefix web test
+      - run: npm run --prefix web build
+
+  hosted-go:
+    name: hosted-go
+    needs: affected
+    if: needs.affected.outputs.hosted_go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt and vet
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+      - run: go test ./api/... ./hosted/...
+
+  local-go:
+    name: local-go
+    needs: affected
+    if: needs.affected.outputs.local_go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt and vet
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+      - run: go test ./internal/core/... ./cmd/...
+      - run: go build ./cmd/...
+      - name: Cross-compile
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for target in windows/amd64 linux/arm64 darwin/arm64; do
+            echo "building for $target"
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build ./cmd/...
+          done
+
+  contracts:
+    name: contracts
+    needs: affected
+    if: needs.affected.outputs.contracts == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt and vet
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+      - run: go test ./contracts/...
+
+  integration:
+    name: integration
+    needs: affected
+    if: needs.affected.outputs.integration == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        # postgres:17
+        image: postgres@sha256:3b0cda93be7c8dba2ed484d19393d93845dc3dafb88973e248ba8e6d99d784e1
+        env:
+          # Disposable CI-only container on the runner: synthetic data, never reachable
+          # from outside the job, destroyed afterwards. Not a real credential.
+          POSTGRES_PASSWORD: ci-disposable-password
+          POSTGRES_DB: mealplanner_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Points at the disposable service container above; see the comment there.
+      TEST_DATABASE_URL: postgres://postgres:ci-disposable-password@localhost:5432/mealplanner_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt and vet
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+      - run: go test -tags=integration ./...
+
+  # Trusted job: the only place VERCEL_TOKEN is referenced. It runs only for a
+  # same-repository pull request whose selected checks all succeeded, against the exact head SHA.
+  preview:
+    name: preview
+    needs: [affected, web, hosted-go, local-go, contracts, integration]
+    if: >-
+      ${{ !cancelled()
+      && needs.affected.result == 'success'
+      && needs.affected.outputs.hosted_preview == 'true'
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled') }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/preview.yml
+    with:
+      sha: ${{ github.event.pull_request.head.sha }}
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+  required:
+    name: required
+    if: always()
+    needs: [affected, web, hosted-go, local-go, contracts, integration, preview]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Evaluate selection and results
+        env:
+          AFFECTED_RESULT: ${{ needs.affected.result }}
+          SEL_DOCS: ${{ needs.affected.outputs.docs }}
+          SEL_WEB: ${{ needs.affected.outputs.web }}
+          SEL_HOSTED_GO: ${{ needs.affected.outputs.hosted_go }}
+          SEL_LOCAL_GO: ${{ needs.affected.outputs.local_go }}
+          SEL_CONTRACTS: ${{ needs.affected.outputs.contracts }}
+          SEL_INTEGRATION: ${{ needs.affected.outputs.integration }}
+          SEL_HOSTED_PREVIEW: ${{ needs.affected.outputs.hosted_preview }}
+          SEL_RELEASE_METADATA: ${{ needs.affected.outputs.release_metadata }}
+          RES_WEB: ${{ needs.web.result }}
+          RES_HOSTED_GO: ${{ needs.hosted-go.result }}
+          RES_LOCAL_GO: ${{ needs.local-go.result }}
+          RES_CONTRACTS: ${{ needs.contracts.result }}
+          RES_INTEGRATION: ${{ needs.integration.result }}
+          RES_PREVIEW: ${{ needs.preview.result }}
+        run: bash .github/scripts/gate.sh >> "$GITHUB_STEP_SUMMARY"
