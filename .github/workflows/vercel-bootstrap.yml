@@ -6,12 +6,19 @@
 # so this proves both targets on a disposable slice with no database, no env vars and no tag:
 #   1. Production-class deploy with --prod --skip-domain, verified to have no production-domain alias.
 #   2. An explicit Preview deploy of the same SHA, verified the same way.
-# After BOTH jobs pass, the operator sets repository variable PREVIEW_ENABLED=true to enable
-# automatic Preview. If either job fails, leave PREVIEW_ENABLED unset and update the plan.
+# After BOTH deployments pass, the operator sets repository variable PREVIEW_ENABLED=true to enable
+# automatic Preview. If either fails, leave PREVIEW_ENABLED unset and update the plan.
 #
-# Token rule: VERCEL_TOKEN is a repository-scoped secret. It is set via `env:` only on the
-# `vercel pull`, `vercel deploy` and Vercel-API verification steps. It is never given to checkout,
-# CLI prefetch, `vercel build` (which runs the project's build commands) or smoke steps.
+# It must be dispatched from main, with a SHA reachable from origin/main (as for Production).
+#
+# Build/deploy split: each target runs pull -> build -> deploy as separate jobs. `vercel build`
+# runs repository install and build scripts, so it runs in a job that never has VERCEL_TOKEN.
+#   pull    token, no checkout, no repository code.
+#   build   no token. Checks out the SHA, runs `vercel build`, uploads .vercel/output as a tarball.
+#   deploy  token, fresh runner, no checkout. Verifies the tarball checksum, runs only
+#           `vercel deploy --prebuilt`, then the Vercel-API record check and the smoke test.
+# `pull` and `deploy` of each target reference that target's environment (two approval prompts
+# for `production`).
 name: Vercel bootstrap
 
 on:
@@ -46,29 +53,80 @@ jobs:
     name: Validate bootstrap input
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    permissions: {}
+    permissions:
+      contents: read
     env:
       SHA: ${{ inputs.sha }}
       CONFIRM: ${{ inputs.confirm }}
+      DISPATCH_REF: ${{ github.ref }}
     steps:
-      - run: |
+      - name: Validate inputs and dispatch ref
+        run: |
           [[ "$CONFIRM" == bootstrap ]] || { echo '::error::confirm must equal "bootstrap"'; exit 1; }
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase hex SHA"; exit 1; }
+          [[ "$DISPATCH_REF" == refs/heads/main ]] || { echo "::error::dispatch this workflow from main (got $DISPATCH_REF)"; exit 1; }
 
-  production-class:
-    name: Bootstrap / production-class (--skip-domain)
+      - name: Check out main with history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: SHA is reachable from origin/main
+        run: |
+          git cat-file -e "${SHA}^{commit}" 2> /dev/null || { echo "::error::$SHA is not a commit in this repository"; exit 1; }
+          git merge-base --is-ancestor "$SHA" origin/main || { echo "::error::$SHA is not reachable from origin/main"; exit 1; }
+          tip=$(git rev-parse origin/main)
+          if [[ "$tip" != "$SHA" ]]; then
+            echo "::warning::$SHA is an ancestor of, not the tip of, origin/main ($tip)"
+          fi
+
+  pull-production:
+    name: Bootstrap / pull production
     needs: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
     environment: production
+    permissions: {}
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+    steps:
+      # No token here: this downloads the pinned CLI (and runs its install scripts) into the npx cache.
+      - name: Prefetch pinned Vercel CLI
+        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" --version
+
+      # The only token step. There is no checkout, so no repository code is present.
+      - name: Vercel pull (production)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" pull --yes --environment=production
+
+      - name: Package .vercel
+        run: tar -cf pull.tar .vercel
+
+      - name: Upload pull data
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bootstrap-production-pull-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: pull.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  build-production:
+    name: Bootstrap / build production
+    needs: pull-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
+    outputs:
+      output_sha256: ${{ steps.pack.outputs.output_sha256 }}
     env:
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
       SHA: ${{ inputs.sha }}
-    outputs:
-      url: ${{ steps.deploy.outputs.url }}
     steps:
       - name: Check out exact SHA
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -82,16 +140,67 @@ jobs:
           head=$(git rev-parse HEAD)
           [[ "$head" == "$SHA" ]] || { echo "::error::checked out $head, expected $SHA"; exit 1; }
 
-      - name: Prefetch pinned Vercel CLI
-        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" --version
+      - name: Download pull data
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bootstrap-production-pull-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pull
 
-      - name: Vercel pull (production)
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" pull --yes --environment=production
+      - name: Restore .vercel
+        run: tar -xf "$RUNNER_TEMP/pull/pull.tar" --no-same-owner
 
+      # No VERCEL_TOKEN anywhere in this job: the build runs project install/build commands.
       - name: Vercel build (production)
         run: npx --yes "vercel@${VERCEL_CLI_VERSION}" build --target=production --yes
+
+      - name: Package build output and record checksum
+        id: pack
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          tar -cf "$RUNNER_TEMP/out/build-output.tar" .vercel/output .vercel/project.json
+          output_sha=$(sha256sum "$RUNNER_TEMP/out/build-output.tar" | cut -d' ' -f1)
+          echo "output_sha256=$output_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build output
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bootstrap-production-build-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/out/build-output.tar
+          retention-days: 7
+          if-no-files-found: error
+
+  deploy-production:
+    name: Bootstrap / production-class (--skip-domain)
+    needs: build-production
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production
+    permissions: {}
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      SHA: ${{ inputs.sha }}
+      EXPECTED_OUTPUT_SHA256: ${{ needs.build-production.outputs.output_sha256 }}
+    steps:
+      - name: Download build output
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bootstrap-production-build-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/build
+
+      - name: Verify build output checksum
+        run: |
+          [[ "$EXPECTED_OUTPUT_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build job did not report a checksum"; exit 1; }
+          actual=$(sha256sum "$RUNNER_TEMP/build/build-output.tar" | cut -d' ' -f1)
+          [[ "$actual" == "$EXPECTED_OUTPUT_SHA256" ]] || { echo "::error::build output checksum mismatch (expected $EXPECTED_OUTPUT_SHA256, got $actual)"; exit 1; }
+          if tar -tf "$RUNNER_TEMP/build/build-output.tar" | grep -v -E '^\.vercel/(output(/|$)|project\.json$)' | grep -q .; then
+            echo "::error::build output tarball has unexpected entries"; exit 1
+          fi
+          tar -xf "$RUNNER_TEMP/build/build-output.tar" --no-same-owner
+
+      # No token here: this downloads the pinned CLI (and runs its install scripts) into the npx cache.
+      - name: Install pinned Vercel CLI
+        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" --version
 
       - name: Vercel deploy (production, skip domain)
         id: deploy
@@ -119,7 +228,19 @@ jobs:
           host=${URL#https://}
           dep=$(api "https://api.vercel.com/v13/deployments/${host}?${team}")
           proj=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}?${team}")
-          doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?${team}" || echo '{"domains":[]}')
+          # An unknown production-domain list weakens the no-alias check, so say so loudly.
+          domains_note=""
+          if doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?${team}"); then
+            if [[ "$(jq '(.domains // []) | length' <<< "$doms" 2> /dev/null || echo 0)" == 0 ]]; then
+              domains_note="project domains list is EMPTY: the no-production-domain-alias check could not compare against any project domain"
+            fi
+          else
+            doms='{"domains":[]}'
+            domains_note="project domains fetch FAILED: the no-production-domain-alias check could not compare against any project domain"
+          fi
+          if [[ -n "$domains_note" ]]; then
+            echo "::warning::$domains_note"
+          fi
           prod_names=$(jq -n --argjson p "$proj" --argjson d "$doms" \
             '[($p.targets.production.alias // [])[], ($p.alias // [])[]?.domain?, ($d.domains // [])[].name] | map(select(. != null)) | unique')
           evidence=$(jq --argjson prod_names "$prod_names" --arg expect "$EXPECT_TARGET" --arg sha "$SHA" --arg pid "$VERCEL_PROJECT_ID" '
@@ -138,6 +259,11 @@ jobs:
             echo
             echo "- Source SHA: \`$SHA\`"
             echo "- Unique URL: $URL"
+            if [[ -n "$domains_note" ]]; then
+              echo "- **WARNING: $domains_note.** Check the production domains in the Vercel dashboard before enabling Preview."
+            else
+              echo "- Project domains fetched and non-empty (production domains known: $(jq -c . <<< "$prod_names"))"
+            fi
             echo '```json'
             echo "$evidence"
             echo '```'
@@ -147,10 +273,20 @@ jobs:
       - name: Smoke test unique URL
         env:
           URL: ${{ steps.deploy.outputs.url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
+          code=000
           for attempt in $(seq 1 12); do
-            code=$(curl -sS -o body.json -w '%{http_code}' --max-time 15 "$URL/api/health" || echo 000)
-            if [[ "$code" == 200 ]] && jq -e '.status == "ok"' body.json > /dev/null; then
+            rm -f body.json
+            # The bypass header (only when the secret is set) reaches curl through a config on stdin,
+            # so it is never on a command line or in the log. Redirects are not followed.
+            code=$(
+              { if [[ -n "${VERCEL_AUTOMATION_BYPASS_SECRET:-}" ]]; then
+                  printf 'header = "x-vercel-protection-bypass: %s"\n' "$VERCEL_AUTOMATION_BYPASS_SECRET"
+                fi; } |
+                curl -sS -K - -o body.json -w '%{http_code}' --max-time 15 "$URL/api/health"
+            ) || code=000
+            if [[ "$code" == 200 ]] && jq -e '.status == "ok"' body.json > /dev/null 2>&1; then
               {
                 echo "- Smoke GET $URL/api/health -> 200 (attempt $attempt): $(jq -c . body.json)"
               } >> "$GITHUB_STEP_SUMMARY"
@@ -159,20 +295,54 @@ jobs:
             echo "attempt $attempt: HTTP $code"
             sleep 10
           done
-          if [[ "$code" == 401 || "$code" == 403 ]]; then
-            echo "::error::HTTP $code: Vercel Deployment Protection may be blocking the unique deployment URL"
+          if [[ "$code" =~ ^3[0-9][0-9]$ || "$code" == 401 || "$code" == 403 ]]; then
+            if [[ -n "${VERCEL_AUTOMATION_BYPASS_SECRET:-}" ]]; then bypass="the bypass secret was sent"; else bypass="no bypass secret is configured"; fi
+            echo "::error::HTTP $code: Vercel Deployment Protection may be blocking the unique deployment URL (401/403 or a redirect to a login page; $bypass)"
           fi
           echo "::error::smoke test failed for $URL/api/health"
           exit 1
 
-  preview:
-    name: Bootstrap / explicit preview
-    needs: production-class
+  pull-preview:
+    name: Bootstrap / pull preview
+    needs: deploy-production
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
     environment: preview
+    permissions: {}
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+    steps:
+      # No token here: this downloads the pinned CLI (and runs its install scripts) into the npx cache.
+      - name: Prefetch pinned Vercel CLI
+        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" --version
+
+      # The only token step. There is no checkout, so no repository code is present.
+      - name: Vercel pull (preview)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" pull --yes --environment=preview
+
+      - name: Package .vercel
+        run: tar -cf pull.tar .vercel
+
+      - name: Upload pull data
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bootstrap-preview-pull-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: pull.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  build-preview:
+    name: Bootstrap / build preview
+    needs: pull-preview
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
+    outputs:
+      output_sha256: ${{ steps.pack.outputs.output_sha256 }}
     env:
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
@@ -190,16 +360,67 @@ jobs:
           head=$(git rev-parse HEAD)
           [[ "$head" == "$SHA" ]] || { echo "::error::checked out $head, expected $SHA"; exit 1; }
 
-      - name: Prefetch pinned Vercel CLI
-        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" --version
+      - name: Download pull data
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bootstrap-preview-pull-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pull
 
-      - name: Vercel pull (preview)
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" pull --yes --environment=preview
+      - name: Restore .vercel
+        run: tar -xf "$RUNNER_TEMP/pull/pull.tar" --no-same-owner
 
+      # No VERCEL_TOKEN anywhere in this job: the build runs project install/build commands.
       - name: Vercel build (preview)
         run: npx --yes "vercel@${VERCEL_CLI_VERSION}" build --target=preview --yes
+
+      - name: Package build output and record checksum
+        id: pack
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          tar -cf "$RUNNER_TEMP/out/build-output.tar" .vercel/output .vercel/project.json
+          output_sha=$(sha256sum "$RUNNER_TEMP/out/build-output.tar" | cut -d' ' -f1)
+          echo "output_sha256=$output_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build output
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bootstrap-preview-build-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/out/build-output.tar
+          retention-days: 7
+          if-no-files-found: error
+
+  deploy-preview:
+    name: Bootstrap / explicit preview
+    needs: build-preview
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: preview
+    permissions: {}
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      SHA: ${{ inputs.sha }}
+      EXPECTED_OUTPUT_SHA256: ${{ needs.build-preview.outputs.output_sha256 }}
+    steps:
+      - name: Download build output
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bootstrap-preview-build-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/build
+
+      - name: Verify build output checksum
+        run: |
+          [[ "$EXPECTED_OUTPUT_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build job did not report a checksum"; exit 1; }
+          actual=$(sha256sum "$RUNNER_TEMP/build/build-output.tar" | cut -d' ' -f1)
+          [[ "$actual" == "$EXPECTED_OUTPUT_SHA256" ]] || { echo "::error::build output checksum mismatch (expected $EXPECTED_OUTPUT_SHA256, got $actual)"; exit 1; }
+          if tar -tf "$RUNNER_TEMP/build/build-output.tar" | grep -v -E '^\.vercel/(output(/|$)|project\.json$)' | grep -q .; then
+            echo "::error::build output tarball has unexpected entries"; exit 1
+          fi
+          tar -xf "$RUNNER_TEMP/build/build-output.tar" --no-same-owner
+
+      # No token here: this downloads the pinned CLI (and runs its install scripts) into the npx cache.
+      - name: Install pinned Vercel CLI
+        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" --version
 
       - name: Vercel deploy (preview)
         id: deploy
@@ -227,7 +448,19 @@ jobs:
           host=${URL#https://}
           dep=$(api "https://api.vercel.com/v13/deployments/${host}?${team}")
           proj=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}?${team}")
-          doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?${team}" || echo '{"domains":[]}')
+          # An unknown production-domain list weakens the no-alias check, so say so loudly.
+          domains_note=""
+          if doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?${team}"); then
+            if [[ "$(jq '(.domains // []) | length' <<< "$doms" 2> /dev/null || echo 0)" == 0 ]]; then
+              domains_note="project domains list is EMPTY: the no-production-domain-alias check could not compare against any project domain"
+            fi
+          else
+            doms='{"domains":[]}'
+            domains_note="project domains fetch FAILED: the no-production-domain-alias check could not compare against any project domain"
+          fi
+          if [[ -n "$domains_note" ]]; then
+            echo "::warning::$domains_note"
+          fi
           prod_names=$(jq -n --argjson p "$proj" --argjson d "$doms" \
             '[($p.targets.production.alias // [])[], ($p.alias // [])[]?.domain?, ($d.domains // [])[].name] | map(select(. != null)) | unique')
           evidence=$(jq --argjson prod_names "$prod_names" --arg expect "$EXPECT_TARGET" --arg sha "$SHA" --arg pid "$VERCEL_PROJECT_ID" '
@@ -245,6 +478,11 @@ jobs:
             echo
             echo "- Source SHA: \`$SHA\`"
             echo "- Unique URL: $URL"
+            if [[ -n "$domains_note" ]]; then
+              echo "- **WARNING: $domains_note.** Check the production domains in the Vercel dashboard before enabling Preview."
+            else
+              echo "- Project domains fetched and non-empty (production domains known: $(jq -c . <<< "$prod_names"))"
+            fi
             echo '```json'
             echo "$evidence"
             echo '```'
@@ -254,10 +492,20 @@ jobs:
       - name: Smoke test unique URL
         env:
           URL: ${{ steps.deploy.outputs.url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
+          code=000
           for attempt in $(seq 1 12); do
-            code=$(curl -sS -o body.json -w '%{http_code}' --max-time 15 "$URL/api/health" || echo 000)
-            if [[ "$code" == 200 ]] && jq -e '.status == "ok"' body.json > /dev/null; then
+            rm -f body.json
+            # The bypass header (only when the secret is set) reaches curl through a config on stdin,
+            # so it is never on a command line or in the log. Redirects are not followed.
+            code=$(
+              { if [[ -n "${VERCEL_AUTOMATION_BYPASS_SECRET:-}" ]]; then
+                  printf 'header = "x-vercel-protection-bypass: %s"\n' "$VERCEL_AUTOMATION_BYPASS_SECRET"
+                fi; } |
+                curl -sS -K - -o body.json -w '%{http_code}' --max-time 15 "$URL/api/health"
+            ) || code=000
+            if [[ "$code" == 200 ]] && jq -e '.status == "ok"' body.json > /dev/null 2>&1; then
               {
                 echo "- Smoke GET $URL/api/health -> 200 (attempt $attempt): $(jq -c . body.json)"
                 echo
@@ -268,8 +516,9 @@ jobs:
             echo "attempt $attempt: HTTP $code"
             sleep 10
           done
-          if [[ "$code" == 401 || "$code" == 403 ]]; then
-            echo "::error::HTTP $code: Vercel Deployment Protection may be blocking the unique deployment URL"
+          if [[ "$code" =~ ^3[0-9][0-9]$ || "$code" == 401 || "$code" == 403 ]]; then
+            if [[ -n "${VERCEL_AUTOMATION_BYPASS_SECRET:-}" ]]; then bypass="the bypass secret was sent"; else bypass="no bypass secret is configured"; fi
+            echo "::error::HTTP $code: Vercel Deployment Protection may be blocking the unique deployment URL (401/403 or a redirect to a login page; $bypass)"
           fi
           echo "::error::smoke test failed for $URL/api/health"
           exit 1
