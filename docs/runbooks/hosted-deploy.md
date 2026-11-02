@@ -10,9 +10,13 @@ In every workflow, `vercel build` (which runs repository install and build scrip
 
 1. **pull**: has the token and no checkout, so no repository code is present. Runs `vercel pull` and uploads `.vercel` (project settings and pulled env values) as a one-day artifact for the build job.
 2. **build**: no token. Checks out the exact SHA, runs `vercel build`, tars `.vercel/output` and `.vercel/project.json`, and records the tarball's SHA-256 as a job output.
-3. **deploy**: has the token, runs on a fresh runner with no checkout. Downloads the tarball, verifies its checksum against the build job's output (and that it holds only `.vercel/output` and `.vercel/project.json`), installs the pinned Vercel CLI, and runs only `vercel deploy --prebuilt`, then the smoke test.
+3. **deploy**: has the token, runs on a fresh runner with only `tools/deploy` checked out (from the commit that defines the workflow, not the built SHA). Downloads the tarball, verifies its checksum against the build job's output, then `tools/deploy/safe-extract.sh` validates it before anything is written: every entry must be a regular file or directory (symlinks, hardlinks and special files are rejected), no name may be absolute or contain `..`, and only `.vercel/output` and `.vercel/project.json` are allowed. It extracts into a fresh empty directory under `$RUNNER_TEMP` with `--no-same-owner --no-same-permissions`. Only then is the pinned Vercel CLI installed (into another `$RUNNER_TEMP` directory, not the npx cache, so the archive cannot touch it) and `vercel deploy --prebuilt` run from the extraction directory, followed by the smoke test. `tools/deploy/safe-extract_test.sh` covers the symlink, hardlink, `..`, absolute-path, fifo and clean-archive cases.
 
-Production adds a final `tag` job (write-capable GitHub token, no Vercel token) that pushes the annotated tag after the smoke test passes. Because `pull` and `deploy` both reference the environment, a Production run asks for approval twice (and the bootstrap's production-class half does too). Pulled env values are sent to the build job through a short-lived artifact, so anyone who can read this repository's Actions artifacts can read them; keep secrets out of Vercel build-time env vars where possible.
+Production adds a final `tag` job (write-capable GitHub token, no Vercel token) that pushes the annotated tag after the smoke test passes.
+
+**Two approval prompts per production deploy.** `pull` and `deploy` each reference the `production` environment, and both hold the token, so each waits for a required-reviewer approval: first `pull`, then (after `build`) `deploy`. Approving only `pull` does not release the deploy job. This is deliberate: environment secrets are released per job, so the second prompt is a separate chance to check the build output before the token meets it. The bootstrap's production-class half behaves the same way.
+
+**Env handoff guard (temporary).** The pull artifact includes `.vercel/.env.*.local`, and artifacts on a public repository are readable by anyone. The `pull` job therefore fails if any pulled env file has a non-comment, non-empty line that is not a `VERCEL_*` system variable (only the count is logged, never values). While the project has no real env vars this passes. Before adding any real env vars, replace the guard with a design that does not hand env vars between jobs; do not just loosen the guard.
 
 ## Token rule
 
@@ -25,7 +29,7 @@ Production adds a final `tag` job (write-capable GitHub token, no Vercel token) 
 
 ## Deployment Protection bypass (optional)
 
-If Vercel Deployment Protection blocks the unique deployment URLs, the smoke tests see 401/403 or a 3xx redirect to a login page. The workflows can send the `x-vercel-protection-bypass` header, but only if the optional secret `VERCEL_AUTOMATION_BYPASS_SECRET` is set. It is Vercel's "Protection Bypass for Automation" secret for the project, stored as a secret in the GitHub `preview` and `production` environments (and passed through by `ci.yml` to `preview.yml`). **Not created yet; pending approval.** When it is unset, the smoke tests send no header. It is handed to curl through a config on stdin, never echoed, and redirects are never followed.
+If Vercel Deployment Protection blocks the unique deployment URLs, the smoke tests see 401/403 or a 3xx redirect to a login page. The workflows can send the `x-vercel-protection-bypass` header, but only if the optional secret `VERCEL_AUTOMATION_BYPASS_SECRET` is set. It is Vercel's "Protection Bypass for Automation" secret for the project, stored as a secret in the GitHub `preview` and `production` environments. A caller cannot pass environment secrets into a reusable workflow, so `ci.yml` does not pass it: the job that runs the smoke test (the `deploy` job in `preview.yml`, `deploy-production.yml` and each bootstrap deploy job, all of which declare the matching `environment:`) reads it directly from its environment, and only in the smoke step's `env:`. **Not created yet; pending approval.** When it is unset, the smoke tests send no header. It is handed to curl through a config on stdin, never echoed, and redirects are never followed.
 
 ## 1. One-time bootstrap
 
@@ -43,7 +47,7 @@ The bootstrap creates no tag and touches no database or environment variables. I
 
 ## 2. Preview
 
-Automatic Preview runs from `ci.yml` for trusted same-repository hosted pull requests once `PREVIEW_ENABLED=true`. Nothing to run by hand. The Preview summary carries the SHA, URL and manifest; the manifest is also an artifact named `preview-manifest-<sha>-<run attempt>`. A Preview failure blocks `CI / required`.
+Automatic Preview runs from `ci.yml` for trusted same-repository hosted pull requests once `PREVIEW_ENABLED=true`. Nothing to run by hand. The Preview summary carries the SHA, URL and manifest; the manifest is also an artifact named `preview-manifest-<sha>-<run attempt>`. A Preview failure blocks `CI / required`. Previews are serialized per SHA (`concurrency` group `preview-<sha>`, `cancel-in-progress: true`), so a re-run for the same commit cancels the older one.
 
 ## 3. Production release
 
