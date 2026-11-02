@@ -1,0 +1,31 @@
+# PLACEHOLDER: to be replaced by the real Preview workflow (separate PR).
+# It exists only so ci.yml's reusable-workflow call is valid. It deploys nothing.
+name: Preview (placeholder)
+
+on:
+  workflow_call:
+    inputs:
+      sha:
+        description: Exact pull-request head SHA to preview
+        type: string
+        required: true
+    secrets:
+      VERCEL_TOKEN:
+        required: true
+    outputs:
+      url:
+        description: Preview URL (always empty in the placeholder)
+        value: ${{ jobs.placeholder.outputs.url }}
+
+permissions:
+  contents: read
+
+jobs:
+  placeholder:
+    name: placeholder
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.noop.outputs.url }}
+    steps:
+      - id: noop
+        run: echo "url=" >> "$GITHUB_OUTPUT"
