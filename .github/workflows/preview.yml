@@ -32,7 +32,8 @@ permissions:
 
 # Preview deploys come only from develop pushes. Every develop commit deploys; none is cancelled, so no
 # commit's CI shows a cancelled preview. Runs for different SHAs may overlap, so the stable alias step only
-# moves the alias when its SHA is still the tip of develop (an older deploy finishing late cannot take it back).
+# moves the alias forward only (never to an ancestor of the commit it already serves), so an older deploy
+# finishing late cannot take it back.
 concurrency:
   group: preview-${{ inputs.sha }}
   cancel-in-progress: false
@@ -342,10 +343,13 @@ jobs:
 
       # Optional stable alias (repository variable PREVIEW_ALIAS, e.g. meal-planner-develop.vercel.app). Runs only
       # after the deploy and smoke test succeeded. Unset means skip with a notice. The alias must never be a
-      # project production domain. It only moves if SHA is still the tip of develop (unauthenticated lookup:
-      # the repository is public and this job has no GitHub token); otherwise a newer run moves it. A failed
-      # tip lookup fails the step. After `vercel alias set`, poll the Vercel API until the alias points at THIS
-      # deployment ID, as deploy-production.yml does. Token only in this step's env, config to curl on stdin.
+      # project production domain (this guard covers this project's domains only). It moves forward only: if the
+      # deployment the alias points at was built from a commit that is a descendant of SHA on develop, a newer
+      # commit already holds it and this step skips. Ancestry comes from an unauthenticated, blob-less fetch of
+      # develop into a throwaway repository (the repository must stay public; if it goes private the fetch fails
+      # and so does the step). Nothing is ever checked out. After `vercel alias set`, poll the Vercel API until the
+      # alias points at THIS deployment ID, as deploy-production.yml does. Token only in this step's env, config to
+      # curl on stdin. `vercel alias set` runs like the deploy step's `vercel deploy`: same cwd and env, no flags.
       - name: Point stable alias at this deployment
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -357,7 +361,7 @@ jobs:
             exit 0
           fi
           alias="${PREVIEW_ALIAS,,}"
-          [[ "$alias" =~ ^[A-Za-z0-9.-]+$ && "$alias" == *.* ]] || { echo "::error::PREVIEW_ALIAS must be a hostname such as meal-planner-develop.vercel.app"; exit 1; }
+          [[ "$alias" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ && "$alias" == *.* && "$alias" != *..* ]] || { echo "::error::PREVIEW_ALIAS must be a hostname such as meal-planner-develop.vercel.app"; exit 1; }
           [[ "$URL" =~ ^https://[A-Za-z0-9.-]+\.vercel\.app$ ]] || { echo "::error::missing or invalid deployment URL"; exit 1; }
           api() {
             curl -fsS --max-time 30 -K - "$1" <<< "header = \"Authorization: Bearer ${VERCEL_TOKEN}\""
@@ -365,9 +369,14 @@ jobs:
           team=""
           [[ "$VERCEL_ORG_ID" == team_* ]] && team="teamId=${VERCEL_ORG_ID}"
 
-          # Never alias a production domain. Same candidate list as deploy-production.yml; fail closed if unreadable.
+          # Never alias a production domain. Same candidate list as deploy-production.yml; fail closed if unreadable
+          # or if the domains list is paginated (more than 100 domains).
           proj=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}?${team}") || { echo "::error::could not fetch the Vercel project"; exit 1; }
-          doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?${team}") || { echo "::error::could not fetch the project domains"; exit 1; }
+          doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?limit=100&${team}") || { echo "::error::could not fetch the project domains"; exit 1; }
+          if [[ "$(jq -r '.pagination.next // empty' <<< "$doms")" != "" ]]; then
+            echo "::error::the project has more than 100 domains; cannot verify PREVIEW_ALIAS is not a production domain"
+            exit 1
+          fi
           cands=$(jq -n --argjson p "$proj" --argjson d "$doms" \
             '[($p.targets.production.alias // [])[], (($p.alias // [])[] | .domain? // empty), (($d.domains // [])[] | select((.redirect // null) == null and (.gitBranch // null) == null) | .name)]
              | map(select(type == "string") | ascii_downcase) | unique')
@@ -376,17 +385,51 @@ jobs:
             exit 1
           fi
 
-          tip=$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/develop | cut -f1) || tip=""
-          [[ "$tip" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::could not determine the tip of develop"; exit 1; }
-          if [[ "$tip" != "$SHA" ]]; then
-            echo "::notice::$SHA is no longer the tip of develop ($tip); skipping the alias, the newer run will move it"
-            exit 0
-          fi
-
           id=$(api "https://api.vercel.com/v13/deployments/${URL#https://}?${team}" | jq -r '.id // empty') || id=""
           [[ "$id" =~ ^dpl_[A-Za-z0-9]+$ ]] || { echo "::error::could not look up the Vercel deployment ID for $URL"; exit 1; }
 
-          "$RUNNER_TEMP/vercel-cli/node_modules/.bin/vercel" alias set "$URL" "$alias" --scope "$VERCEL_ORG_ID" || { echo "::error::vercel alias set failed"; exit 1; }
+          # Move forward only. 404 = alias does not exist yet: move. Any other error: fail closed.
+          move=true
+          code=$(curl -sS --max-time 30 -K - -o alias.json -w '%{http_code}' "https://api.vercel.com/v4/aliases/${alias}?${team}" \
+            <<< "header = \"Authorization: Bearer ${VERCEL_TOKEN}\"") || code=000
+          if [[ "$code" == 404 ]]; then
+            echo "::notice::alias $alias does not exist yet; creating it"
+          elif [[ "$code" != 200 ]]; then
+            echo "::error::could not read alias $alias (HTTP $code)"; exit 1
+          else
+            curid=$(jq -r '.deploymentId // empty' alias.json)
+            cur=""
+            if [[ "$curid" =~ ^dpl_[A-Za-z0-9]+$ ]]; then
+              cur=$(api "https://api.vercel.com/v13/deployments/${curid}?${team}" | jq -r '.meta.sourceSha // empty') || { echo "::error::could not read deployment $curid"; exit 1; }
+            fi
+            if [[ ! "$cur" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::notice::the deployment currently behind $alias has no recorded source SHA; moving the alias"
+            elif [[ "$cur" == "$SHA" ]]; then
+              echo "::notice::$alias already points at a deployment of $SHA"
+              move=false
+            else
+              gd=$(mktemp -d "$RUNNER_TEMP/ancestry.XXXXXX")
+              git -C "$gd" init -q
+              fetched=false
+              for _ in 1 2 3; do
+                if git -C "$gd" fetch -q --filter=blob:none --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/develop; then fetched=true; break; fi
+                sleep 5
+              done
+              $fetched || { echo "::error::could not fetch develop history to compare commits"; exit 1; }
+              rc=0
+              git -C "$gd" merge-base --is-ancestor "$SHA" "$cur" || rc=$?
+              if [[ "$rc" == 0 ]]; then
+                echo "::notice::$alias already points at newer commit $cur (this is $SHA); skipping the alias"
+                exit 0
+              elif [[ "$rc" != 1 ]]; then
+                echo "::error::could not compare $SHA with $cur in develop history (git exit $rc)"; exit 1
+              fi
+            fi
+          fi
+
+          if [[ "$move" == true ]]; then
+            "$RUNNER_TEMP/vercel-cli/node_modules/.bin/vercel" alias set "$URL" "$alias" || { echo "::error::vercel alias set failed"; exit 1; }
+          fi
 
           for attempt in $(seq 1 18); do
             pointed=$(api "https://api.vercel.com/v4/aliases/${alias}?${team}" | jq -r '.deploymentId // empty') || pointed=""

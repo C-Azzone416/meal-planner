@@ -65,7 +65,7 @@ Additional trigger rules:
 - **Approved:** documentation-only changes run the classifier and stable gate but do not build or deploy an application.
 - **Approved:** CLI/MCP-only changes do not deploy the hosted application.
 - **Recommended:** cancel stale pull-request CI using a concurrency key scoped to workflow and pull request.
-- **Approved:** Preview deploys use concurrency group `preview-<sha>` with `cancel-in-progress: false`. Every `develop` commit deploys and none is cancelled, so no commit's `CI / required` is turned red by a cancelled Preview. Runs for different SHAs can overlap, so the stable alias moves only if the run's SHA is still the tip of `develop`.
+- **Approved:** Preview deploys use concurrency group `preview-<sha>` with `cancel-in-progress: false`. Every `develop` commit deploys and none is cancelled, so no commit's `CI / required` is turned red by a cancelled Preview. Runs for different SHAs can overlap, so the stable alias moves forward only: it is skipped when the commit it currently serves is a descendant of the run's SHA on `develop`.
 - **Approved:** serialize Production runs. Never cancel an in-progress production migration or deployment merely because a newer run was requested.
 - **Conditional:** add `merge_group` only if a merge queue is enabled. GitHub requires that event for required Actions checks in a merge queue.
 - **Recommended:** add scheduled dependency or security checks later, but keep them outside the merge-facing required check unless they produce deterministic per-commit results.
@@ -224,7 +224,7 @@ Preview is **Approved** only for a push to `develop` with hosted changes. Pull r
 
 Preview runs in a separate trusted job (`preview`, a reusable-workflow call), tied to the exact pushed commit SHA (`github.sha`). It starts only after `affected` and every selected check succeeded. Preview secrets (`VERCEL_TOKEN`) are referenced only by that job and never reach the `pull_request` check jobs.
 
-**Stable alias.** If the repository variable `PREVIEW_ALIAS` is set (a hostname such as `meal-planner-develop.vercel.app`), the deploy job, after the smoke test passes, (only if its SHA is still the tip of `develop`, checked unauthenticated with `git ls-remote`; otherwise skipped with a notice, and a failed lookup fails the step) runs `vercel alias set --scope $VERCEL_ORG_ID`, then polls `/v4/aliases/<alias>` until it points at this deployment ID (up to 3 minutes) and records it in the step summary. Unset means the step is skipped with a notice. The step fails if the alias is one of the project's production domains.
+**Stable alias.** If the repository variable `PREVIEW_ALIAS` is set (a hostname such as `meal-planner-develop.vercel.app`), the deploy job, after the smoke test passes, (only if it would move forward: skipped when the alias already serves a descendant commit on `develop`, found by an unauthenticated blob-less fetch of `develop`; a failed comparison fails the step) runs `vercel alias set`, then polls `/v4/aliases/<alias>` until it points at this deployment ID (up to 3 minutes) and records it in the step summary. Unset means the step is skipped with a notice. The step fails if the alias is one of the project's production domains; that guard covers this project's domains only and fails closed above 100 domains. The fetch requires the repository to stay public.
 
 ### One-time first-deployment bootstrap
 
@@ -454,7 +454,7 @@ GitHub documents environments and deployment protection rules as available to pu
 1. ~~Final monorepo directories and the path-to-component map.~~ Proposed in the Path map; confirm once the skeleton merges.
 2. Whether CI and Preview are one workflow or use a privilege-separated handoff that preserves exact-SHA identity.
 3. Pull-request approval count, CODEOWNERS, bypass policy, merge method, stale-review behavior, and merge queue.
-4. Whether Preview success is required for every same-repository hosted pull request or only for release-candidate classes; the current recommendation requires it whenever selected.
+4. Whether Preview success is required for every hosted `develop` push or only for release-candidate classes (now: every `develop` push that selects Preview); the current recommendation requires it whenever selected.
 5. Production environment reviewer and branch restrictions actually available on the current GitHub plan.
 6. Vercel Go workload fit, framework/root settings, smoke endpoints, and whether web/API remain one hosted unit.
 7. Execution-time validation of the documented Vercel bootstrap procedure and prebuilt-build suitability before automatic Preview is enabled.
