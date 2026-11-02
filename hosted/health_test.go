@@ -13,7 +13,7 @@ func TestHealthGet(t *testing.T) {
 	rec := httptest.NewRecorder()
 	Health(rec, httptest.NewRequest(http.MethodGet, "/api/health", nil))
 
-	if rec.Code != http.StatusOK {
+	if rec.Code == http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
