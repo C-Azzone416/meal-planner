@@ -1,8 +1,10 @@
 # Setup and Delivery Plan
 
-Status: planning baseline and provider setup complete, 2026-11-01
+Status: planning baseline with a partially prepared provider connection scaffold, 2026-11-01
 
 This document separates authorized project setup from future implementation. Completing a provider setup step does not authorize application code or deployment.
+
+The operational CI/CD configuration guide is maintained in [CI/CD Configuration Plan](ci-cd-plan.md). The provider resources below are not a wired or validated delivery pipeline.
 
 ## Setup targets
 
@@ -77,9 +79,9 @@ The following non-secret setup is complete:
 
 These steps prepare identifiers and isolation boundaries only. No connection has been exercised because there is no workflow or application build yet.
 
-Protected material status:
+Protected material status (prior verification; not revalidated by a workflow):
 
-- `VERCEL_TOKEN` is installed. Vercel identifies the token as `meal-planner-github-actions`, restricts it to the single `meal-planner` project, and expires it on January 30, 2027. Vercel does not offer deployment-only permissions for this token type, so future workflow gates and protected branches remain part of the security boundary. No workflow has used or validated the token yet.
+- `VERCEL_TOKEN` is installed and was verified as restricted to the intended project with a recorded expiry. Its provider-side identifier and expiry are intentionally kept out of this public document. Vercel does not offer deployment-only permissions for this token type, so future workflow gates and protected branches remain part of the security boundary. No workflow has used or validated the token yet.
 - The remaining database connections require explicit approval at the moment they are created or installed:
   - Preview database connection: proposed as a Neon connection whose endpoint targets the preview branch and whose role is limited to the application database, stored only in the Vercel Preview environment and in the GitHub `preview` environment if build or migration steps require it. Neon role isolation, password expiry, and the final rotation mechanism must be verified before approval; absent provider-enforced expiry, use a documented 90-day rotation.
   - Production database connection: the same model, with an endpoint targeting the production branch and storage only in the corresponding Production environments. Preview and CI must never receive this value.
@@ -87,6 +89,8 @@ Protected material status:
 A Neon API key is not part of the initial minimum. Add a project-scoped `NEON_API_KEY` only if later workflow design actually automates branch creation, reset, or deletion. Neon Auth session keys, application login configuration, release signing keys, and package registry credentials are separate concerns and must not be bundled into deployment credentials.
 
 ## Approved branch and release policy
+
+The detailed trigger, check-name, artifact-integrity, migration, public-fork, and manual-verification plan is in [CI/CD Configuration Plan](ci-cd-plan.md). This section records the higher-level policy.
 
 ### Branch flow
 
