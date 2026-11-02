@@ -3,7 +3,7 @@
 #
 # Input : changed paths on stdin, one per line (use `git diff --no-renames --name-only`).
 # Env   : CLASSIFY_ALL=true          force every component (base commit unknown, diff failed).
-#         PREVIEW_TRUSTED=true       event is a pull_request whose head repo is this repo.
+#         PREVIEW_TRUSTED=true       event is a push to refs/heads/develop (never a pull request).
 #         PREVIEW_ENABLED=true       mirrors vars.PREVIEW_ENABLED.
 # Output: `name=true|false` lines on stdout (safe to append to $GITHUB_OUTPUT);
 #         per-path reasoning on stderr, prefixed with `#`.

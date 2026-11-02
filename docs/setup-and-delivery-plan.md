@@ -113,7 +113,7 @@ The exact rules, exceptions, administrator bypass policy, and release-branch nam
 
 ### Preview and production deployment
 
-- Trusted pull requests that affect the hosted web client or API deploy an automatic Vercel Preview only after their relevant CI checks pass.
+- Pushes to `develop` that affect the hosted web client or API deploy an automatic Vercel Preview (and move the optional stable `PREVIEW_ALIAS`) only after their relevant CI checks pass. Pull requests run checks only.
 - Documentation-only and local-tool-only changes do not deploy the hosted web application.
 - Pull requests from public forks receive secret-free checks only. Untrusted code never runs with deployment credentials or other protected secrets.
 - Production deployment is deliberate and manual after CI completes on `main`.
@@ -141,7 +141,7 @@ The exact workflow files and job count are not approved yet. A proposed shape is
 
 1. Detect affected components and publish a machine-readable check plan.
 2. Run independent web, hosted Go, local Go, and contract or integration groups in parallel when selected.
-3. Run an automatic Preview deployment for a trusted hosted change after the relevant checks succeed.
+3. Run an automatic Preview deployment for a hosted change pushed to `develop` after the relevant checks succeed.
 4. Evaluate all selected and intentionally skipped work in the stable fail-closed required gate.
 5. Offer a manual Production action only for the exact `main` commit that passed the required gate.
 
