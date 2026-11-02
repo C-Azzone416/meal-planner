@@ -9,7 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/C-Azzone416/meal-planner/internal/hosted"
+	"github.com/C-Azzone416/meal-planner/hosted"
 )
 
 type spec struct {

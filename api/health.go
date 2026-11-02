@@ -4,10 +4,10 @@ package handler
 import (
 	"net/http"
 
-	"github.com/C-Azzone416/meal-planner/internal/hosted"
+	"github.com/C-Azzone416/meal-planner/hosted"
 )
 
-// Handler is the Vercel entrypoint; it delegates to internal/hosted.
+// Handler is the Vercel entrypoint; it delegates to hosted.
 func Handler(w http.ResponseWriter, r *http.Request) {
 	hosted.Health(w, r)
 }

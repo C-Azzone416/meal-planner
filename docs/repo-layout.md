@@ -6,8 +6,8 @@ Component map for the verification skeleton. All commands run from the repositor
 | --- | --- | --- | --- |
 | `go.mod`, `go.sum` | all Go | Module `github.com/C-Azzone416/meal-planner`; the `go` directive is the Go version source for CI | `test -z "$(gofmt -l .)"`, `go vet ./...` |
 | `internal/core/version/` | local core | `Version` variable (default `dev`), set via `-ldflags "-X github.com/C-Azzone416/meal-planner/internal/core/version.Version=<v>"` | `go test ./internal/core/...` |
-| `internal/hosted/` | hosted API | Plain `net/http` handlers (`GET /api/health`) | `go test ./api/... ./internal/hosted/...` |
-| `api/health.go` | hosted API | Vercel Go function wrapping `internal/hosted`, served at `/api/health` | `go test ./api/... ./internal/hosted/...` |
+| `hosted/` | hosted API | Plain `net/http` handlers (`GET /api/health`) | `go test ./api/... ./hosted/...` |
+| `api/health.go` | hosted API | Vercel Go function wrapping `hosted`, served at `/api/health` | `go test ./api/... ./hosted/...` |
 | `cmd/mealplanner/` | local tools | CLI: `version`, `--version`; no args prints usage and exits 2 | `go test ./cmd/...`, `go build ./cmd/...` |
 | `cmd/mealplanner-mcp/` | local tools | MCP stub: `--version`, otherwise drains stdin and exits 0; stdout stays protocol-clean | `go test ./cmd/...`, `go build ./cmd/...` |
 | `contracts/` | contract | `openapi.yaml` (OpenAPI 3.1) and `contract_test.go` checking the hosted handler against it | `go test ./contracts/...` |
