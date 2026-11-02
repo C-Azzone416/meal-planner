@@ -33,7 +33,7 @@ The arrows describe responsibility boundaries, not implemented components.
 - Web client: TypeScript and React, responsive for phones and tablets.
 - Hosted compute: Vercel is the intended first target.
 - Database and application authentication: a separate Neon project using Neon Postgres and Neon Auth.
-- Source control and future CI: GitHub, with GitHub Actions deferred until implementation.
+- Source control and future CI: GitHub, with GitHub Actions CI scaffolding starts ahead of Phase 3 on a hello-world verification slice (see the [CI/CD plan](ci-cd-plan.md)).
 - Persistent product data: structured recipes, plans, and feedback in Postgres.
 
 Vercel officially supports Go HTTP functions, but documentation support is not proof that this application's workload will fit its routing, duration, concurrency, observability, or cost constraints. A workload-fit checkpoint is required early in implementation.
