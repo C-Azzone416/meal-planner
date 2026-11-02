@@ -8,6 +8,10 @@
 # redirect later entries), and any name that is absolute or contains a `..` component. Extraction
 # then goes only into <dest>, which must be absent or empty, with ownership and permissions not restored.
 # Fails closed: unparseable listing lines are rejected too.
+#
+# Hardlink rejection relies on GNU tar's verbose listing showing hardlinks with type `h` (so the first-character
+# check below rejects them). The GitHub-hosted ubuntu runners use GNU tar; bsdtar lists them differently, so do
+# not run this where `tar` is bsdtar without re-checking (tools/deploy/safe-extract_test.sh covers it).
 set -euo pipefail
 
 tarfile=${1:?usage: safe-extract.sh <tar> <dest>}
@@ -28,7 +32,7 @@ names=$(tar -tf "$tarfile") || fail "cannot list $tarfile"
 [[ -n "$names" ]] || fail "archive is empty"
 while IFS= read -r name; do
   [[ "$name" != /* ]] || fail "absolute path in archive: $name"
-  [[ ! "$name" =~ (^|/)\.\.(/|$) && "$name" != *..* ]] || fail "'..' in archive path: $name"
+  [[ ! "$name" =~ (^|/)\.\.(/|$) ]] || fail "'..' path component in archive: $name"
   if [[ -n "$allow_re" ]] && ! [[ "$name" =~ $allow_re ]]; then
     fail "unexpected entry in archive: $name"
   fi

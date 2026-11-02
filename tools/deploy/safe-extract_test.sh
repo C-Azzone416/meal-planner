@@ -28,6 +28,10 @@ elif kind == "hardlink":
     add(".vercel/project.json", type=tarfile.LNKTYPE, linkname="/etc/passwd")
 elif kind == "dotdot":
     add(".vercel/../../escape", b"pwn")
+elif kind == "dotdot_end":
+    add(".vercel/output/..", type=tarfile.DIRTYPE)
+elif kind == "dotdot_name":
+    add(".vercel/output/", type=tarfile.DIRTYPE); add(".vercel/output/chunk..js", b"x"); add(".vercel/output/a..b/c", b"x")
 elif kind == "absolute":
     add("/tmp/safe-extract-abs", b"pwn")
 elif kind == "fifo":
@@ -56,9 +60,12 @@ expect() { # expect <accept|reject> <name> <tar> [allow_re]
 allow='^\.vercel/(output(/|$)|project\.json$)'
 mktar "$work/clean.tar" clean;   expect accept clean "$work/clean.tar" "$allow"
 check "clean tar content extracted" test -f "$work/dest-clean/.vercel/project.json"
-for kind in symlink hardlink dotdot absolute fifo; do
+for kind in symlink hardlink dotdot dotdot_end absolute fifo; do
   mktar "$work/$kind.tar" "$kind"; expect reject "$kind" "$work/$kind.tar"
 done
+# `..` is rejected only as a whole path component; names that merely contain two dots are fine.
+mktar "$work/dotdot_name.tar" dotdot_name; expect accept dots-inside-name "$work/dotdot_name.tar" "$allow"
+check "chunk..js extracted" test -f "$work/dest-dots-inside-name/.vercel/output/chunk..js"
 mktar "$work/outside.tar" outside_allow; expect reject outside-allowlist "$work/outside.tar" "$allow"
 check "nothing escaped" test ! -e /tmp/safe-extract-abs
 
