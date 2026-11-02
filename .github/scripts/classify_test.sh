@@ -29,13 +29,13 @@ check "web preview off"          "web/src/App.tsx"               "web" PREVIEW_T
 check "web preview on"           "web/src/App.tsx"               "web hosted_preview" $T
 check "web preview fork"         "web/src/App.tsx"               "web" PREVIEW_ENABLED=true
 check "hosted api"               "api/health.go"                 "hosted_go local_go contracts integration"
-check "hosted internal"          "internal/hosted/x/y.go"        "hosted_go local_go contracts integration"
+check "hosted pkg"               "hosted/x/y.go"        "hosted_go local_go contracts integration"
 check "vercel.json"              "vercel.json"                   "hosted_go local_go contracts integration"
 check "hosted preview on"        "api/health.go"                 "hosted_go local_go contracts integration hosted_preview" $T
 check "cli only"                 "cmd/mealplan/main.go"          "local_go contracts integration"
 check "cli preview never"        "cmd/mealplan/main.go"          "local_go contracts integration" $T
 check "mcp only"                 "cmd/mealplan-mcp/main.go"      "local_go contracts integration"
-check "persistence/migration"    "internal/hosted/db/migrations/001.sql" "hosted_go local_go contracts integration"
+check "persistence/migration"    "hosted/db/migrations/001.sql" "hosted_go local_go contracts integration"
 check "core"                     "internal/core/recipe.go"       "hosted_go local_go contracts integration"
 check "core preview on"          "internal/core/recipe.go"       "hosted_go local_go contracts integration hosted_preview" $T
 check "contracts"                "contracts/openapi.yaml"        "web hosted_go local_go contracts integration"

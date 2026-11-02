@@ -132,7 +132,7 @@ The classifier should emit a machine-readable plan with at least these booleans:
 | --- | --- | --- |
 | `docs/**`, root `*.md` | docs | nothing (only the gate runs) |
 | `web/**` | web | `web` |
-| `api/**`, `internal/hosted/**`, `vercel.json` | hosted Go | `hosted_go`, `local_go`, `contracts`, `integration` |
+| `api/**`, `hosted/**`, `vercel.json` | hosted Go | `hosted_go`, `local_go`, `contracts`, `integration` |
 | `cmd/**` | CLI / MCP | `local_go`, `contracts`, `integration` |
 | `internal/core/**` | core | `hosted_go`, `local_go`, `contracts`, `integration` |
 | `contracts/**` | contracts | everything |

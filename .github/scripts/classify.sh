@@ -28,7 +28,7 @@ while IFS= read -r p || [[ -n "$p" ]]; do
   case "$p" in
     docs/*)                    docs=true;       why="docs" ;;
     web/*)                     web=true;        why="web" ;;
-    api/*|internal/hosted/*|vercel.json)
+    api/*|hosted/*|vercel.json)
                                hosted_go=true; local_go=true; contracts=true
                                why="hosted_go -> hosted_go, local_go (compatibility), contracts, integration" ;;
     cmd/*)                     local_go=true; cli=true
