@@ -183,7 +183,7 @@ Deploy / preview-smoke
 CI / required
 ```
 
-The workflow is named `CI`, so jobs report as `CI / <job>`. `preview` is a call to the reusable `preview.yml`; its smoke test runs inside that workflow and `required` treats the `preview` job result as covering both Preview and Preview smoke. Pull requests cancel stale runs; push runs are keyed on the SHA and are never cancelled, so every `develop`/`main` commit keeps CI evidence.
+The workflow is named `CI` (file `.github/workflows/ci.yml`) and the gate job's `name:` is exactly `required`. GitHub displays that as `CI / required`, but `CI / required` is only the display form: the actual check context a ruleset requires, and the job that release and production workflows look up (workflow file `ci.yml`, job `required`, on a push to `main`), is `required`. Do not rename the workflow, file, or job. Other jobs likewise report as `CI / <job>`. `preview` is a call to the reusable `preview.yml`; its smoke test runs inside that workflow and `required` treats the `preview` job result as covering both Preview and Preview smoke. Pull requests cancel stale runs; push runs are keyed on the SHA and are never cancelled, so every `develop`/`main` commit keeps CI evidence.
 
 Only `CI / required` is configured as a ruleset requirement. It runs unconditionally (`always()`), needs every job, and must:
 
