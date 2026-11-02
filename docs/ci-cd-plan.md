@@ -65,7 +65,7 @@ Additional trigger rules:
 - **Approved:** documentation-only changes run the classifier and stable gate but do not build or deploy an application.
 - **Approved:** CLI/MCP-only changes do not deploy the hosted application.
 - **Recommended:** cancel stale pull-request CI using a concurrency key scoped to workflow and pull request.
-- **Approved:** serialize Preview deploys with concurrency group `preview-develop` and `cancel-in-progress: false`. A running deploy (and its alias move) is never cancelled; a newer waiting deploy replaces an older waiting one, so deploys do not stack. The superseded commit's `preview` job is cancelled, so that commit's `CI / required` run reports failure; the newer commit carries the evidence.
+- **Approved:** Preview deploys use concurrency group `preview-<sha>` with `cancel-in-progress: false`. Every `develop` commit deploys and none is cancelled, so no commit's `CI / required` is turned red by a cancelled Preview. Runs for different SHAs can overlap, so the stable alias moves only if the run's SHA is still the tip of `develop`.
 - **Approved:** serialize Production runs. Never cancel an in-progress production migration or deployment merely because a newer run was requested.
 - **Conditional:** add `merge_group` only if a merge queue is enabled. GitHub requires that event for required Actions checks in a merge queue.
 - **Recommended:** add scheduled dependency or security checks later, but keep them outside the merge-facing required check unless they produce deterministic per-commit results.
@@ -224,7 +224,7 @@ Preview is **Approved** only for a push to `develop` with hosted changes. Pull r
 
 Preview runs in a separate trusted job (`preview`, a reusable-workflow call), tied to the exact pushed commit SHA (`github.sha`). It starts only after `affected` and every selected check succeeded. Preview secrets (`VERCEL_TOKEN`) are referenced only by that job and never reach the `pull_request` check jobs.
 
-**Stable alias.** If the repository variable `PREVIEW_ALIAS` is set (a hostname such as `meal-planner-develop.vercel.app`), the deploy job runs `vercel alias set` after the smoke test passes, then polls `/v4/aliases/<alias>` until it points at this deployment ID (up to 3 minutes) and records it in the step summary. Unset means the step is skipped with a notice. The step fails if the alias is one of the project's production domains.
+**Stable alias.** If the repository variable `PREVIEW_ALIAS` is set (a hostname such as `meal-planner-develop.vercel.app`), the deploy job, after the smoke test passes, then (only if its SHA is still the tip of `develop`, checked unauthenticated with `git ls-remote`; otherwise skipped with a notice, and a failed lookup fails the step) runs `vercel alias set --scope $VERCEL_ORG_ID`, then polls `/v4/aliases/<alias>` until it points at this deployment ID (up to 3 minutes) and records it in the step summary. Unset means the step is skipped with a notice. The step fails if the alias is one of the project's production domains.
 
 ### One-time first-deployment bootstrap
 

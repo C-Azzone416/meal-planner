@@ -30,11 +30,11 @@ on:
 permissions:
   contents: read
 
-# Preview deploys come only from develop pushes. They run one at a time: a newer deploy waits for the one in
-# progress (never cancelled mid-deploy, so the stable alias is never left half-moved) and replaces any older
-# waiting one, so deploys do not stack up.
+# Preview deploys come only from develop pushes. Every develop commit deploys; none is cancelled, so no
+# commit's CI shows a cancelled preview. Runs for different SHAs may overlap, so the stable alias step only
+# moves the alias when its SHA is still the tip of develop (an older deploy finishing late cannot take it back).
 concurrency:
-  group: preview-develop
+  group: preview-${{ inputs.sha }}
   cancel-in-progress: false
 
 defaults:
@@ -342,7 +342,9 @@ jobs:
 
       # Optional stable alias (repository variable PREVIEW_ALIAS, e.g. meal-planner-develop.vercel.app). Runs only
       # after the deploy and smoke test succeeded. Unset means skip with a notice. The alias must never be a
-      # project production domain. After `vercel alias set`, poll the Vercel API until the alias points at THIS
+      # project production domain. It only moves if SHA is still the tip of develop (unauthenticated lookup:
+      # the repository is public and this job has no GitHub token); otherwise a newer run moves it. A failed
+      # tip lookup fails the step. After `vercel alias set`, poll the Vercel API until the alias points at THIS
       # deployment ID, as deploy-production.yml does. Token only in this step's env, config to curl on stdin.
       - name: Point stable alias at this deployment
         env:
@@ -374,10 +376,17 @@ jobs:
             exit 1
           fi
 
+          tip=$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/develop | cut -f1) || tip=""
+          [[ "$tip" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::could not determine the tip of develop"; exit 1; }
+          if [[ "$tip" != "$SHA" ]]; then
+            echo "::notice::$SHA is no longer the tip of develop ($tip); skipping the alias, the newer run will move it"
+            exit 0
+          fi
+
           id=$(api "https://api.vercel.com/v13/deployments/${URL#https://}?${team}" | jq -r '.id // empty') || id=""
           [[ "$id" =~ ^dpl_[A-Za-z0-9]+$ ]] || { echo "::error::could not look up the Vercel deployment ID for $URL"; exit 1; }
 
-          "$RUNNER_TEMP/vercel-cli/node_modules/.bin/vercel" alias set "$URL" "$alias" || { echo "::error::vercel alias set failed"; exit 1; }
+          "$RUNNER_TEMP/vercel-cli/node_modules/.bin/vercel" alias set "$URL" "$alias" --scope "$VERCEL_ORG_ID" || { echo "::error::vercel alias set failed"; exit 1; }
 
           for attempt in $(seq 1 18); do
             pointed=$(api "https://api.vercel.com/v4/aliases/${alias}?${team}" | jq -r '.deploymentId // empty') || pointed=""
