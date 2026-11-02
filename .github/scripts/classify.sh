@@ -11,7 +11,7 @@
 set -euo pipefail
 
 docs=false web=false hosted_go=false local_go=false contracts=false
-toolchain=false core=false unknown=false
+toolchain=false core=false unknown=false cli=false
 seen=false
 
 mark_all() { web=true hosted_go=true local_go=true contracts=true; }
@@ -29,8 +29,10 @@ while IFS= read -r p || [[ -n "$p" ]]; do
     docs/*)                    docs=true;       why="docs" ;;
     web/*)                     web=true;        why="web" ;;
     api/*|internal/hosted/*|vercel.json)
-                               hosted_go=true;  why="hosted_go" ;;
-    cmd/*)                     local_go=true;   why="local_go" ;;
+                               hosted_go=true; local_go=true; contracts=true
+                               why="hosted_go -> hosted_go, local_go (compatibility), contracts, integration" ;;
+    cmd/*)                     local_go=true; cli=true
+                               why="cli -> local_go, contracts (compatibility), integration" ;;
     internal/core/*)           core=true;       why="core -> hosted_go, local_go, contracts, integration" ;;
     contracts/*)               contracts=true; mark_all; why="contracts -> everything" ;;
     go.mod|go.sum|.github/*)   toolchain=true;  why="toolchain -> everything" ;;
@@ -48,7 +50,7 @@ if [[ "$toolchain" == true || "$unknown" == true ]]; then mark_all; fi
 if [[ "$core" == true ]]; then hosted_go=true local_go=true contracts=true; fi
 
 integration=false
-if [[ "$hosted_go" == true || "$core" == true || "$contracts" == true || "$toolchain" == true || "$unknown" == true ]]; then
+if [[ "$hosted_go" == true || "$core" == true || "$contracts" == true || "$toolchain" == true || "$unknown" == true || "$cli" == true ]]; then
   integration=true
 fi
 
@@ -57,6 +59,10 @@ if [[ ( "$web" == true || "$hosted_go" == true || "$contracts" == true ) \
    && "${PREVIEW_TRUSTED:-false}" == "true" && "${PREVIEW_ENABLED:-false}" == "true" ]]; then
   hosted_preview=true
 fi
+
+# CLI changes run contracts as a compatibility check. Applied after the preview
+# decision so a CLI-only change never selects Preview.
+if [[ "$cli" == true ]]; then contracts=true; fi
 
 # Reserved for the CLI release workflow; currently mirrors toolchain/unknown changes.
 release_metadata=false

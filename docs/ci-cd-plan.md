@@ -132,14 +132,15 @@ The classifier should emit a machine-readable plan with at least these booleans:
 | --- | --- | --- |
 | `docs/**`, root `*.md` | docs | nothing (only the gate runs) |
 | `web/**` | web | `web` |
-| `api/**`, `internal/hosted/**`, `vercel.json` | hosted Go | `hosted_go` |
-| `cmd/**` | local Go | `local_go` |
+| `api/**`, `internal/hosted/**`, `vercel.json` | hosted Go | `hosted_go`, `local_go`, `contracts`, `integration` |
+| `cmd/**` | CLI / MCP | `local_go`, `contracts`, `integration` |
 | `internal/core/**` | core | `hosted_go`, `local_go`, `contracts`, `integration` |
 | `contracts/**` | contracts | everything |
 | `go.mod`, `go.sum`, `.github/**` | toolchain | everything |
 | anything else | unknown | everything |
 
-- `integration` is selected with `hosted_go`, core, contracts, or toolchain (and so for unknown paths).
+- Local Go compatibility runs on hosted changes, because the CLI consumes the hosted API. `cmd/**` also selects `contracts` and `integration` as compatibility checks, but never Preview.
+- `integration` is selected with `hosted_go`, `cmd/**`, core, contracts, or toolchain (and so for unknown paths).
 - `hosted_preview` = (`web` or `hosted_go` or core or contracts or toolchain) AND the event is a `pull_request` whose head repository equals this repository (not a fork) AND `vars.PREVIEW_ENABLED == 'true'`. Because the variable is unset, Preview is off.
 - Push events diff against `github.event.before`; pull requests diff against the base SHA. If the base cannot be found (new branch, force push) or the diff fails, everything is selected.
 - `release_metadata` is reserved for the CLI release workflow and currently mirrors toolchain/unknown changes.
