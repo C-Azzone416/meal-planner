@@ -43,7 +43,7 @@ feature/* ---- pull request ----> develop
 - Normal feature pull requests target `develop`.
 - A temporary release branch is cut from `develop` and proposed to `main`.
 - Production is manually initiated only after CI succeeds for the exact final `main` commit to deploy.
-- Automatic Preview is limited to trusted pull requests that change hosted components and pass their selected checks. It must not run for every pull request.
+- Automatic Preview is limited to pushes to `develop` that change hosted components and pass their selected checks. Pull requests run checks only and never deploy a Preview.
 - Preview is **Approved in principle**. Automatic Preview stays disabled (the repository variable `PREVIEW_ENABLED` is unset) until the one-time Vercel bootstrap passes.
 - Rulesets that block deletion and force push on `main` and `develop` are **Approved**. The remaining ruleset options (required pull requests, approvals, bypass, merge method) are **Recommended** or **Unresolved**, as listed in the checklist.
 
@@ -53,9 +53,9 @@ The workflow filenames and exact path filters are **Recommended** until the sour
 
 | Workflow responsibility | Trigger | Credentials | Result |
 | --- | --- | --- | --- |
-| Pull-request CI | `pull_request` targeting `develop` or `main` | None beyond read-only GitHub token | Detect changes, run selected checks, optionally hand off to trusted Preview, publish stable gate |
-| Branch CI | `push` to `develop` and `main` | None beyond read-only GitHub token | Reconfirm the merged commit and publish CI evidence for its exact SHA |
-| Preview | Same-repository trusted pull request, hosted change, selected CI success | `preview` environment only | Build, deploy Preview, smoke-test URL |
+| Pull-request CI | `pull_request` targeting `develop` or `main` | None beyond read-only GitHub token | Detect changes, run selected checks, publish stable gate. Never deploys a Preview |
+| Branch CI | `push` to `develop` and `main` | None beyond read-only GitHub token for checks; a `develop` push may hand off to Preview | Reconfirm the merged commit and publish CI evidence for its exact SHA |
+| Preview | `push` to `develop`, hosted change, selected CI success | `preview` environment only | Build, deploy Preview, smoke-test URL, then move the stable alias (`PREVIEW_ALIAS`, if set) |
 | Production | `workflow_dispatch` with an explicit `main` SHA | `production` environment only | Verify CI evidence, migrate, deploy, smoke-test exact SHA |
 | Local-tool candidate | Local core, CLI, MCP, contract, or release-metadata change | None for ordinary CI | Test supported platforms and API/protocol compatibility |
 | Local-tool release | Manual action or stable version tag after candidate CI | Release-only credentials if later required | Build, verify, checksum, and publish CLI/MCP artifacts |
@@ -64,7 +64,8 @@ Additional trigger rules:
 
 - **Approved:** documentation-only changes run the classifier and stable gate but do not build or deploy an application.
 - **Approved:** CLI/MCP-only changes do not deploy the hosted application.
-- **Recommended:** cancel stale pull-request CI and Preview work using a concurrency key scoped to workflow and pull request.
+- **Recommended:** cancel stale pull-request CI using a concurrency key scoped to workflow and pull request.
+- **Approved:** serialize Preview deploys with concurrency group `preview-develop` and `cancel-in-progress: false`. A running deploy (and its alias move) is never cancelled; a newer waiting deploy replaces an older waiting one, so deploys do not stack. The superseded commit's `preview` job is cancelled, so that commit's `CI / required` run reports failure; the newer commit carries the evidence.
 - **Approved:** serialize Production runs. Never cancel an in-progress production migration or deployment merely because a newer run was requested.
 - **Conditional:** add `merge_group` only if a merge queue is enabled. GitHub requires that event for required Actions checks in a merge queue.
 - **Recommended:** add scheduled dependency or security checks later, but keep them outside the merge-facing required check unless they produce deterministic per-commit results.
@@ -88,12 +89,14 @@ pull_request/push ------>| detect affected  |
                              |               |
                              +-------+-------+
                                      |
-                 trusted hosted PR? -+-- no --> stable required gate
+                 develop push? ------+-- no --> stable required gate
                          | yes
                          v
                  Preview build/deploy
                          |
                     Preview smoke
+                         |
+                    stable alias
                          |
                          v
                  stable required gate
@@ -141,7 +144,7 @@ The classifier should emit a machine-readable plan with at least these booleans:
 
 - Local Go compatibility runs on hosted changes, because the CLI consumes the hosted API. `cmd/**` also selects `contracts` and `integration` as compatibility checks, but never Preview.
 - `integration` is selected with `hosted_go`, `cmd/**`, core, contracts, or toolchain (and so for unknown paths).
-- `hosted_preview` = (`web` or `hosted_go` or core or contracts or toolchain) AND the event is a `pull_request` whose head repository equals this repository (not a fork) AND `vars.PREVIEW_ENABLED == 'true'`. Because the variable is unset, Preview is off.
+- `hosted_preview` = (`web` or `hosted_go` or core or contracts or toolchain) AND the event is a `push` to `refs/heads/develop` (`PREVIEW_TRUSTED`; pull requests, including same-repository and dependabot ones, and pushes to `main` are never trusted) AND `vars.PREVIEW_ENABLED == 'true'`. Because the variable is unset, Preview is off.
 - Push events diff against `github.event.before`; pull requests diff against the base SHA. If the base cannot be found (new branch, force push) or the diff fails, everything is selected.
 - `release_metadata` is reserved for the CLI release workflow and currently mirrors toolchain/unknown changes.
 
@@ -180,7 +183,6 @@ CI / local-go
 CI / contracts
 CI / integration
 Deploy / preview
-Deploy / preview-smoke
 CI / required
 ```
 
@@ -191,7 +193,7 @@ Only `CI / required` is configured as a ruleset requirement. It runs uncondition
 1. read the classifier output;
 2. inspect every selected job result;
 3. accept an intentional skip only when the classifier did not select that job;
-4. require Preview and Preview smoke success when `hosted_preview` is selected;
+4. require Preview and Preview smoke success when `hosted_preview` is selected (it is never selected for a pull request, so `preview` is then skipped and accepted);
 5. fail on cancellation, failure, missing output, unknown result, or an unexpectedly skipped selected job (and fail if `affected` itself did not succeed, or if a job ran although it was not selected); and
 6. publish a human-readable selection/result summary.
 
@@ -204,7 +206,7 @@ Job display names must be unique across workflows. Renaming the stable job is a 
 - Pull-request checks must be secret-free and run with least-privilege permissions, normally read-only repository contents.
 - Fork pull requests never receive repository, environment, Vercel, Neon, package, signing, or production secrets.
 - Do not use `pull_request_target` to check out or execute untrusted pull-request code with privileged context.
-- A same-repository pull request may deploy Preview only after the event origin and repository identity are verified and selected CI passes.
+- No pull request deploys a Preview. Only a push to `develop` (event and ref verified, in the classifier and again in the `preview` job's `if:`) does, after selected CI passes.
 - Production data, production Auth state, and production credentials never test pull-request code.
 - Integration tests use disposable Postgres and synthetic data.
 - Pin third-party Actions to full commit SHAs and record the human-readable release in a comment or dependency-update configuration.
@@ -218,9 +220,11 @@ Changes to workflow files, release metadata, migration tooling, and dependency-u
 
 ## Hosted Preview pipeline
 
-Preview is **Approved** only for a same-repository trusted pull request with hosted changes.
+Preview is **Approved** only for a push to `develop` with hosted changes. Pull requests run checks only. Production is separate: manual `workflow_dispatch` from `main`.
 
-Preview runs in a separate trusted job (`preview`, a reusable-workflow call), tied to the exact pull-request head SHA. It starts only after `affected` and every selected check succeeded. Preview secrets (`VERCEL_TOKEN`) are referenced only by that job and never reach the `pull_request` check jobs.
+Preview runs in a separate trusted job (`preview`, a reusable-workflow call), tied to the exact pushed commit SHA (`github.sha`). It starts only after `affected` and every selected check succeeded. Preview secrets (`VERCEL_TOKEN`) are referenced only by that job and never reach the `pull_request` check jobs.
+
+**Stable alias.** If the repository variable `PREVIEW_ALIAS` is set (a hostname such as `meal-planner-develop.vercel.app`), the deploy job runs `vercel alias set` after the smoke test passes, then polls `/v4/aliases/<alias>` until it points at this deployment ID (up to 3 minutes) and records it in the step summary. Unset means the step is skipped with a notice. The step fails if the alias is one of the project's production domains.
 
 ### One-time first-deployment bootstrap
 
@@ -255,7 +259,7 @@ Prerequisites are a reviewed exact commit SHA and a disposable hosted slice with
    ```
 
 4. Inspect the second deployment. Verify the intended project and SHA, Preview environment classification, absence of a Production-domain alias, and a successful smoke test at its unique Preview URL.
-5. Preserve the deployment evidence in the workflow run summary. Only after both classifications and domain behavior are proven may the trusted-pull-request automatic Preview path be enabled.
+5. Preserve the deployment evidence in the workflow run summary. Only after both classifications and domain behavior are proven may the automatic `develop`-push Preview path be enabled.
 
 This is a Production-class provider bootstrap, not a product Production release. Do not add database credentials or run migrations merely to perform it. If current CLI behavior differs from the cited documentation, stop without enabling automatic Preview and update this plan from current official guidance.
 
@@ -270,7 +274,7 @@ Recommended sequence:
 7. Smoke-test the returned deployment URL without exposing it to fork-originated scripts.
 8. Make the stable required gate validate Preview and smoke results when Preview was selected.
 
-Preview failure blocks the stable gate for a selected trusted hosted change. It does not grant a fork access to Preview secrets; a fork remains eligible for secret-free review and CI only.
+Preview failure blocks the stable gate for a selected `develop` push. Pull requests, including forks, never reach Preview secrets; they get secret-free review and CI only.
 
 ## Hosted Production pipeline
 
@@ -409,7 +413,7 @@ GitHub documents environments and deployment protection rules as available to pu
 
 - [ ] Fork pull request completes secret-free CI without environment access.
 - [ ] Fork pull request cannot invoke a privileged `pull_request_target` path that executes its code.
-- [ ] Same-repository hosted pull request deploys Preview only after selected checks pass.
+- [ ] A hosted pull request never deploys Preview; a hosted `develop` push deploys Preview only after selected checks pass.
 - [ ] Logs, summaries, caches, and artifacts contain no credentials or connection strings.
 - [ ] Workflow permissions are read-only except narrowly scoped trusted jobs.
 

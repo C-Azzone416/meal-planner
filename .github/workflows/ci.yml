@@ -47,8 +47,7 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PUSH_BEFORE_SHA: ${{ github.event.before }}
           HEAD_SHA: ${{ github.sha }}
-          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          THIS_REPO: ${{ github.repository }}
+          GIT_REF: ${{ github.ref }}
           PREVIEW_ENABLED: ${{ vars.PREVIEW_ENABLED }}
         run: |
           set -euo pipefail
@@ -60,7 +59,9 @@ jobs:
 
           export CLASSIFY_ALL=false
           export PREVIEW_TRUSTED=false
-          if [[ "$EVENT_NAME" == "pull_request" && "$PR_HEAD_REPO" == "$THIS_REPO" ]]; then
+          # Only a push to develop is preview-trusted. Pull requests (forks, same-repo, dependabot) and
+          # pushes to main never are.
+          if [[ "$EVENT_NAME" == "push" && "$GIT_REF" == "refs/heads/develop" ]]; then
             PREVIEW_TRUSTED=true
           fi
 
@@ -219,13 +220,16 @@ jobs:
           go vet ./...
       - run: go test -tags=integration ./...
 
-  # Trusted job: the only place VERCEL_TOKEN is referenced. It runs only for a
-  # same-repository pull request whose selected checks all succeeded, against the exact head SHA.
+  # Trusted job: the only place VERCEL_TOKEN is referenced. It runs only for a push to develop
+  # (never a pull request) whose selected checks all succeeded, against the pushed commit SHA.
+  # The event/ref condition repeats the classifier's PREVIEW_TRUSTED rule as a second check.
   preview:
     name: preview
     needs: [affected, web, hosted-go, local-go, contracts, integration]
     if: >-
       ${{ !cancelled()
+      && github.event_name == 'push'
+      && github.ref == 'refs/heads/develop'
       && needs.affected.result == 'success'
       && needs.affected.outputs.hosted_preview == 'true'
       && !contains(needs.*.result, 'failure')
@@ -234,7 +238,7 @@ jobs:
       contents: read
     uses: ./.github/workflows/preview.yml
     with:
-      sha: ${{ github.event.pull_request.head.sha }}
+      sha: ${{ github.sha }}
     secrets:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
 

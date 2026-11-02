@@ -27,7 +27,7 @@ check "docs trusted+enabled"     "docs/a.md"                     "" $T
 check "web only"                 "web/src/App.tsx"               "web"
 check "web preview off"          "web/src/App.tsx"               "web" PREVIEW_TRUSTED=true
 check "web preview on"           "web/src/App.tsx"               "web hosted_preview" $T
-check "web preview fork"         "web/src/App.tsx"               "web" PREVIEW_ENABLED=true
+check "web preview untrusted"    "web/src/App.tsx"               "web" PREVIEW_ENABLED=true
 check "hosted api"               "api/health.go"                 "hosted_go local_go contracts integration"
 check "hosted pkg"               "hosted/x/y.go"        "hosted_go local_go contracts integration"
 check "vercel.json"              "vercel.json"                   "hosted_go local_go contracts integration"

@@ -2,7 +2,7 @@
 
 Operator procedures for the Vercel-hosted web/API. The policy is in [ci-cd-plan.md](../ci-cd-plan.md); this page only says how to run the workflows. Nothing here is done automatically, and every Vercel-touching run needs explicit approval at the time.
 
-Workflows: `.github/workflows/vercel-bootstrap.yml` (one time), `preview.yml` (called from `ci.yml`), `deploy-production.yml` (manual).
+Workflows: `.github/workflows/vercel-bootstrap.yml` (one time), `preview.yml` (called from `ci.yml` on `develop` pushes), `deploy-production.yml` (manual).
 
 ## Build/deploy split
 
@@ -60,7 +60,9 @@ The bootstrap creates no tag and touches no database or environment variables. I
 
 ## 2. Preview
 
-Automatic Preview runs from `ci.yml` for trusted same-repository hosted pull requests once `PREVIEW_ENABLED=true`. Nothing to run by hand. The Preview summary carries the SHA, URL and manifest; the manifest is also an artifact named `preview-manifest-<sha>-<run attempt>`. A Preview failure blocks `CI / required`. Previews are serialized per SHA (`concurrency` group `preview-<sha>`, `cancel-in-progress: true`), so a re-run for the same commit cancels the older one.
+Automatic Preview runs from `ci.yml` on every push to `develop` that changes hosted code, once `PREVIEW_ENABLED=true`. Pull requests run checks only and never deploy a Preview. Nothing to run by hand. The Preview summary carries the SHA, URL and manifest; the manifest is also an artifact named `preview-manifest-<sha>-<run attempt>`. A Preview failure blocks `CI / required`. Previews are serialized (`concurrency` group `preview-develop`, `cancel-in-progress: false`): a running deploy finishes, and a newer waiting one replaces an older waiting one. The superseded commit's `preview` job is cancelled, so its `CI / required` shows failure; that is expected.
+
+**Stable alias.** Set the repository variable `PREVIEW_ALIAS` (e.g. `gh variable set PREVIEW_ALIAS --body meal-planner-develop.vercel.app`) to have each successful develop Preview moved to that hostname after its smoke test. The run summary's "Preview alias" section shows the confirmed deployment ID. Unset skips the step with a notice. It fails if the value is a production domain of the project or does not point at the new deployment within 3 minutes. The alias hostname must be on a domain the Vercel token's scope can manage.
 
 ## 3. Production release
 

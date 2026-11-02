@@ -1,5 +1,5 @@
 # Reusable Preview deploy: pull -> build -> deploy --prebuilt -> smoke, in separate jobs.
-# Called by ci.yml for trusted same-repository hosted pull requests only.
+# Called by ci.yml for pushes to develop only (never pull requests).
 # See docs/ci-cd-plan.md (Hosted Preview pipeline) and docs/runbooks/hosted-deploy.md.
 #
 # Build/deploy split: `vercel build` runs repository install and build scripts, so it runs in a
@@ -8,7 +8,8 @@
 #   build  no token. Checks out the SHA, runs `vercel build`, uploads .vercel/output as a tarball.
 #   deploy token, fresh runner, only tools/deploy checked out. Verifies the tarball checksum, validates and
 #          extracts it with safe-extract.sh, then only runs `vercel deploy --prebuilt`, then the smoke test
-#          (the `preview` environment's optional VERCEL_AUTOMATION_BYPASS_SECRET is read here, in step env only).
+#          (the `preview` environment's optional VERCEL_AUTOMATION_BYPASS_SECRET is read here, in step env only),
+#          then, if vars.PREVIEW_ALIAS is set, points that stable alias at the new deployment.
 name: Preview
 
 on:
@@ -29,10 +30,12 @@ on:
 permissions:
   contents: read
 
-# One Preview per commit at a time; a newer run for the same SHA cancels the older one.
+# Preview deploys come only from develop pushes. They run one at a time: a newer deploy waits for the one in
+# progress (never cancelled mid-deploy, so the stable alias is never left half-moved) and replaces any older
+# waiting one, so deploys do not stack up.
 concurrency:
-  group: preview-${{ inputs.sha }}
-  cancel-in-progress: true
+  group: preview-develop
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -214,6 +217,7 @@ jobs:
       VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
       SHA: ${{ inputs.sha }}
       EXPECTED_OUTPUT_SHA256: ${{ needs.build.outputs.output_sha256 }}
+      PREVIEW_ALIAS: ${{ vars.PREVIEW_ALIAS }}
     steps:
       - name: Validate SHA input
         run: |
@@ -334,4 +338,62 @@ jobs:
             echo "::error::HTTP $code: Vercel Deployment Protection may be blocking the unique deployment URL (401/403 or a redirect to a login page; $bypass)"
           fi
           echo "::error::smoke test failed for $URL/api/health"
+          exit 1
+
+      # Optional stable alias (repository variable PREVIEW_ALIAS, e.g. meal-planner-develop.vercel.app). Runs only
+      # after the deploy and smoke test succeeded. Unset means skip with a notice. The alias must never be a
+      # project production domain. After `vercel alias set`, poll the Vercel API until the alias points at THIS
+      # deployment ID, as deploy-production.yml does. Token only in this step's env, config to curl on stdin.
+      - name: Point stable alias at this deployment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          URL: ${{ steps.deploy.outputs.url }}
+        working-directory: ${{ runner.temp }}/deploy-src
+        run: |
+          if [[ -z "${PREVIEW_ALIAS:-}" ]]; then
+            echo "::notice::PREVIEW_ALIAS is not set; skipping the stable alias"
+            exit 0
+          fi
+          alias="${PREVIEW_ALIAS,,}"
+          [[ "$alias" =~ ^[A-Za-z0-9.-]+$ && "$alias" == *.* ]] || { echo "::error::PREVIEW_ALIAS must be a hostname such as meal-planner-develop.vercel.app"; exit 1; }
+          [[ "$URL" =~ ^https://[A-Za-z0-9.-]+\.vercel\.app$ ]] || { echo "::error::missing or invalid deployment URL"; exit 1; }
+          api() {
+            curl -fsS --max-time 30 -K - "$1" <<< "header = \"Authorization: Bearer ${VERCEL_TOKEN}\""
+          }
+          team=""
+          [[ "$VERCEL_ORG_ID" == team_* ]] && team="teamId=${VERCEL_ORG_ID}"
+
+          # Never alias a production domain. Same candidate list as deploy-production.yml; fail closed if unreadable.
+          proj=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}?${team}") || { echo "::error::could not fetch the Vercel project"; exit 1; }
+          doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?${team}") || { echo "::error::could not fetch the project domains"; exit 1; }
+          cands=$(jq -n --argjson p "$proj" --argjson d "$doms" \
+            '[($p.targets.production.alias // [])[], (($p.alias // [])[] | .domain? // empty), (($d.domains // [])[] | select((.redirect // null) == null and (.gitBranch // null) == null) | .name)]
+             | map(select(type == "string") | ascii_downcase) | unique')
+          if jq -e --arg a "$alias" 'index($a) != null' <<< "$cands" > /dev/null; then
+            echo "::error::PREVIEW_ALIAS $alias is a production domain of this project; refusing to alias a Preview to it"
+            exit 1
+          fi
+
+          id=$(api "https://api.vercel.com/v13/deployments/${URL#https://}?${team}" | jq -r '.id // empty') || id=""
+          [[ "$id" =~ ^dpl_[A-Za-z0-9]+$ ]] || { echo "::error::could not look up the Vercel deployment ID for $URL"; exit 1; }
+
+          "$RUNNER_TEMP/vercel-cli/node_modules/.bin/vercel" alias set "$URL" "$alias" || { echo "::error::vercel alias set failed"; exit 1; }
+
+          for attempt in $(seq 1 18); do
+            pointed=$(api "https://api.vercel.com/v4/aliases/${alias}?${team}" | jq -r '.deploymentId // empty') || pointed=""
+            if [[ "$pointed" == "$id" ]]; then
+              {
+                echo "## Preview alias"
+                echo
+                echo "- Alias: \`$alias\`"
+                echo "- Deployment ID: \`$id\`"
+                echo "- Source SHA: \`$SHA\`"
+                echo "- Vercel API confirms the alias points at this deployment (attempt $attempt)"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "attempt $attempt: $alias points at ${pointed:-<unknown>}, waiting for $id"
+            sleep 10
+          done
+          echo "::error::the alias $alias did not point at deployment $id within 3 minutes"
           exit 1
