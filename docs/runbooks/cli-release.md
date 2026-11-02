@@ -24,17 +24,21 @@ GitHub Release archives, and the CLI and MCP share one version.
 
    The tag must match `cli-vX.Y.Z` exactly.
 4. Watch the **Release CLI** run. Flow: draft → verify → publish.
-   - `verify`: tag format, ancestry on `main`, green `required` job via
-     `verify-ci.sh`.
+   - `verify`: for manual runs, the workflow must be dispatched from
+     `refs/heads/main`; then tag format, ancestry on `main`, green `required`
+     job via `verify-ci.sh`.
    - `build` (five cross-compiled targets) and `smoke` (native macOS and
-     Windows runs).
+     Windows runs). The Windows smoke test extracts the zip with bsdtar
+     (System32 `tar.exe`) only; there is no PowerShell fallback.
    - `publish`: re-checks the tag still points at the verified commit, then
      creates a **draft** release (pre-release for `0.x`) with all archives and
      `SHA256SUMS`, targeting the verified SHA. Nothing is public yet.
    - `verify-published`: downloads the draft's assets fresh, asserts exactly
      the five expected archives plus `SHA256SUMS`, runs `sha256sum -c`, and
      compares `SHA256SUMS` byte for byte with the one produced by the build.
-   - `release`: only after all of the above, flips the draft to published.
+   - `release`: only after all of the above, re-checks once more that the tag
+     still resolves to the verified commit (failing and leaving the draft
+     unpublished if not), then flips the draft to published.
 5. On failure the release stays a draft and the `cleanup` job deletes the
    draft (never a published release; the tag is kept). Read the failing job's
    log, fix the cause, then re-run (below). Nothing was ever public.
@@ -43,6 +47,10 @@ To re-run for an existing tag, use **Actions → Release CLI → Run workflow**
 with the `tag` input. A leftover draft for the tag is deleted and recreated.
 If a **published** release already exists, `publish` fails with a clear
 message; delete that release (not the tag) first.
+
+If GitHub immutable releases are enabled for the repository, publishing the
+draft locks the tag and the release assets. After that, neither can be changed
+or deleted, so a bad release can only be superseded by a new version.
 
 Running `tools/release/verify-ci.sh` locally needs:
 
@@ -56,7 +64,58 @@ tools/release/verify-ci.sh <sha>
 
 Create a repository ruleset for `cli-v*` tags so only maintainers can create,
 update, or delete them. This guards the tag-to-commit mapping that the
-workflow verifies. It has not been set up yet.
+workflow verifies. It has not been set up yet and will be configured during
+rollout.
+
+The in-file checks (`workflow_dispatch` only from `main`, tag reachable from
+`main`) are not a security boundary on their own: a workflow file edited on a
+non-main tag runs the edited copy and could skip them. The `cli-v*` tag ruleset
+is the real control.
+
+### First live verification
+
+Run once after the workflow lands on `main` and the tag ruleset is in place,
+using a throwaway tag `cli-v0.0.1`. Tag the current green `main` commit unless
+a step says otherwise. Delete the release and the tag afterwards
+(`gh release delete cli-v0.0.1 --cleanup-tag --yes`, or delete the tag with
+`git push origin :refs/tags/cli-v0.0.1`).
+
+- [ ] **Happy path.** Push `cli-v0.0.1`. All jobs go green; a published
+  pre-release (major `0`) has the five archives plus `SHA256SUMS`.
+- [ ] **Draft invisible when logged out.** While `verify-published` is still
+  running (or on a draft you keep by pausing), fetch
+  `https://github.com/C-Azzone416/meal-planner/releases/tag/cli-v0.0.1` and the
+  releases API unauthenticated (`curl -s .../releases`): the draft must not
+  appear.
+- [ ] **Forced verify-published failure deletes the draft.** Temporarily make
+  `verify-published` fail (for example a bogus expected asset name on a test
+  branch run). The `cleanup` job deletes the draft, the tag stays, and no
+  public release exists.
+- [ ] **Re-run replaces a draft.** Leave a draft in place (fail a run after
+  `publish`), then run via **Run workflow** with the same tag. The old draft is
+  deleted and a new one is created.
+- [ ] **Re-run against a published release is refused.** With the release
+  published, run the workflow again for the tag. `publish` fails with the
+  "published release already exists" error and nothing is deleted (the release
+  and its assets are intact, and `cleanup` does not remove it).
+- [ ] **Bad tag.** Push `cli-vfoo` and `cli-v1.2`: `verify` rejects both on
+  the format check.
+- [ ] **Tag not on main.** Tag a commit on a side branch: `verify` fails on
+  the ancestry check. Also try **Run workflow** from a non-main branch: it
+  fails the `refs/heads/main` guard.
+- [ ] **No green `required`.** Tag a `main` commit with no successful
+  `ci.yml` push run, or whose `required` job failed: `verify-ci.sh` fails.
+- [ ] **Annotated tag.** Push an annotated tag (`git tag -a cli-v0.0.1 -m x`).
+  `verify` resolves it to the commit via `refs/tags/<tag>^{commit}`, the draft
+  targets that commit, and the release publishes.
+- [ ] **Windows smoke test.** The `Smoke windows-amd64` job passes, extracting
+  the zip with System32 `tar.exe` (bsdtar), and runs both `.exe` binaries.
+- [ ] **Concurrency.** Push the tag and immediately dispatch the same tag.
+  The second run queues behind the first (same `release-cli-<tag>` group,
+  `cancel-in-progress: false`) rather than racing it.
+- [ ] **`gh release edit` finds the draft.** In the `release` job log,
+  `gh release edit cli-v0.0.1 --draft=false` succeeds on the draft by tag name.
+  If it ever reports "release not found", switch to editing by release id.
 
 ### Dry run locally
 
