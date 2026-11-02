@@ -1,0 +1,219 @@
+name: Release CLI
+
+# Unsigned CLI/MCP release. Tags are cli-vX.Y.Z; CLI and MCP share one version.
+# See docs/runbooks/cli-release.md.
+on:
+  push:
+    tags:
+      - 'cli-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re-)release, e.g. cli-v0.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-cli-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  verify:
+    name: Verify tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      sha: ${{ steps.check.outputs.sha }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - name: Check out full history and tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Verify tag, main ancestry, and CI status
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^cli-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$TAG' does not match ^cli-v[0-9]+\.[0-9]+\.[0-9]+$"
+            exit 1
+          fi
+          version="${TAG#cli-v}"
+          if ! sha="$(git rev-parse --verify "refs/tags/${TAG}^{commit}")"; then
+            echo "::error::Tag '$TAG' not found in the repository"
+            exit 1
+          fi
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$sha" refs/remotes/origin/main; then
+            echo "::error::Tagged commit $sha is not reachable from origin/main"
+            exit 1
+          fi
+          count="$(gh api --paginate "repos/${REPO}/commits/${sha}/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "CI / required" and .conclusion == "success")] | length' \
+            | awk '{s+=$1} END {print s+0}')"
+          if [ "${count:-0}" -lt 1 ]; then
+            echo "::error::No successful 'CI / required' check run for $sha"
+            exit 1
+          fi
+          prerelease=false
+          [ "${version%%.*}" = "0" ] && prerelease=true
+          {
+            echo "version=$version"
+            echo "sha=$sha"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG ($sha) as version $version, prerelease=$prerelease"
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { goos: darwin, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+    steps:
+      - name: Check out tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build archive
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          GOOS_T: ${{ matrix.goos }}
+          GOARCH_T: ${{ matrix.goarch }}
+        run: tools/release/build-archives.sh "$VERSION" dist "${GOOS_T}/${GOARCH_T}"
+      - name: Smoke test linux/amd64 natively
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: tools/release/smoke-test.sh "dist/mealplanner_${VERSION}_linux_amd64.tar.gz" "$VERSION"
+      - name: Upload archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: archive-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/mealplanner_*
+          if-no-files-found: error
+          retention-days: 7
+
+  smoke:
+    name: Smoke ${{ matrix.name }}
+    needs: [verify, build]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { name: macos-arm64, runner: macos-latest, artifact: archive-darwin-arm64, suffix: darwin_arm64.tar.gz }
+          - { name: windows-amd64, runner: windows-latest, artifact: archive-windows-amd64, suffix: windows_amd64.zip }
+    steps:
+      - name: Check out scripts from tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+          persist-credentials: false
+      - name: Download archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist
+      - name: Run binaries natively
+        shell: bash
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          SUFFIX: ${{ matrix.suffix }}
+        run: tools/release/smoke-test.sh "dist/mealplanner_${VERSION}_${SUFFIX}" "$VERSION"
+
+  publish:
+    name: Publish GitHub Release
+    needs: [verify, build, smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out scripts from tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+          persist-credentials: false
+      - name: Download all archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: archive-*
+          merge-multiple: true
+          path: dist
+      - name: Generate SHA256SUMS
+        run: tools/release/make-checksums.sh dist
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists; delete it (keep the tag) before re-running"
+            exit 1
+          fi
+          flags=()
+          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          gh release create "$TAG" dist/mealplanner_* dist/SHA256SUMS \
+            --repo "$REPO" --verify-tag \
+            --title "mealplanner ${VERSION}" \
+            --notes "Unsigned CLI and MCP release ${VERSION}. Verify downloads against SHA256SUMS; see docs/runbooks/cli-release.md." \
+            "${flags[@]}"
+
+  verify-published:
+    name: Verify published assets
+    needs: [verify, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download release assets fresh and check checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          dir="$(mktemp -d)"
+          gh release download "$TAG" --repo "$REPO" --dir "$dir"
+          cd "$dir"
+          archives=(mealplanner_*)
+          if [ "${#archives[@]}" -ne 5 ]; then
+            echo "::error::Expected 5 archives, found ${#archives[@]}"
+            exit 1
+          fi
+          if [ "$(wc -l < SHA256SUMS)" -ne 5 ]; then
+            echo "::error::SHA256SUMS does not list exactly 5 archives"
+            exit 1
+          fi
+          if ! sha256sum -c SHA256SUMS; then
+            echo "::error::Published assets do not match SHA256SUMS; delete release $TAG and investigate"
+            exit 1
+          fi
