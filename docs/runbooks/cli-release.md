@@ -9,8 +9,12 @@ GitHub Release archives, and the CLI and MCP share one version.
 1. Decide the version bump with the user. Versions are semver and start at
    `0.y.z`; while the major version is `0`, the release is marked as a
    GitHub pre-release.
-2. Make sure the commit to release is on `main` and its `CI / required` check
-   is green. The workflow refuses to publish otherwise.
+2. Make sure the commit to release is on `main` and its CI is green. The
+   workflow refuses to publish otherwise: `tools/release/verify-ci.sh <sha>`
+   requires a `ci.yml` push run on `main` for that SHA with a job named
+   `required` that succeeded (needs `GH_TOKEN`/`GITHUB_REPOSITORY`; the UI's
+   "CI / required" is only workflow/job display text). You can run it locally
+   with `gh` authenticated.
 3. Tag that commit and push the tag:
 
    ```sh
@@ -21,7 +25,7 @@ GitHub Release archives, and the CLI and MCP share one version.
 
    The tag must match `cli-vX.Y.Z` exactly.
 4. Watch the **Release CLI** run. Jobs: `verify` (tag format, ancestry on
-   `main`, green `CI / required`), `build` (five cross-compiled targets),
+   `main`, green `required` job via `verify-ci.sh`), `build` (five cross-compiled targets),
    `smoke` (native macOS and Windows runs), `publish` (creates the release),
    and `verify-published` (re-downloads the assets and runs `sha256sum -c`).
 5. If `verify-published` fails, the release is public but untrustworthy:

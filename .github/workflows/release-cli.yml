@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      checks: read
+      actions: read
     outputs:
       version: ${{ steps.check.outputs.version }}
       sha: ${{ steps.check.outputs.sha }}
@@ -45,7 +45,7 @@ jobs:
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           if ! [[ "$TAG" =~ ^cli-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -62,13 +62,7 @@ jobs:
             echo "::error::Tagged commit $sha is not reachable from origin/main"
             exit 1
           fi
-          count="$(gh api --paginate "repos/${REPO}/commits/${sha}/check-runs?per_page=100" \
-            --jq '[.check_runs[] | select(.name == "CI / required" and .conclusion == "success")] | length' \
-            | awk '{s+=$1} END {print s+0}')"
-          if [ "${count:-0}" -lt 1 ]; then
-            echo "::error::No successful 'CI / required' check run for $sha"
-            exit 1
-          fi
+          tools/release/verify-ci.sh "$sha"
           prerelease=false
           [ "${version%%.*}" = "0" ] && prerelease=true
           {
