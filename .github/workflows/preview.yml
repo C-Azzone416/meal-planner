@@ -389,7 +389,6 @@ jobs:
           [[ "$id" =~ ^dpl_[A-Za-z0-9]+$ ]] || { echo "::error::could not look up the Vercel deployment ID for $URL"; exit 1; }
 
           # Move forward only. 404 = alias does not exist yet: move. Any other error: fail closed.
-          move=true
           code=$(curl -sS --max-time 30 -K - -o alias.json -w '%{http_code}' "https://api.vercel.com/v4/aliases/${alias}?${team}" \
             <<< "header = \"Authorization: Bearer ${VERCEL_TOKEN}\"") || code=000
           if [[ "$code" == 404 ]]; then
@@ -405,8 +404,14 @@ jobs:
             if [[ ! "$cur" =~ ^[0-9a-f]{40}$ ]]; then
               echo "::notice::the deployment currently behind $alias has no recorded source SHA; moving the alias"
             elif [[ "$cur" == "$SHA" ]]; then
-              echo "::notice::$alias already points at a deployment of $SHA"
-              move=false
+              echo "::notice::$alias already points at a deployment of $SHA ($curid); leaving it"
+              {
+                echo "## Preview alias"
+                echo
+                echo "- Alias: \`$alias\`"
+                echo "- Already on this commit (\`$SHA\`), existing deployment \`$curid\`; not moved"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
             else
               gd=$(mktemp -d "$RUNNER_TEMP/ancestry.XXXXXX")
               git -C "$gd" init -q
@@ -427,9 +432,7 @@ jobs:
             fi
           fi
 
-          if [[ "$move" == true ]]; then
-            "$RUNNER_TEMP/vercel-cli/node_modules/.bin/vercel" alias set "$URL" "$alias" || { echo "::error::vercel alias set failed"; exit 1; }
-          fi
+          "$RUNNER_TEMP/vercel-cli/node_modules/.bin/vercel" alias set "$URL" "$alias" || { echo "::error::vercel alias set failed"; exit 1; }
 
           for attempt in $(seq 1 18); do
             pointed=$(api "https://api.vercel.com/v4/aliases/${alias}?${team}" | jq -r '.deploymentId // empty') || pointed=""
