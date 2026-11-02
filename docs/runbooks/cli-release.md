@@ -13,8 +13,7 @@ GitHub Release archives, and the CLI and MCP share one version.
    workflow refuses to publish otherwise: `tools/release/verify-ci.sh <sha>`
    requires a `ci.yml` push run on `main` for that SHA with a job named
    `required` that succeeded (needs `GH_TOKEN`/`GITHUB_REPOSITORY`; the UI's
-   "CI / required" is only workflow/job display text). You can run it locally
-   with `gh` authenticated.
+   "CI / required" is only workflow/job display text).  See below for running it locally.
 3. Tag that commit and push the tag:
 
    ```sh
@@ -24,16 +23,40 @@ GitHub Release archives, and the CLI and MCP share one version.
    ```
 
    The tag must match `cli-vX.Y.Z` exactly.
-4. Watch the **Release CLI** run. Jobs: `verify` (tag format, ancestry on
-   `main`, green `required` job via `verify-ci.sh`), `build` (five cross-compiled targets),
-   `smoke` (native macOS and Windows runs), `publish` (creates the release),
-   and `verify-published` (re-downloads the assets and runs `sha256sum -c`).
-5. If `verify-published` fails, the release is public but untrustworthy:
-   delete the release (not the tag), investigate, and re-run.
+4. Watch the **Release CLI** run. Flow: draft → verify → publish.
+   - `verify`: tag format, ancestry on `main`, green `required` job via
+     `verify-ci.sh`.
+   - `build` (five cross-compiled targets) and `smoke` (native macOS and
+     Windows runs).
+   - `publish`: re-checks the tag still points at the verified commit, then
+     creates a **draft** release (pre-release for `0.x`) with all archives and
+     `SHA256SUMS`, targeting the verified SHA. Nothing is public yet.
+   - `verify-published`: downloads the draft's assets fresh, asserts exactly
+     the five expected archives plus `SHA256SUMS`, runs `sha256sum -c`, and
+     compares `SHA256SUMS` byte for byte with the one produced by the build.
+   - `release`: only after all of the above, flips the draft to published.
+5. On failure the release stays a draft and the `cleanup` job deletes the
+   draft (never a published release; the tag is kept). Read the failing job's
+   log, fix the cause, then re-run (below). Nothing was ever public.
 
 To re-run for an existing tag, use **Actions → Release CLI → Run workflow**
-with the `tag` input. `publish` fails if a release for the tag already exists,
-so delete the release first.
+with the `tag` input. A leftover draft for the tag is deleted and recreated.
+If a **published** release already exists, `publish` fails with a clear
+message; delete that release (not the tag) first.
+
+Running `tools/release/verify-ci.sh` locally needs:
+
+```sh
+export GITHUB_REPOSITORY=C-Azzone416/meal-planner
+export GH_TOKEN=<token with actions: read>   # or `GH_TOKEN=$(gh auth token)`
+tools/release/verify-ci.sh <sha>
+```
+
+### Tag protection (recommended, not yet configured)
+
+Create a repository ruleset for `cli-v*` tags so only maintainers can create,
+update, or delete them. This guards the tag-to-commit mapping that the
+workflow verifies. It has not been set up yet.
 
 ### Dry run locally
 

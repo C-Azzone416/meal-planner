@@ -17,9 +17,13 @@ case "$archive" in
   *.tar.gz) tar -xzf "$archive" -C "$dir"; ext="" ;;
   *.zip)
     ext=".exe"
-    if command -v unzip >/dev/null 2>&1; then unzip -q "$archive" -d "$dir"
-    elif command -v 7z >/dev/null 2>&1; then 7z x -y -o"$dir" "$archive" >/dev/null
-    else echo "error: need unzip or 7z" >&2; exit 1; fi ;;
+    # bsdtar reads zip. On Windows bash, plain `tar` is GNU tar (no zip), so use
+    # System32's bsdtar with native paths; elsewhere bsdtar is `tar`.
+    if command -v cygpath >/dev/null 2>&1 && [ -n "${SYSTEMROOT:-}" ]; then
+      "$(cygpath -u "$SYSTEMROOT")/System32/tar.exe" -xf "$(cygpath -w "$archive")" -C "$(cygpath -w "$dir")"
+    else
+      tar -xf "$archive" -C "$dir"
+    fi ;;
   *) echo "error: unknown archive type: $archive" >&2; exit 2 ;;
 esac
 
