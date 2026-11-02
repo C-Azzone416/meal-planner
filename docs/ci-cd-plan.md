@@ -224,7 +224,7 @@ Preview is **Approved** only for a push to `develop` with hosted changes. Pull r
 
 Preview runs in a separate trusted job (`preview`, a reusable-workflow call), tied to the exact pushed commit SHA (`github.sha`). It starts only after `affected` and every selected check succeeded. Preview secrets (`VERCEL_TOKEN`) are referenced only by that job and never reach the `pull_request` check jobs.
 
-**Stable alias.** If the repository variable `PREVIEW_ALIAS` is set (a hostname such as `meal-planner-develop.vercel.app`), the deploy job, after the smoke test passes, then (only if its SHA is still the tip of `develop`, checked unauthenticated with `git ls-remote`; otherwise skipped with a notice, and a failed lookup fails the step) runs `vercel alias set --scope $VERCEL_ORG_ID`, then polls `/v4/aliases/<alias>` until it points at this deployment ID (up to 3 minutes) and records it in the step summary. Unset means the step is skipped with a notice. The step fails if the alias is one of the project's production domains.
+**Stable alias.** If the repository variable `PREVIEW_ALIAS` is set (a hostname such as `meal-planner-develop.vercel.app`), the deploy job, after the smoke test passes, (only if its SHA is still the tip of `develop`, checked unauthenticated with `git ls-remote`; otherwise skipped with a notice, and a failed lookup fails the step) runs `vercel alias set --scope $VERCEL_ORG_ID`, then polls `/v4/aliases/<alias>` until it points at this deployment ID (up to 3 minutes) and records it in the step summary. Unset means the step is skipped with a notice. The step fails if the alias is one of the project's production domains.
 
 ### One-time first-deployment bootstrap
 
