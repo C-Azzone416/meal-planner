@@ -1,0 +1,31 @@
+openapi: 3.1.0
+info:
+  title: Meal Planner API
+  version: 0.0.0
+paths:
+  /api/health:
+    get:
+      operationId: getHealth
+      summary: Liveness and version check
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+components:
+  schemas:
+    Health:
+      type: object
+      required: [status, service, version]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        service:
+          type: string
+          enum: [meal-planner-api]
+        version:
+          type: string
