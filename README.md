@@ -23,6 +23,7 @@ The application will keep user data private even though the source repository is
 - [Product plan](docs/product-plan.md) — settled product decisions, proposed launch scope, unresolved rules, and deferred ideas.
 - [Architecture plan](docs/architecture.md) — system boundaries, conceptual API shape, security posture, and verification checkpoints.
 - [Setup and delivery plan](docs/setup-and-delivery-plan.md) — provider setup, implementation phases, and release gates.
+- [CI/CD configuration plan](docs/ci-cd-plan.md) — branch protections, affected-component CI, deployment and release sequencing, configuration inventory, and verification steps.
 
 ## Current boundaries
 
