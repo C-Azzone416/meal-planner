@@ -195,3 +195,5 @@ These references establish provider capabilities only; they do not resolve appli
 - Vercel Hobby plan: https://vercel.com/docs/plans/hobby
 - Neon project management: https://neon.com/docs/manage/projects
 - Neon Auth overview: https://neon.com/blog/neon-auth-branchable-identity-in-your-database
+
+QA doc touch
