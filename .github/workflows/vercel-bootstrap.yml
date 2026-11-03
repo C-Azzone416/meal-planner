@@ -13,7 +13,8 @@
 #
 # Build/deploy split: each target runs pull -> build -> deploy as separate jobs. `vercel build`
 # runs repository install and build scripts, so it runs in a job that never has VERCEL_TOKEN.
-#   pull    token, no checkout, no repository code.
+#   pull    token, no checkout during the token step. Afterwards only tools/deploy/check-pulled-env.sh is
+#           checked out, at the workflow's own commit, to guard the env files.
 #   build   no token. Checks out the SHA, runs `vercel build`, uploads .vercel/output as a tarball.
 #   deploy  token, fresh runner, only tools/deploy checked out. Verifies the tarball checksum, runs only
 #           `vercel deploy --prebuilt`, then the Vercel-API record check.
@@ -99,34 +100,39 @@ jobs:
       - name: Prefetch pinned Vercel CLI
         run: npx --yes "vercel@${VERCEL_CLI_VERSION}" --version
 
-      # The only token step. There is no checkout, so no repository code is present.
+      # The only token step. Nothing is checked out yet, so no repository code is present while the token is.
       - name: Vercel pull (production)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: npx --yes "vercel@${VERCEL_CLI_VERSION}" pull --yes --environment=production
 
+      # The guard script is the only repository code in this job: one file from the commit that defines this
+      # workflow (github.workflow_sha, never inputs.sha), checked out only after the token step has finished, so
+      # it never runs next to VERCEL_TOKEN. Same trust boundary as safe-extract.sh in the deploy job.
+      - name: Check out env guard script only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: tools/deploy/check-pulled-env.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          path: .env-guard
+
       # `vercel pull` writes .vercel/.env.<target>.local, including a live VERCEL_OIDC_TOKEN (valid ~12 hours),
       # and anyone can read this public repository's Actions artifacts. So the env files NEVER leave this job.
       # This guard checks variable NAMES only, not whether a value is secret: it fails the job if a pulled env
-      # file defines anything other than Vercel system variables (VERCEL_*). A failure means build-time env vars
-      # now exist and this design must be revisited (the build job cannot receive them through an artifact).
-      # Values are never printed. The env files are deleted afterwards, pass or fail.
+      # file defines anything other than Vercel system variables (VERCEL_* and the docs-cited exact names in
+      # check-pulled-env.sh), or has a line it cannot parse. A failure means build-time env vars now exist and
+      # this design must be revisited (the build job cannot receive them through an artifact). Names and line
+      # numbers are printed, values never. A failing find (e.g. no .vercel directory) fails the job. The env
+      # files are deleted afterwards, pass or fail; always() so that holds even if the checkout above failed.
       - name: Guard - pulled env files hold only Vercel system variable names, then delete them
+        if: always()
         run: |
           set -euo pipefail
-          list="$RUNNER_TEMP/envfiles.list"
           trap 'find .vercel -type f -name ".env*" -delete || true' EXIT
-          # A failing find (e.g. no .vercel directory) must fail the job, so it is not inside a process substitution.
-          find .vercel -type f -name '.env*' -print0 > "$list" || { echo "::error::find failed while looking for pulled env files"; exit 1; }
-          bad=0
-          while IFS= read -r -d '' f; do
-            n=$(awk '!/^[[:space:]]*(#|$)/ && !/^(export[[:space:]]+)?VERCEL_[A-Za-z0-9_]*=/ {c++} END {print c+0}' "$f")
-            if [[ "$n" -gt 0 ]]; then
-              echo "::error::$f has $n non-comment line(s) whose name is not a Vercel system variable (VERCEL_*); build-time env vars exist, so this env handoff design must be revisited"
-              bad=1
-            fi
-          done < "$list"
-          exit "$bad"
+          .env-guard/tools/deploy/check-pulled-env.sh .vercel
 
       # Only project.json (project/org IDs and the pulled project settings `vercel build` reads) is shipped.
       # Anything else under .vercel (README.txt, env files) is left behind; file names are logged, never contents.
@@ -399,34 +405,39 @@ jobs:
       - name: Prefetch pinned Vercel CLI
         run: npx --yes "vercel@${VERCEL_CLI_VERSION}" --version
 
-      # The only token step. There is no checkout, so no repository code is present.
+      # The only token step. Nothing is checked out yet, so no repository code is present while the token is.
       - name: Vercel pull (preview)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: npx --yes "vercel@${VERCEL_CLI_VERSION}" pull --yes --environment=preview
 
+      # The guard script is the only repository code in this job: one file from the commit that defines this
+      # workflow (github.workflow_sha, never inputs.sha), checked out only after the token step has finished, so
+      # it never runs next to VERCEL_TOKEN. Same trust boundary as safe-extract.sh in the deploy job.
+      - name: Check out env guard script only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: tools/deploy/check-pulled-env.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          path: .env-guard
+
       # `vercel pull` writes .vercel/.env.<target>.local, including a live VERCEL_OIDC_TOKEN (valid ~12 hours),
       # and anyone can read this public repository's Actions artifacts. So the env files NEVER leave this job.
       # This guard checks variable NAMES only, not whether a value is secret: it fails the job if a pulled env
-      # file defines anything other than Vercel system variables (VERCEL_*). A failure means build-time env vars
-      # now exist and this design must be revisited (the build job cannot receive them through an artifact).
-      # Values are never printed. The env files are deleted afterwards, pass or fail.
+      # file defines anything other than Vercel system variables (VERCEL_* and the docs-cited exact names in
+      # check-pulled-env.sh), or has a line it cannot parse. A failure means build-time env vars now exist and
+      # this design must be revisited (the build job cannot receive them through an artifact). Names and line
+      # numbers are printed, values never. A failing find (e.g. no .vercel directory) fails the job. The env
+      # files are deleted afterwards, pass or fail; always() so that holds even if the checkout above failed.
       - name: Guard - pulled env files hold only Vercel system variable names, then delete them
+        if: always()
         run: |
           set -euo pipefail
-          list="$RUNNER_TEMP/envfiles.list"
           trap 'find .vercel -type f -name ".env*" -delete || true' EXIT
-          # A failing find (e.g. no .vercel directory) must fail the job, so it is not inside a process substitution.
-          find .vercel -type f -name '.env*' -print0 > "$list" || { echo "::error::find failed while looking for pulled env files"; exit 1; }
-          bad=0
-          while IFS= read -r -d '' f; do
-            n=$(awk '!/^[[:space:]]*(#|$)/ && !/^(export[[:space:]]+)?VERCEL_[A-Za-z0-9_]*=/ {c++} END {print c+0}' "$f")
-            if [[ "$n" -gt 0 ]]; then
-              echo "::error::$f has $n non-comment line(s) whose name is not a Vercel system variable (VERCEL_*); build-time env vars exist, so this env handoff design must be revisited"
-              bad=1
-            fi
-          done < "$list"
-          exit "$bad"
+          .env-guard/tools/deploy/check-pulled-env.sh .vercel
 
       # Only project.json (project/org IDs and the pulled project settings `vercel build` reads) is shipped.
       # Anything else under .vercel (README.txt, env files) is left behind; file names are logged, never contents.
