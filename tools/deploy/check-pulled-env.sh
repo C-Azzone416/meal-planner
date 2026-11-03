@@ -24,25 +24,29 @@
 # Allowlisted names other than VERCEL_* are printed on a pass too, so the log shows which ones were present.
 #
 # Vercel build settings: `vercel pull` writes whatever GET /v3/env/pull/<project>/<target> returns for the
-# environment (verified in vercel@65.9.0: pullEnvRecords -> `records = pullResult.env`, written as sorted
-# KEY="value" lines after a "# Created by Vercel CLI" comment), and the CLI itself never mentions these names. So Vercel
-# injects them server-side into every pulled file, alongside VERCEL_*. Each also has its value constrained, because
-# unlike VERCEL_* a user could set one of these names to anything. A value outside its set, an empty value, a
-# multi-line value or an unquoted value containing whitespace fails with "line N: NAME has an unexpected value";
-# the value, its length and its prefix are never printed.
-#   NX_DAEMON  exactly `false`. A Vercel employee: "we set it as well to be explicit" (NX daemon is not meant for CI)
-#              https://community.vercel.com/t/why-does-vercel-set-nx-daemon-to-false/8889 (quoted as NX_DAEMON="false")
-#   TURBO_CACHE  Turborepo `--cache` syntax: comma-separated source:action pairs such as remote:rw, at most 32 characters
-#   TURBO_DOWNLOAD_LOCAL_ENABLED, TURBO_REMOTE_ONLY, TURBO_RUN_SUMMARY  one of true, false, 1, 0
-#              All four TURBO_* names: Vercel-injected per pull API; values not documented by Vercel. Meaning and
-#              syntax from https://turborepo.dev/docs/reference/system-environment-variables ; the value sets above are
-#              inferred, so if a live pull fails here the log names the variable and the set must be adjusted.
+# environment (read in vercel@65.9.0: pullEnvRecords -> `records = pullResult.env`, written as sorted
+# KEY="value" lines after a "# Created by Vercel CLI" comment), and the CLI itself never mentions these names. Together
+# with our own failed develop pull, that is the evidence that Vercel sets them: an inference, not a Vercel statement.
+# Each also has its value constrained, because unlike VERCEL_* a user could set one of these names to anything. A
+# value outside its set, an empty value, a multi-line value or an unquoted value containing whitespace fails with
+# "line N: NAME has an unexpected value"; the value, its length and its prefix are never printed.
+#   NX_DAEMON  exactly `false`. A reply in the Vercel Community that appears to be from Vercel staff (Pauline P.
+#              Narvas, 2025-04-21) says "we set it as well to be explicit" (the Nx daemon is not meant for CI):
+#              https://community.vercel.com/t/why-does-vercel-set-nx-daemon-to-false/8889
+#              The quoted value NX_DAEMON="false" came from the poster's `vercel env pull` output.
+#   TURBO_CACHE  Turborepo `--cache` syntax: comma-separated source:action pairs, source local or remote, action rw, r,
+#              w or empty (`local:,remote:r`), at most 32 characters.
+#   TURBO_DOWNLOAD_LOCAL_ENABLED, TURBO_REMOTE_ONLY, TURBO_RUN_SUMMARY  one of true, false, 1, 0. This set is a GUESS.
+#   The Turborepo docs (https://turborepo.dev/docs/reference/system-environment-variables) give the meaning of all four
+#   TURBO_* names, and the syntax only for TURBO_CACHE. Vercel does not document that it sets them or to what.
+#   That it does is inferred from our own pull and the CLI 65.9.0 code path above. If a live pull fails here the log names
+#   the variable and line, and the set must be adjusted with evidence.
 # Bash 3.2 compatible (macOS) so the test runs locally.
 set -euo pipefail
 export LC_ALL=C # byte semantics, so ${#var} counts bytes for the NUL check
 
 allowed_exact=" VERCEL CI NX_DAEMON TURBO_CACHE TURBO_DOWNLOAD_LOCAL_ENABLED TURBO_REMOTE_ONLY TURBO_RUN_SUMMARY "
-turbo_cache_re='^[a-z]+:[a-z]+(,[a-z]+:[a-z]+)*$'
+turbo_cache_re='^(local|remote):(rw|r|w)?(,(local|remote):(rw|r|w)?)*$'
 assign_re='^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$'
 trailing_re='^[[:space:]]*(#.*)?$'
 

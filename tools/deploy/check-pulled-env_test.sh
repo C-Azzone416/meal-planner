@@ -232,7 +232,7 @@ for v in true false 1 0; do
     expect 0 "bool-$v-q${#q}" "$work/bool.env"
   done
 done
-for v in remote:rw local:rw,remote:rw local:r,remote:w local:rw remote:r; do
+for v in remote:rw local:rw,remote:rw local:r,remote:w local:rw remote:r remote: local:,remote:r local:,remote:; do
   printf 'TURBO_CACHE=%s\nNX_DAEMON=false\n' "$v" > "$work/cache.env"
   expect 0 "cache-$v" "$work/cache.env"
 done
@@ -268,10 +268,15 @@ bad_value cache-nopair TURBO_CACHE remote
 bad_value cache-trailing-comma TURBO_CACHE 'remote:rw,'
 bad_value cache-url TURBO_CACHE 'https://example.com/x'
 bad_value cache-upper TURBO_CACHE 'Remote:RW'
+bad_value cache-unknown-source TURBO_CACHE 'cloud:rw'
+bad_value cache-unknown-action TURBO_CACHE 'local:x'
+bad_value cache-no-colon TURBO_CACHE 'local'
+bad_value cache-rwx TURBO_CACHE 'remote:rwx'
+bad_value cache-leading-comma TURBO_CACHE ',remote:rw'
 # TURBO_CACHE is capped at 32 characters: 32 passes, 33 fails.
-printf 'TURBO_CACHE=%s\n' "aaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbb" > "$work/cache-32.env"
+printf 'TURBO_CACHE=%s\n' "local:r,local:rw,local:rw,local:" > "$work/cache-32.env"
 expect 0 cache-32 "$work/cache-32.env"
-bad_value cache-33 TURBO_CACHE "aaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbb"
+bad_value cache-33 TURBO_CACHE "local:rw,local:rw,local:rw,local:"
 
 # A multi-line value never matches, even if its first line looks right.
 fixture multiline-setting/.env << EOF
