@@ -20,13 +20,29 @@
 # https://vercel.com/docs/environment-variables/system-environment-variables
 #   VERCEL  "An indicator to show that system environment variables have been exposed to your project's Deployments."
 #   CI      "An indicator that the code is running in a Continuous Integration environment."
-# Add an exact name only with a Vercel docs citation; no prefix families other than VERCEL_.
+# Add an exact name only with a citation; no prefix families other than VERCEL_.
 # Allowlisted names other than VERCEL_* are printed on a pass too, so the log shows which ones were present.
+#
+# Vercel build settings: `vercel pull` writes whatever GET /v3/env/pull/<project>/<target> returns for the
+# environment (verified in vercel@65.9.0: pullEnvRecords -> `records = pullResult.env`, written as sorted
+# KEY="value" lines after a "# Created by Vercel CLI" comment), and the CLI itself never mentions these names. So Vercel
+# injects them server-side into every pulled file, alongside VERCEL_*. Each also has its value constrained, because
+# unlike VERCEL_* a user could set one of these names to anything. A value outside its set, an empty value, a
+# multi-line value or an unquoted value containing whitespace fails with "line N: NAME has an unexpected value";
+# the value, its length and its prefix are never printed.
+#   NX_DAEMON  exactly `false`. A Vercel employee: "we set it as well to be explicit" (NX daemon is not meant for CI)
+#              https://community.vercel.com/t/why-does-vercel-set-nx-daemon-to-false/8889 (quoted as NX_DAEMON="false")
+#   TURBO_CACHE  Turborepo `--cache` syntax: comma-separated source:action pairs such as remote:rw, at most 32 characters
+#   TURBO_DOWNLOAD_LOCAL_ENABLED, TURBO_REMOTE_ONLY, TURBO_RUN_SUMMARY  one of true, false, 1, 0
+#              All four TURBO_* names: Vercel-injected per pull API; values not documented by Vercel. Meaning and
+#              syntax from https://turborepo.dev/docs/reference/system-environment-variables ; the value sets above are
+#              inferred, so if a live pull fails here the log names the variable and the set must be adjusted.
 # Bash 3.2 compatible (macOS) so the test runs locally.
 set -euo pipefail
 export LC_ALL=C # byte semantics, so ${#var} counts bytes for the NUL check
 
-allowed_exact=" VERCEL CI "
+allowed_exact=" VERCEL CI NX_DAEMON TURBO_CACHE TURBO_DOWNLOAD_LOCAL_ENABLED TURBO_REMOTE_ONLY TURBO_RUN_SUMMARY "
+turbo_cache_re='^[a-z]+:[a-z]+(,[a-z]+:[a-z]+)*$'
 assign_re='^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$'
 trailing_re='^[[:space:]]*(#.*)?$'
 
@@ -50,12 +66,26 @@ find_close() {
 # check_file <file>: prints names-only findings; returns 1 if any name is unexpected or any line unparseable.
 check_file() {
   local f=$1 n=0 line value rest q="" name="" start=0 bad=0 count=0 extra=""
-  record() { # record <name> <line>: the assignment of <name> starting at <line> parsed completely
+  value_ok() { # value_ok <name> <value>: <value> is in the set allowed for <name>; "" never is
+    case $1 in
+      NX_DAEMON) [[ $2 == false ]] ;;
+      TURBO_CACHE) [[ ${#2} -le 32 && $2 =~ $turbo_cache_re ]] ;;
+      TURBO_DOWNLOAD_LOCAL_ENABLED | TURBO_REMOTE_ONLY | TURBO_RUN_SUMMARY) [[ $2 == true || $2 == false || $2 == 1 || $2 == 0 ]] ;;
+      *) return 0 ;;
+    esac
+  }
+  # record <name> <line> <value>: the assignment of <name> starting at <line> parsed completely. <value> is the text
+  # of a single-line value without its quotes; a multi-line value is passed as "".
+  record() {
     if ! [[ $1 =~ ^[A-Z][A-Z0-9_]*$ ]]; then unparseable "$2"; return 0; fi # never print a non-name
     count=$((count + 1))
     if [[ $1 =~ ^VERCEL_[A-Z0-9_]+$ ]]; then
       :
     elif [[ $allowed_exact == *" $1 "* ]]; then
+      if ! value_ok "$1" "$3"; then
+        echo "::error::check-pulled-env: $f line $2: $1 has an unexpected value"
+        bad=1
+      fi
       [[ ", $extra, " == *", $1, "* ]] || extra="${extra:+$extra, }$1"
     else
       echo "::error::check-pulled-env: $f line $2: unexpected variable name $1"
@@ -89,7 +119,7 @@ check_file() {
       ((close >= 0)) || continue
       rest=${line:close+1}
       q=""
-      if [[ $rest =~ $trailing_re ]]; then record "$name" "$start"; else unparseable "$start"; fi
+      if [[ $rest =~ $trailing_re ]]; then record "$name" "$start" ""; else unparseable "$start"; fi
       continue
     fi
     [[ $line =~ $trailing_re ]] && continue # blank or comment
@@ -107,11 +137,11 @@ check_file() {
         if ((close >= 0)); then
           rest=${value:close+2}
           q=""
-          if [[ $rest =~ $trailing_re ]]; then record "$name" "$n"; else unparseable "$n"; fi
+          if [[ $rest =~ $trailing_re ]]; then record "$name" "$n" "${value:1:close}"; else unparseable "$n"; fi
         fi
         ;;
       =*) unparseable "$n" ;; # base64 padding, not a value Vercel writes
-      *) record "$name" "$n" ;;
+      *) record "$name" "$n" "${value%"${value##*[![:space:]]}"}" ;; # unquoted: trailing whitespace is not part of it
     esac
   done
   [[ -z $q ]] || unparseable "$start" # unterminated quoted value

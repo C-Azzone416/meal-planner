@@ -208,6 +208,113 @@ else
 fi
 chmod 600 "$work/unreadable.env" "$work/unreadable-dir/.vercel/.env.preview.local"
 
+# Vercel build settings (NX_DAEMON, TURBO_*): exact names with constrained values.
+# The exact shape `vercel pull` writes for preview: comment, the five sorted, then VERCEL_*.
+fixture build-settings/.env.preview.local << EOF
+# Created by Vercel CLI
+NX_DAEMON="false"
+TURBO_CACHE="remote:rw"
+TURBO_DOWNLOAD_LOCAL_ENABLED="1"
+TURBO_REMOTE_ONLY="true"
+TURBO_RUN_SUMMARY="false"
+VERCEL="1"
+VERCEL_ENV="preview"
+VERCEL_OIDC_TOKEN="eyJ.$secret.sig"
+EOF
+expect 0 build-settings "$work/build-settings/.env.preview.local"
+check "build-settings: 8 variables" has build-settings "8 variable(s)"
+check "build-settings: names the allowed ones" has build-settings "present (non-VERCEL_): NX_DAEMON, TURBO_CACHE, TURBO_DOWNLOAD_LOCAL_ENABLED, TURBO_REMOTE_ONLY, TURBO_RUN_SUMMARY, VERCEL"
+
+# Every allowed value, unquoted, double-quoted and single-quoted.
+for v in true false 1 0; do
+  for q in '' '"' "'"; do
+    printf 'TURBO_DOWNLOAD_LOCAL_ENABLED=%s\nTURBO_REMOTE_ONLY=%s\nTURBO_RUN_SUMMARY=%s\n' "$q$v$q" "$q$v$q" "$q$v$q" > "$work/bool.env"
+    expect 0 "bool-$v-q${#q}" "$work/bool.env"
+  done
+done
+for v in remote:rw local:rw,remote:rw local:r,remote:w local:rw remote:r; do
+  printf 'TURBO_CACHE=%s\nNX_DAEMON=false\n' "$v" > "$work/cache.env"
+  expect 0 "cache-$v" "$work/cache.env"
+done
+
+# Each name with a wrong value fails by name and line, and nothing of the value is printed.
+for n in NX_DAEMON TURBO_CACHE TURBO_DOWNLOAD_LOCAL_ENABLED TURBO_REMOTE_ONLY TURBO_RUN_SUMMARY; do
+  printf 'VERCEL_ENV=preview\n%s="%s"\n' "$n" "$secret" > "$work/wrong-$n.env"
+  expect 1 "wrong-$n" "$work/wrong-$n.env"
+  check "wrong-$n: names it at line 2" has "wrong-$n" "line 2: $n has an unexpected value"
+  check "wrong-$n: no value prefix" lacks "wrong-$n" "sk_live"
+  check "wrong-$n: not reported as an unexpected name" lacks "wrong-$n" "unexpected variable name"
+done
+
+# Near misses on each constraint, quoted or not, all fail closed.
+bad_value() { # bad_value <case> <NAME> <raw text after =>: the line NAME=<raw> must fail with the value message
+  printf 'VERCEL_ENV=preview\n%s=%s\n' "$2" "$3" > "$work/$1.env"
+  expect 1 "$1" "$work/$1.env"
+  check "$1: unexpected value at line 2" has "$1" "line 2: $2 has an unexpected value"
+}
+bad_value nx-true NX_DAEMON true
+bad_value nx-upper NX_DAEMON '"False"'
+bad_value nx-empty NX_DAEMON ''
+bad_value nx-empty-quoted NX_DAEMON '""'
+bad_value nx-space NX_DAEMON '" false"'
+bad_value nx-comment NX_DAEMON 'false # note'
+bad_value bool-yes TURBO_REMOTE_ONLY yes
+bad_value bool-2 TURBO_RUN_SUMMARY 2
+bad_value bool-upper TURBO_DOWNLOAD_LOCAL_ENABLED TRUE
+bad_value bool-empty TURBO_REMOTE_ONLY ''
+bad_value bool-list TURBO_RUN_SUMMARY 'true,false'
+bad_value cache-empty TURBO_CACHE '""'
+bad_value cache-nopair TURBO_CACHE remote
+bad_value cache-trailing-comma TURBO_CACHE 'remote:rw,'
+bad_value cache-url TURBO_CACHE 'https://example.com/x'
+bad_value cache-upper TURBO_CACHE 'Remote:RW'
+# TURBO_CACHE is capped at 32 characters: 32 passes, 33 fails.
+printf 'TURBO_CACHE=%s\n' "aaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbb" > "$work/cache-32.env"
+expect 0 cache-32 "$work/cache-32.env"
+bad_value cache-33 TURBO_CACHE "aaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbb"
+
+# A multi-line value never matches, even if its first line looks right.
+fixture multiline-setting/.env << EOF
+NX_DAEMON="false
+"
+EOF
+expect 1 multiline-setting "$work/multiline-setting/.env"
+check "multiline-setting: unexpected value at its start line" has multiline-setting "line 1: NX_DAEMON has an unexpected value"
+
+# An app var mixed in with valid build settings still fails, by name.
+fixture build-settings-app/.env.preview.local << EOF
+# Created by Vercel CLI
+NX_DAEMON="false"
+TURBO_CACHE="remote:rw"
+DATABASE_URL="postgres://u:$secret@db/x"
+TURBO_RUN_SUMMARY="false"
+VERCEL_ENV="preview"
+EOF
+expect 1 build-settings-app "$work/build-settings-app/.env.preview.local"
+check "build-settings-app: names DATABASE_URL" has build-settings-app "line 4: unexpected variable name DATABASE_URL"
+check "build-settings-app: valid settings not flagged" lacks build-settings-app "has an unexpected value"
+
+# Lookalikes of the new names are not allowlisted: no prefix families.
+fixture build-settings-lookalike/.env << EOF
+NX_DAEMON_X="false"
+TURBO_TOKEN="$secret"
+TURBO_TEAM="$secret"
+NX_CLOUD_ACCESS_TOKEN="$secret"
+TURBO_CACHE_DIR="x"
+EOF
+expect 1 build-settings-lookalike "$work/build-settings-lookalike/.env"
+for n in NX_DAEMON_X TURBO_TOKEN TURBO_TEAM NX_CLOUD_ACCESS_TOKEN TURBO_CACHE_DIR; do
+  check "build-settings-lookalike: $n flagged" has build-settings-lookalike "unexpected variable name $n"
+done
+
+# The fail-closed paths still apply next to the new names: lone CR and NUL fail, CRLF passes.
+printf 'NX_DAEMON=false\rDATABASE_URL=%s\n' "$secret" > "$work/setting-lone-cr.env"
+expect 1 setting-lone-cr "$work/setting-lone-cr.env"
+printf 'NX_DAEMON=false\0\n' > "$work/setting-nul.env"
+expect 1 setting-nul "$work/setting-nul.env"
+printf 'NX_DAEMON="false"\r\nTURBO_REMOTE_ONLY=true\r\n' > "$work/setting-crlf.env"
+expect 0 setting-crlf "$work/setting-crlf.env"
+
 # Usage and I/O errors exit 2.
 expect 2 missing "$work/does-not-exist"
 expect 2 no-args
