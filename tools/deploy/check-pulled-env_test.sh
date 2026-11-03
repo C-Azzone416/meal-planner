@@ -156,6 +156,58 @@ expect 1 dir-bad "$work/dir/.vercel"
 check "dir-bad: names DATABASE_URL" has dir-bad "unexpected variable name DATABASE_URL"
 check "dir-bad: still checks the good file" has dir-bad ".env.preview.local: 1 variable(s)"
 
+# F1: a stray base64 or non-uppercase line is unparseable; its text is never printed as a "name".
+b64=QUJDREVGR0hJSktMTU5PUA
+fixture b64/.env << EOF
+VERCEL_ENV="preview"
+$secret==
+$b64==
+lower_case=1
+Mixed_Case="x"
+EOF
+expect 1 b64 "$work/b64/.env"
+for l in 2 3 4 5; do check "b64: line $l unparseable" has b64 "line $l: unparseable"; done
+check "b64: uppercase base64 not printed" lacks b64 "$b64"
+check "b64: no name printed" lacks b64 "unexpected variable name"
+
+# F2: a lone CR is a line break to dotenv, so it must not hide a second assignment.
+printf 'VERCEL_ENV=preview\rDATABASE_URL=%s\n' "$secret" > "$work/lone-cr.env"
+expect 1 lone-cr "$work/lone-cr.env"
+check "lone-cr: line 1 unparseable" has lone-cr "line 1: unparseable"
+printf 'VERCEL_A="x\rDATABASE_URL=%s"\r\n' "$secret" > "$work/lone-cr-quoted.env"
+expect 1 lone-cr-quoted "$work/lone-cr-quoted.env"
+
+# NUL bytes fail closed.
+printf 'VERCEL_ENV=preview\0\nVERCEL_URL=%s\n' "$secret" > "$work/nul.env"
+expect 1 nul "$work/nul.env"
+check "nul: reported" has nul "contains NUL bytes"
+
+# F3: a .env* entry that is a symlink or not a regular file fails closed, as does a symlinked argument.
+mkdir -p "$work/links/.vercel" "$work/links/.vercel/.env.d"
+printf 'DATABASE_URL=%s\n' "$secret" > "$work/links/target"
+ln -s ../target "$work/links/.vercel/.env.preview.local"
+expect 1 symlink-entry "$work/links/.vercel"
+check "symlink-entry: reported" has symlink-entry ".vercel/.env.preview.local is a symlink or not a regular file"
+check "symlink-entry: .env.d directory reported" has symlink-entry ".vercel/.env.d is a symlink or not a regular file"
+expect 1 symlink-arg "$work/links/.vercel/.env.preview.local"
+ln -s .vercel "$work/links/vercel-link"
+expect 1 symlink-dir-arg "$work/links/vercel-link"
+
+# F4: a file that cannot be opened is an I/O error (exit 2), never an empty pass. Skipped when running as
+# root, where chmod 000 does not stop reads.
+printf 'DATABASE_URL=%s\n' "$secret" > "$work/unreadable.env"
+mkdir -p "$work/unreadable-dir/.vercel"
+printf 'DATABASE_URL=%s\n' "$secret" > "$work/unreadable-dir/.vercel/.env.preview.local"
+chmod 000 "$work/unreadable.env" "$work/unreadable-dir/.vercel/.env.preview.local"
+if [[ -r $work/unreadable.env ]]; then
+  echo "skip unreadable (running as root)"
+else
+  expect 2 unreadable "$work/unreadable.env"
+  check "unreadable: no pass line" lacks unreadable "variable(s)"
+  expect 2 unreadable-dir "$work/unreadable-dir/.vercel"
+fi
+chmod 600 "$work/unreadable.env" "$work/unreadable-dir/.vercel/.env.preview.local"
+
 # Usage and I/O errors exit 2.
 expect 2 missing "$work/does-not-exist"
 expect 2 no-args
