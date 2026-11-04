@@ -3,8 +3,8 @@
 //
 // Layout under the data root: .lock, and drafts/<id>.json. Writes go through a same-directory
 // temp file, fsync and atomic rename; the revision check and rename run under an exclusive lock
-// (flock where available). Reads take no lock. Nothing here logs, and error messages never carry
-// paths or recipe content.
+// (flock where available). Reads take no lock. The store logs only fixed text (no content or
+// paths), and error messages never carry paths or recipe content.
 package localstore
 
 import (
@@ -52,6 +52,8 @@ type hooks struct {
 	beforeLock func()
 	// syncDir replaces the directory sync after the commit rename.
 	syncDir func(path string) error
+	// afterReadDir runs in List after the directory is read and before its entries are read.
+	afterReadDir func()
 }
 
 var _ draft.Store = (*Store)(nil)
@@ -289,7 +291,7 @@ func (s *Store) writeTemp(data []byte) (string, error) {
 	path := filepath.Join(s.draftsDir(), tempPrefix+hex.EncodeToString(b[:]))
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return "", ioError(draft.CodeIOError, "cannot write to the drafts directory", err)
+		return "", ioError(draft.CodeIOError, "cannot write to the drafts directory; check that it is writable", err)
 	}
 	if _, err := f.Write(data); err != nil {
 		f.Close()
@@ -306,17 +308,6 @@ func (s *Store) writeTemp(data []byte) (string, error) {
 		return "", ioError(draft.CodeIOError, "cannot write the draft", err)
 	}
 	return path, nil
-}
-
-// syncDir flushes a directory entry change. Platforms that cannot sync a directory return an
-// error, which callers treat as non-fatal.
-func syncDir(path string) error {
-	d, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
 }
 
 // countFiles counts entries named like draft files. Called under the lock.
@@ -370,6 +361,9 @@ func (s *Store) List(ctx context.Context) (draft.ListResult, error) {
 	if err != nil {
 		return res, ioError(draft.CodeIOError, "cannot read the drafts directory", err)
 	}
+	if h := s.hooks.afterReadDir; h != nil {
+		h()
+	}
 	for _, e := range entries { // sorted by name, so the result is deterministic
 		m := fileNameRe.FindStringSubmatch(e.Name())
 		if m == nil {
@@ -382,6 +376,9 @@ func (s *Store) List(ctx context.Context) (draft.ListResult, error) {
 		d, err := readDraftFile(s.filePath(id), id)
 		if err != nil {
 			de := asDraftError(err)
+			if de.Category == draft.CategoryNotFound {
+				continue // the file vanished between ReadDir and the read: not an unreadable entry
+			}
 			res.Skipped = append(res.Skipped, draft.SkippedEntry{ID: id, Category: de.Category, Message: de.Message})
 			continue
 		}
