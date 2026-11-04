@@ -5,7 +5,7 @@ package draft
 const (
 	MaxDraftBytes   = 131072 // compact JSON encoding of Content
 	MaxInputBytes   = 262144 // raw bytes a CLI reader takes from a file or stdin
-	MaxStoredDrafts = 1000   // readable draft files in a data root
+	MaxStoredDrafts = 1000   // every draft-named file in a data root, readable or not
 
 	MaxTitleRunes = 200
 	MaxYieldRunes = 100

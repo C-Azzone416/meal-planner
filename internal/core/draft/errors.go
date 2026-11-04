@@ -22,7 +22,6 @@ const (
 	CodeInvalidLimit     = "invalid_limit"
 	CodeInvalidOffset    = "invalid_offset"
 	CodeInvalidDataDir   = "invalid_data_dir"
-	CodeExactlyOneOf     = "exactly_one_of"
 
 	CodeDraftNotFound = "draft_not_found"
 
