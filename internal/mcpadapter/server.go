@@ -5,10 +5,8 @@
 package mcpadapter
 
 import (
-	"context"
 	"io"
 	"log/slog"
-	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -53,29 +51,9 @@ func WithDataDirSource(source string) Option { return func(c *config) { c.source
 // logs the tool name, outcome, duration and draft ID only, never payloads or paths.
 func WithLogger(l *slog.Logger) Option { return func(c *config) { c.logger = l } }
 
-// Server is an MCP server for the draft tools. It embeds the SDK server (use Run) and tracks
-// in-flight tool calls so a caller can wait for them to finish before exiting.
-type Server struct {
-	*mcp.Server
-	inflight *sync.WaitGroup
-}
-
-// Drain waits until every tool call that has started has finished, or ctx is done. It returns
-// ctx.Err() on timeout.
-func (s *Server) Drain(ctx context.Context) error {
-	done := make(chan struct{})
-	go func() { s.inflight.Wait(); close(done) }()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
 // New returns an MCP server exposing exactly the six draft tools over svc. Only the tools
 // capability is advertised: no resources, prompts, logging, sampling or elicitation.
-func New(svc *draft.Service, opts ...Option) *Server {
+func New(svc *draft.Service, opts ...Option) *mcp.Server {
 	cfg := &config{source: "unknown", logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	for _, o := range opts {
 		o(cfg)
@@ -84,7 +62,7 @@ func New(svc *draft.Service, opts ...Option) *Server {
 		&mcp.Implementation{Name: ServerName, Version: version.Version},
 		&mcp.ServerOptions{Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}}},
 	)
-	h := &handlers{svc: svc, cfg: cfg, wg: &sync.WaitGroup{}}
+	h := &handlers{svc: svc, cfg: cfg}
 	h.register(srv)
-	return &Server{Server: srv, inflight: h.wg}
+	return srv
 }

@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -23,7 +23,6 @@ type env struct {
 	cs    *mcp.ClientSession
 	store *memstore.Store
 	logs  *bytes.Buffer
-	srv   *mcpadapter.Server
 }
 
 func setupStore(t *testing.T, store draft.Store, opts ...mcpadapter.Option) *env {
@@ -46,7 +45,7 @@ func setupStore(t *testing.T, store draft.Store, opts ...mcpadapter.Option) *env
 	}
 	t.Cleanup(func() { _ = cs.Close() })
 	ms, _ := store.(*memstore.Store)
-	return &env{t: t, cs: cs, store: ms, logs: logs, srv: srv}
+	return &env{t: t, cs: cs, store: ms, logs: logs}
 }
 
 func setup(t *testing.T, opts ...mcpadapter.Option) *env {
@@ -472,14 +471,29 @@ func TestErrorsAreMappedFromAnyStoreError(t *testing.T) {
 type plainErrStore struct{ *memstore.Store }
 
 func (plainErrStore) Get(context.Context, string) (draft.Draft, error) {
-	return draft.Draft{}, context.DeadlineExceeded
+	return draft.Draft{}, errors.New("open /secret/path: boom")
 }
 
-func TestDrainWaitsForNothingWhenIdle(t *testing.T) {
+func TestDuplicateRootKeyIsAToolError(t *testing.T) {
 	e := setup(t)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := e.srv.Drain(ctx); err != nil {
-		t.Fatal(err)
+	id := e.create("Keep me")
+	for _, raw := range []string{
+		`{"id":"` + id + `","id":"drf_00000000000000000000"}`,
+		`{"draft":{"title":"A"},"draft":{"title":"B"}}`,
+	} {
+		tool := "draft_get"
+		if strings.Contains(raw, `"draft"`) {
+			tool = "draft_create"
+		}
+		res, err := e.call(tool, json.RawMessage(raw))
+		if err != nil || !res.IsError {
+			t.Fatalf("%s: err=%v res=%s", raw, err, text(res))
+		}
+		if er := structured(t, res)["error"].(map[string]any); er["category"] != "invalid_argument" || er["code"] != "duplicate_key" {
+			t.Fatalf("%s: error = %v", raw, er)
+		}
+	}
+	if e.listTotal() != 1 {
+		t.Fatal("a duplicate-key call stored a draft")
 	}
 }

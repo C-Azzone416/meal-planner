@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ import (
 )
 
 // binPath is the built mealplanner-mcp binary, shared by the subprocess tests.
-var binPath string
+var binPath, stallBinPath string
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "mealplanner-mcp-bin")
@@ -32,6 +33,14 @@ func TestMain(m *testing.M) {
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "build failed: %v\n%s", err, out)
+		os.RemoveAll(dir)
+		os.Exit(1)
+	}
+	stallBinPath = filepath.Join(dir, "mealplanner-mcp-stall")
+	build = exec.Command("go", "build", "-tags", "teststall", "-o", stallBinPath, ".")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := build.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "stall build failed: %v\n%s", err, out)
 		os.RemoveAll(dir)
 		os.Exit(1)
 	}
@@ -55,9 +64,13 @@ type proc struct {
 	modern string // protocol version >= 2026-07-28: stateless requests carry a _meta triple
 }
 
-func start(t *testing.T, dataDir string) *proc {
+func start(t *testing.T, dataDir string) *proc { return startBin(t, binPath, dataDir) }
+
+// startBin starts bin with extra environment entries (KEY=VALUE).
+func startBin(t *testing.T, bin, dataDir string, env ...string) *proc {
 	t.Helper()
-	cmd := exec.Command(binPath, "--data-dir", dataDir)
+	cmd := exec.Command(bin, "--data-dir", dataDir)
+	cmd.Env = append(os.Environ(), env...)
 	p := &proc{t: t, cmd: cmd, stderr: &bytes.Buffer{}, wake: make(chan struct{}, 1024)}
 	cmd.Stderr = p.stderr
 	in, err := cmd.StdinPipe()
@@ -458,5 +471,162 @@ func TestSubprocessWithSDKClient(t *testing.T) {
 				t.Fatalf("create: %v %+v", err, res)
 			}
 		})
+	}
+}
+
+func (p *proc) frameLine(id int, method string, params any) string {
+	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+	return string(b)
+}
+
+// waitExit waits for the process to exit by itself and returns its exit code.
+func (p *proc) waitExit(d time.Duration) int {
+	p.t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- p.cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			return 0
+		}
+		if ee, ok := err.(*exec.ExitError); ok {
+			return ee.ExitCode()
+		}
+		p.t.Fatal(err)
+	case <-time.After(d):
+		p.t.Fatalf("process did not exit within %v; stderr:\n%s", d, p.stderr.String())
+	}
+	return -1
+}
+
+func createLine(p *proc, id int, title string) string {
+	return p.frameLine(id, "tools/call", map[string]any{"name": "draft_create", "arguments": map[string]any{"draft": map[string]any{"title": title}}})
+}
+
+func (p *proc) snapshot() []map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]map[string]any(nil), p.frames...)
+}
+
+func (p *proc) hasResponse(id int) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, f := range p.frames {
+		if f["id"] == float64(id) && f["method"] == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func countDrafts(t *testing.T, dir string) int {
+	q := start(t, dir)
+	q.initialize(mcp.SupportedProtocolVersions()[1])
+	_, page := q.tool("draft_list", map[string]any{})
+	if code := q.shutdown(); code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	return int(page["total"].(float64))
+}
+
+// printf 'initialize\ninitialized\ncreate\n' | mealplanner-mcp: both requests are answered and the
+// draft is stored, even though stdin hits EOF immediately.
+func TestSubprocessPipedRequestsAreAnsweredBeforeEOF(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	p := start(t, dir)
+	legacy := mcp.SupportedProtocolVersions()[1]
+	p.sendRaw(p.frameLine(1, "initialize", map[string]any{"protocolVersion": legacy, "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "pipe", "version": "0"}}))
+	p.sendRaw(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	p.sendRaw(createLine(p, 2, "Piped Draft"))
+	_ = p.stdin.Close()
+	if code := p.waitExit(10 * time.Second); code != 0 {
+		t.Fatalf("exit code = %d, stderr:\n%s", code, p.stderr.String())
+	}
+	if !p.hasResponse(1) || !p.hasResponse(2) {
+		t.Fatalf("missing responses; frames: %v", p.snapshot())
+	}
+	p.assertStdoutClean()
+	if n := countDrafts(t, dir); n != 1 {
+		t.Fatalf("stored drafts = %d, want 1", n)
+	}
+}
+
+// A request still running when stdin reaches EOF completes and is answered.
+func TestSubprocessInFlightRequestCompletesAtEOF(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	p := startBin(t, stallBinPath, dir, "MEALPLANNER_TEST_STALL_MS=800")
+	p.initialize(mcp.SupportedProtocolVersions()[1])
+	p.sendRaw(createLine(p, 50, "Slow Draft"))
+	_ = p.stdin.Close()
+	if code := p.waitExit(10 * time.Second); code != 0 {
+		t.Fatalf("exit code = %d, stderr:\n%s", code, p.stderr.String())
+	}
+	if !p.hasResponse(50) {
+		t.Fatalf("the in-flight request was not answered; frames: %v", p.snapshot())
+	}
+	p.assertStdoutClean()
+	if n := countDrafts(t, dir); n != 1 {
+		t.Fatalf("stored drafts = %d, want 1", n)
+	}
+}
+
+func TestSubprocessSIGTERMWhileIdleExitsZero(t *testing.T) {
+	p := start(t, filepath.Join(t.TempDir(), "data"))
+	p.initialize(mcp.SupportedProtocolVersions()[1])
+	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if code := p.waitExit(5 * time.Second); code != 0 {
+		t.Fatalf("exit code = %d, stderr:\n%s", code, p.stderr.String())
+	}
+	p.assertStdoutClean()
+}
+
+func TestSubprocessSIGTERMWhileBusyAnswersThenExitsZero(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	p := startBin(t, stallBinPath, dir, "MEALPLANNER_TEST_STALL_MS=800")
+	p.initialize(mcp.SupportedProtocolVersions()[1])
+	p.sendRaw(createLine(p, 60, "Busy Draft"))
+	time.Sleep(200 * time.Millisecond) // the call is now inside the stalled Create
+	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if code := p.waitExit(10 * time.Second); code != 0 {
+		t.Fatalf("exit code = %d, stderr:\n%s", code, p.stderr.String())
+	}
+	if !p.hasResponse(60) {
+		t.Fatal("the busy request was not answered")
+	}
+	p.assertStdoutClean()
+	if n := countDrafts(t, dir); n != 1 {
+		t.Fatalf("stored drafts = %d, want 1", n)
+	}
+}
+
+// If a request cannot finish within the grace period the server gives up on it and exits 1.
+func TestSubprocessGraceExpiryExitsOne(t *testing.T) {
+	p := startBin(t, stallBinPath, filepath.Join(t.TempDir(), "data"),
+		"MEALPLANNER_TEST_STALL_MS=4000", "MEALPLANNER_TEST_GRACE_MS=300")
+	p.initialize(mcp.SupportedProtocolVersions()[1])
+	p.sendRaw(createLine(p, 70, "Stuck Draft"))
+	_ = p.stdin.Close()
+	start := time.Now()
+	if code := p.waitExit(3500 * time.Millisecond); code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr:\n%s", code, p.stderr.String())
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatalf("took %v, want about the grace period", time.Since(start))
+	}
+	if !strings.Contains(p.stderr.String(), "grace period") {
+		t.Fatalf("stderr lacks the grace message:\n%s", p.stderr.String())
+	}
+	p.assertStdoutClean()
+}
+
+func TestSubprocessHelpExitsZero(t *testing.T) {
+	out, err := exec.Command(binPath, "--help").Output()
+	if err != nil || !strings.Contains(string(out), "usage: mealplanner-mcp") {
+		t.Fatalf("out=%q err=%v", out, err)
 	}
 }

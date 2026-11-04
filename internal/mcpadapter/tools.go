@@ -1,10 +1,10 @@
 package mcpadapter
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
-	"sync"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -16,7 +16,6 @@ import (
 type handlers struct {
 	svc *draft.Service
 	cfg *config
-	wg  *sync.WaitGroup
 }
 
 func slogAttrs(kv []any) []slog.Attr {
@@ -101,6 +100,10 @@ func addTool[A any](h *handlers, s *mcp.Server, tool *mcp.Tool, fn func(ctx cont
 			args := req.Params.Arguments
 			if len(args) == 0 || string(args) == "null" {
 				args = json.RawMessage("{}")
+			}
+			if duplicateRootKey(args) {
+				return outcome{err: &draft.Error{Category: draft.CategoryInvalidArgument, Code: "duplicate_key",
+					Message: "the arguments contain a duplicate key; send each property once"}}
 			}
 			var instance any
 			if err := json.Unmarshal(args, &instance); err != nil || resolved.Validate(instance) != nil {
@@ -204,16 +207,7 @@ func (h *handlers) update(ctx context.Context, in updateArgs) outcome {
 }
 
 func (h *handlers) validate(_ context.Context, in createArgs) outcome {
-	c, issues := draft.DecodeContent(in.Draft)
-	if len(issues) > 0 {
-		return outcome{value: map[string]any{"validation": draft.ValidationResult{
-			Scope:    draft.ValidationScope,
-			Errors:   issues,
-			Warnings: []draft.Issue{},
-			Notice:   draft.ValidationNotice,
-		}}}
-	}
-	return outcome{value: map[string]any{"validation": h.svc.Validate(c)}}
+	return outcome{value: map[string]any{"validation": draft.ValidateRaw(in.Draft)}}
 }
 
 type storeStatus struct {
@@ -259,4 +253,31 @@ func (h *handlers) status(ctx context.Context, _ statusArgs) outcome {
 			},
 		}}
 	}
+}
+
+// duplicateRootKey reports whether the top-level object in args repeats a key. encoding/json keeps
+// the last value silently, so this reads the keys as tokens. Nested duplicates inside `draft` are
+// found later by DecodeContent. Invalid JSON returns false; schema validation rejects it.
+func duplicateRootKey(args []byte) bool {
+	dec := json.NewDecoder(bytes.NewReader(args))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return false
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		k, err := dec.Token()
+		key, ok := k.(string)
+		if err != nil || !ok {
+			return false
+		}
+		if seen[key] {
+			return true
+		}
+		seen[key] = true
+		var skip json.RawMessage
+		if dec.Decode(&skip) != nil {
+			return false
+		}
+	}
+	return false
 }

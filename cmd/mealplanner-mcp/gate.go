@@ -1,0 +1,225 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"sync"
+	"time"
+)
+
+// maxTrackedLine bounds the partial-line buffer used to spot request frames. A longer line is
+// still passed through to the SDK untouched; it is just not tracked.
+const maxTrackedLine = 4 << 20
+
+// frameGate sits between stdin/stdout and the SDK transport. The SDK treats stdin EOF as the end
+// of the session and may drop requests that were read but not yet answered (for example when a
+// client pipes `initialize`, `initialized` and a tool call and closes stdin). The gate withholds
+// the EOF until every request frame read so far has had a response written, bounded by a grace
+// period, so those requests are answered.
+//
+// A request frame is one JSON object with a string "method" and a non-null "id". Notifications,
+// batches and lines that are not JSON objects are not tracked: nothing waits on them. A
+// notifications/cancelled for a tracked request stops the wait for it. Frames are counted when the
+// bytes are read, before the SDK sees them, so there is no window in which a frame has been read
+// but is not counted.
+type frameGate struct {
+	grace time.Duration
+
+	mu       sync.Mutex
+	cond     *sync.Cond
+	queue    bytes.Buffer        // bytes read from stdin, not yet handed to the SDK
+	lineBuf  []byte              // partial line seen by the reader pump
+	skipLine bool                // the current line exceeded maxTrackedLine
+	pending  map[string]struct{} // request ids read and not yet answered
+	inEOF    bool                // underlying reader ended
+	stopped  bool                // Stop was called (signal)
+	graceOn  bool                // the grace period started
+	timedOut bool                // the grace period elapsed
+	expired  bool                // input was released with requests still unanswered
+	expiredC chan struct{}       // closed when expired becomes true
+}
+
+func newFrameGate(grace time.Duration) *frameGate {
+	g := &frameGate{grace: grace, pending: map[string]struct{}{}, expiredC: make(chan struct{})}
+	g.cond = sync.NewCond(&g.mu)
+	return g
+}
+
+// start reads src in the background. Call once.
+func (g *frameGate) start(src io.Reader) {
+	go func() {
+		buf := make([]byte, 32<<10)
+		for {
+			n, err := src.Read(buf)
+			if n > 0 {
+				g.mu.Lock()
+				if g.stopped {
+					g.mu.Unlock()
+					return // after Stop nothing new is accepted
+				}
+				g.track(buf[:n])
+				g.queue.Write(buf[:n])
+				g.cond.Broadcast()
+				g.mu.Unlock()
+			}
+			if err != nil {
+				g.mu.Lock()
+				g.inEOF = true
+				g.cond.Broadcast()
+				g.mu.Unlock()
+				return
+			}
+		}
+	}()
+}
+
+// track scans b for complete lines and records request ids. g.mu must be held.
+func (g *frameGate) track(b []byte) {
+	for len(b) > 0 {
+		i := bytes.IndexByte(b, '\n')
+		if i < 0 {
+			if !g.skipLine {
+				if len(g.lineBuf)+len(b) > maxTrackedLine {
+					g.skipLine, g.lineBuf = true, nil
+				} else {
+					g.lineBuf = append(g.lineBuf, b...)
+				}
+			}
+			return
+		}
+		if !g.skipLine {
+			g.line(append(g.lineBuf, b[:i]...))
+		}
+		g.lineBuf, g.skipLine = g.lineBuf[:0], false
+		b = b[i+1:]
+	}
+}
+
+type frame struct {
+	Method *string         `json:"method"`
+	ID     json.RawMessage `json:"id"`
+	Params struct {
+		RequestID json.RawMessage `json:"requestId"`
+	} `json:"params"`
+}
+
+func idKey(raw json.RawMessage) string {
+	var out bytes.Buffer
+	if json.Compact(&out, raw) != nil {
+		return string(raw)
+	}
+	return out.String()
+}
+
+func hasID(raw json.RawMessage) bool { return len(raw) > 0 && string(raw) != "null" }
+
+func (g *frameGate) line(l []byte) {
+	var f frame
+	if json.Unmarshal(l, &f) != nil || f.Method == nil {
+		return
+	}
+	switch {
+	case hasID(f.ID):
+		g.pending[idKey(f.ID)] = struct{}{}
+	case *f.Method == "notifications/cancelled" && hasID(f.Params.RequestID):
+		delete(g.pending, idKey(f.Params.RequestID))
+		g.cond.Broadcast()
+	}
+}
+
+// Read implements io.Reader for the SDK transport.
+func (g *frameGate) Read(p []byte) (int, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for {
+		if g.queue.Len() > 0 {
+			return g.queue.Read(p)
+		}
+		if g.inEOF || g.stopped {
+			if !g.graceOn {
+				g.graceOn = true
+				time.AfterFunc(g.grace, func() {
+					g.mu.Lock()
+					g.timedOut = true
+					g.cond.Broadcast()
+					g.mu.Unlock()
+				})
+			}
+			if len(g.pending) == 0 || g.timedOut {
+				if len(g.pending) > 0 && !g.expired {
+					g.expired = true
+					close(g.expiredC)
+				}
+				return 0, io.EOF
+			}
+		}
+		g.cond.Wait()
+	}
+}
+
+// Stop ends input as if stdin had reached EOF: bytes already read are still delivered and answered
+// (within the grace period), nothing further is read.
+func (g *frameGate) Stop() {
+	g.mu.Lock()
+	g.stopped = true
+	g.cond.Broadcast()
+	g.mu.Unlock()
+}
+
+// Expired reports whether the grace period ran out with requests still unanswered.
+func (g *frameGate) Expired() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.expired
+}
+
+// ExpiredC is closed when the grace period ran out with requests unanswered.
+func (g *frameGate) ExpiredC() <-chan struct{} { return g.expiredC }
+
+func (g *frameGate) Close() error { return nil }
+
+// responseWriter passes the SDK's output to w and marks a request answered once its response has
+// been written. A response is a frame with an id and no method.
+type responseWriter struct {
+	g   *frameGate
+	w   io.Writer
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (g *frameGate) wrapWriter(w io.Writer) io.WriteCloser { return &responseWriter{g: g, w: w} }
+
+func (r *responseWriter) Write(p []byte) (int, error) {
+	n, err := r.w.Write(p)
+	if n > 0 {
+		r.mu.Lock()
+		r.buf = append(r.buf, p[:n]...)
+		for {
+			i := bytes.IndexByte(r.buf, '\n')
+			if i < 0 {
+				if len(r.buf) > maxTrackedLine {
+					r.buf = nil
+				}
+				break
+			}
+			r.answered(r.buf[:i])
+			r.buf = r.buf[i+1:]
+		}
+		r.mu.Unlock()
+	}
+	return n, err
+}
+
+func (r *responseWriter) answered(l []byte) {
+	var f frame
+	if json.Unmarshal(l, &f) != nil || f.Method != nil || !hasID(f.ID) {
+		return
+	}
+	r.g.mu.Lock()
+	delete(r.g.pending, idKey(f.ID))
+	r.g.cond.Broadcast()
+	r.g.mu.Unlock()
+}
+
+func (*responseWriter) Close() error { return nil }

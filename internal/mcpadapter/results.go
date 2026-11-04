@@ -22,8 +22,6 @@ type outcome struct {
 // call runs body, logs one line (tool, outcome, duration, draft id) and maps the outcome to a tool
 // result. Domain errors become isError results; the handler itself never returns a protocol error.
 func (h *handlers) call(ctx context.Context, tool string, body func() outcome) *mcp.CallToolResult {
-	h.wg.Add(1)
-	defer h.wg.Done()
 	start := time.Now()
 	o := body()
 	var res *mcp.CallToolResult
