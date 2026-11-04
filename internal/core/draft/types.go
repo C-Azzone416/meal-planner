@@ -204,14 +204,14 @@ type SkippedEntry struct {
 
 // ListOptions selects a page of drafts.
 type ListOptions struct {
-	Limit  int // 0 means DefaultListLimit; > MaxListLimit is invalid_argument
-	Offset int // >= 0
+	Limit  int // 0 means DefaultListLimit; negative or > MaxListLimit is invalid_limit
+	Offset int // >= 0; negative is invalid_offset
 }
 
 // ListPage is one page of draft summaries.
 type ListPage struct {
-	Drafts       []Summary      `json:"drafts"`
-	Total        int            `json:"total"` // readable drafts in the store
+	Drafts       []Summary      `json:"drafts"` // never nil
+	Total        int            `json:"total"`  // readable drafts in the store (may be below the MaxStoredDrafts count)
 	Offset       int            `json:"offset"`
 	Limit        int            `json:"limit"`
 	HasMore      bool           `json:"has_more"`

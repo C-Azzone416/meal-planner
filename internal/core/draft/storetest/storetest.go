@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,6 +35,9 @@ func Run(t *testing.T, newStore func(t *testing.T) draft.Store) {
 		{"ReplaceStaleRevision", testReplaceStale},
 		{"ReplaceMissing", testReplaceMissing},
 		{"ReplaceInconsistentNext", testReplaceInconsistent},
+		{"ReplaceAfterRevisionMovedOn", testReplaceMovedOn},
+		{"ConcurrentReplaceOneWinner", testConcurrentReplace},
+		{"ConcurrentCreateOneWinner", testConcurrentCreate},
 		{"ListEmpty", testListEmpty},
 		{"ListReturnsEverything", testListAll},
 		{"ReadsDoNotModify", testReadsDoNotModify},
@@ -300,6 +304,9 @@ func testListEmpty(t *testing.T, s draft.Store) {
 	if len(res.Drafts) != 0 || len(res.Skipped) != 0 {
 		t.Fatalf("empty store listed %d drafts, %d skipped", len(res.Drafts), len(res.Skipped))
 	}
+	if res.Drafts == nil {
+		t.Fatal("ListResult.Drafts must not be nil")
+	}
 }
 
 func testListAll(t *testing.T, s draft.Store) {
@@ -416,5 +423,116 @@ func testStoreFull(t *testing.T, s draft.Store) {
 	d := mustGet(t, s, ID(1))
 	if err := s.Replace(bg, ID(1), 1, next(d, "still updatable")); err != nil {
 		t.Fatalf("Replace on a full store: %v", err)
+	}
+}
+
+// A replace that was based on an old revision loses once the draft has moved on more than once,
+// and reports the revision the draft is really at.
+func testReplaceMovedOn(t *testing.T, s draft.Store) {
+	d := Full(ID(1))
+	mustCreate(t, s, d)
+	n2 := next(d, "two")
+	n3 := next(n2, "three")
+	n4 := next(n3, "four")
+	for i, n := range []draft.Draft{n2, n3, n4} {
+		if err := s.Replace(bg, ID(1), int64(i+1), n); err != nil {
+			t.Fatalf("Replace to revision %d: %v", i+2, err)
+		}
+	}
+	for _, based := range []int64{1, 2, 3} {
+		stale := next(d, "stale")
+		stale.Revision = based + 1
+		de := expectError(t, s.Replace(bg, ID(1), based, stale), draft.CategoryConflict, draft.CodeRevisionMismatch)
+		if de.CurrentRevision != 4 {
+			t.Fatalf("based on revision %d: CurrentRevision = %d, want 4", based, de.CurrentRevision)
+		}
+	}
+	equal(t, "draft after the stale replaces", mustGet(t, s, ID(1)), n4)
+	// A revision from the future is a conflict too.
+	future := next(d, "future")
+	future.Revision = 10
+	expectError(t, s.Replace(bg, ID(1), 9, future), draft.CategoryConflict, draft.CodeRevisionMismatch)
+	equal(t, "draft after a future-revision replace", mustGet(t, s, ID(1)), n4)
+}
+
+// Many writers based on the same revision: exactly one wins, the rest get revision_mismatch with
+// the current revision, and the stored draft is exactly the winner's.
+func testConcurrentReplace(t *testing.T, s draft.Store) {
+	const writers = 8
+	base := Full(ID(1))
+	mustCreate(t, s, base)
+	candidates := make([]draft.Draft, writers)
+	errs := make([]error, writers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range candidates {
+		candidates[i] = next(base, fmt.Sprintf("writer %d", i))
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			errs[i] = s.Replace(bg, ID(1), 1, candidates[i].Clone())
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	winner := -1
+	for i, err := range errs {
+		if err == nil {
+			if winner >= 0 {
+				t.Fatalf("writers %d and %d both won", winner, i)
+			}
+			winner = i
+			continue
+		}
+		de := expectError(t, err, draft.CategoryConflict, draft.CodeRevisionMismatch)
+		if de.CurrentRevision != 2 {
+			t.Fatalf("writer %d: CurrentRevision = %d, want 2", i, de.CurrentRevision)
+		}
+	}
+	if winner < 0 {
+		t.Fatal("no writer won")
+	}
+	equal(t, "draft after concurrent replaces", mustGet(t, s, ID(1)), candidates[winner])
+}
+
+// Many creators of one ID: exactly one succeeds, the rest get already_exists, and the stored draft
+// is exactly the winner's.
+func testConcurrentCreate(t *testing.T, s draft.Store) {
+	const creators = 8
+	candidates := make([]draft.Draft, creators)
+	errs := make([]error, creators)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range candidates {
+		candidates[i] = Minimal(ID(1))
+		candidates[i].Title = fmt.Sprintf("creator %d", i)
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			errs[i] = s.Create(bg, candidates[i].Clone())
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	winner := -1
+	for i, err := range errs {
+		if err == nil {
+			if winner >= 0 {
+				t.Fatalf("creators %d and %d both succeeded", winner, i)
+			}
+			winner = i
+			continue
+		}
+		expectError(t, err, draft.CategoryConflict, draft.CodeAlreadyExists)
+	}
+	if winner < 0 {
+		t.Fatal("no creator succeeded")
+	}
+	equal(t, "draft after concurrent creates", mustGet(t, s, ID(1)), candidates[winner])
+	res, err := s.List(bg)
+	if err != nil || len(res.Drafts) != 1 {
+		t.Fatalf("List: %v, %d drafts; want exactly one", err, len(res.Drafts))
 	}
 }
