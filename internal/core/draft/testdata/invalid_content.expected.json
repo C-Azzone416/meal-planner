@@ -1,0 +1,12 @@
+{
+  "errors": [
+    { "code": "required", "path": "/title" },
+    { "code": "required", "path": "/ingredients/0/text" },
+    { "code": "basis_required", "path": "/instructions/0/phase_basis" },
+    { "code": "required", "path": "/sources/0/url" },
+    { "code": "duplicate_id", "path": "/sources/1/id" },
+    { "code": "invalid_value", "path": "/estimates/active_minutes/value" },
+    { "code": "unknown_source_ref", "path": "/estimates/active_minutes/basis/source_ref" }
+  ],
+  "warnings": []
+}
