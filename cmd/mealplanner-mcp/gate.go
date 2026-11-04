@@ -21,18 +21,24 @@ const maxTrackedLine = 4 << 20
 // the EOF until every request frame read so far has had a response written, bounded by a grace
 // period, so those requests are answered.
 //
-// A request frame is one JSON object with a string "method" and an "id" that is a string or an integer. Notifications,
-// batches and lines that are not JSON objects are not tracked: nothing waits on them. A
-// notifications/cancelled for a tracked request stops the wait for it. Frames are counted when the
-// bytes are read, before the SDK sees them, so there is no window in which a frame has been read
-// but is not counted.
+// A request frame is one JSON object with a string "method" and an "id" that is a string or an
+// integer. Notifications, batches and lines that are not JSON objects are not tracked: nothing
+// waits on them. A notifications/cancelled for a tracked request stops the wait for it.
+//
+// Registration happens before delivery. The pump holds input until a line is complete, registers
+// the request id, and only then makes the line available to the SDK reader, so a response can
+// never be written for a request that is not yet counted (the SDK's JSON decoder may consume a
+// complete object before its newline arrives). At EOF an unterminated final frame is registered and
+// then delivered, followed by the EOF. Bytes reach the SDK unmodified. The one exception is a line
+// longer than maxTrackedLine: it is passed through as it arrives, untracked, so it can be delivered
+// before it is complete and is never waited on.
 type frameGate struct {
 	grace time.Duration
 
 	mu       sync.Mutex
 	cond     *sync.Cond
-	queue    bytes.Buffer   // bytes read from stdin, not yet handed to the SDK
-	lineBuf  []byte         // partial line seen by the reader pump
+	queue    bytes.Buffer   // registered bytes the SDK may read
+	lineBuf  []byte         // incomplete line held back until its newline (or EOF) arrives
 	skipLine bool           // the current line exceeded maxTrackedLine
 	pending  map[string]int // request id -> responses still owed (a client may reuse an id)
 	inEOF    bool           // underlying reader ended
@@ -64,16 +70,16 @@ func (g *frameGate) start(src io.Reader) {
 					g.mu.Unlock()
 					return // after Stop nothing new is accepted
 				}
-				g.track(buf[:n])
-				g.queue.Write(buf[:n])
+				g.admit(buf[:n])
 				g.cond.Broadcast()
 				g.mu.Unlock()
 			}
 			if err != nil {
 				g.mu.Lock()
-				if !g.skipLine && len(g.lineBuf) > 0 {
-					g.line(g.lineBuf) // an unterminated final frame is still a frame
-					g.lineBuf = nil
+				if !g.stopped && !g.skipLine && len(g.lineBuf) > 0 {
+					g.line(g.lineBuf) // register first ...
+					g.queue.Write(g.lineBuf)
+					g.lineBuf = nil // ... then deliver the unterminated final frame
 				}
 				g.inEOF = true
 				g.cond.Broadcast()
@@ -84,24 +90,43 @@ func (g *frameGate) start(src io.Reader) {
 	}()
 }
 
-// track scans b for complete lines and records request ids. g.mu must be held.
-func (g *frameGate) track(b []byte) {
+// admit registers complete lines in b and queues them; an incomplete tail is held back. g.mu must
+// be held.
+func (g *frameGate) admit(b []byte) {
 	for len(b) > 0 {
 		i := bytes.IndexByte(b, '\n')
+		if g.skipLine { // an over-long line: pass through untracked
+			if i < 0 {
+				g.queue.Write(b)
+				return
+			}
+			g.queue.Write(b[:i+1])
+			g.skipLine = false
+			b = b[i+1:]
+			continue
+		}
 		if i < 0 {
-			if !g.skipLine {
-				if len(g.lineBuf)+len(b) > maxTrackedLine {
-					g.skipLine, g.lineBuf = true, nil
-				} else {
-					g.lineBuf = append(g.lineBuf, b...)
-				}
+			if len(g.lineBuf)+len(b) > maxTrackedLine {
+				g.skipLine = true
+				g.queue.Write(g.lineBuf)
+				g.queue.Write(b)
+				g.lineBuf = nil
+			} else {
+				g.lineBuf = append(g.lineBuf, b...)
 			}
 			return
 		}
-		if !g.skipLine {
-			g.line(append(g.lineBuf, b[:i]...))
+		if len(g.lineBuf)+i > maxTrackedLine { // over-long: untracked
+			g.queue.Write(g.lineBuf)
+			g.queue.Write(b[:i+1])
+			g.lineBuf = g.lineBuf[:0]
+			b = b[i+1:]
+			continue
 		}
-		g.lineBuf, g.skipLine = g.lineBuf[:0], false
+		g.lineBuf = append(g.lineBuf, b[:i+1]...)
+		g.line(g.lineBuf[:len(g.lineBuf)-1])
+		g.queue.Write(g.lineBuf)
+		g.lineBuf = g.lineBuf[:0]
 		b = b[i+1:]
 	}
 }
@@ -115,7 +140,7 @@ type frame struct {
 }
 
 // idKey returns the canonical form of a JSON-RPC id, so a request id and its response id match even
-// if the number is spelled differently (2.0, 2, 2e0). ok is false for anything that is not a valid
+// if the spelling differs (2.0, 2, 2e0 or "\u0061", "a"). ok is false for anything that is not a valid
 // MCP id: only a string or an integer is, so null, booleans, arrays, objects and fractions (1.5) are
 // never awaited.
 func idKey(raw json.RawMessage) (key string, ok bool) {
@@ -125,17 +150,23 @@ func idKey(raw json.RawMessage) (key string, ok bool) {
 	}
 	switch t[0] {
 	case '"':
-		var out bytes.Buffer
-		if json.Compact(&out, t) != nil {
+		// Decode and re-encode, so "\u0061" and "a" are the same id. Strings and numbers live in
+		// separate key spaces.
+		var str string
+		if json.Unmarshal(t, &str) != nil {
 			return "", false
 		}
-		return out.String(), true
+		enc, err := json.Marshal(str)
+		if err != nil {
+			return "", false
+		}
+		return "s:" + string(enc), true
 	case '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
 		f, err := strconv.ParseFloat(string(t), 64)
 		if err != nil || math.IsInf(f, 0) || f != math.Trunc(f) {
 			return "", false
 		}
-		return strconv.FormatFloat(f, 'f', -1, 64), true
+		return "n:" + strconv.FormatFloat(f, 'f', -1, 64), true
 	}
 	return "", false
 }
