@@ -626,22 +626,138 @@ func TestShowMissingAndDamaged(t *testing.T) {
 	sameSnapshot(t, before, snapshot(t, root))
 }
 
-func TestShowEscapesTerminalControlCharacters(t *testing.T) {
+// hostile returns text that would misbehave in a terminal if printed raw: an ANSI escape, carriage
+// return, bell, bidi override and isolate, a line separator, and a tab. tag keeps it identifiable.
+func hostile(tag string) string {
+	return "\x1b[31m" + tag + "\r\x07\u202e\u2066\u2028\t!"
+}
+
+// hostileML is for multi-line fields, where a tab and newlines are legitimate.
+func hostileML(tag string) string {
+	return "\x1b[31m" + tag + "\r\x07\u202e\u2066\u2028\nsecond line"
+}
+
+func assertSafe(t *testing.T, where, out string, tags ...string) {
+	t.Helper()
+	for _, bad := range []string{"\x1b", "\r", "\x07", "\u202e", "\u2066", "\u2028", "\u2029", "\t"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("%s: raw %q reached the output:\n%q", where, bad, out)
+		}
+	}
+	for _, tag := range tags {
+		if !strings.Contains(out, tag) {
+			t.Errorf("%s: %s is missing from the output (escaping must not drop text)", where, tag)
+		}
+	}
+}
+
+func TestShowEscapesEveryStoredString(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "data")
 	st, _ := localstore.Open(root, localstore.Options{})
-	// Content that validation would reject can still reach the file by hand-editing; show must stay safe.
+	basis := func(tag string) *draft.Basis {
+		return &draft.Basis{Kind: draft.BasisSourced, SourceRef: hostile(tag + "ref"), Note: hostile(tag + "note")}
+	}
+	five := 5
+	// Content that validation would reject can still reach a file by hand-editing; show must stay safe.
+	c := draft.Content{
+		Title:       hostile("title"),
+		Yield:       hostile("yield"),
+		Ingredients: []draft.Ingredient{{Text: hostile("ingredient"), Quantity: hostile("qty")}},
+		Instructions: []draft.Step{{
+			Text: hostileML("step"), Phase: draft.Phase(hostile("phase")), PhaseBasis: basis("pb"),
+		}},
+		Notes:   hostileML("notes"),
+		Sources: []draft.Source{{ID: hostile("srcid"), Kind: draft.SourceKind(hostile("srckind")), Label: hostile("srclabel"), URL: hostile("srcurl"), Locator: hostile("srcloc")}},
+		Estimates: &draft.Estimates{
+			ActiveMinutes: &draft.MinutesEstimate{Value: &five, Basis: basis("am")},
+			Attention:     &draft.LevelEstimate{Value: draft.Level(hostile("level")), Basis: basis("att")},
+		},
+		PhaseEstimates: &draft.PhaseEstimates{
+			PrepAhead:   &draft.Estimates{Cleanup: &draft.LevelEstimate{Value: draft.Level(hostile("pacl")), Basis: basis("pa")}},
+			CookTonight: &draft.Estimates{TotalMinutes: &draft.MinutesEstimate{Value: &five, Basis: basis("ct")}},
+		},
+		Guidance: []draft.Guidance{
+			{Topic: draft.GuidanceTopic(hostile("topic")), Text: hostileML("gtext"), Basis: basis("g")},
+			{Topic: draft.TopicOther, Text: "x", Basis: &draft.Basis{Kind: draft.BasisKind(hostile("hkind"))}},
+		},
+	}
 	d := draft.Draft{SchemaVersion: 1, ID: "drf_0123456789abcdef0123", Revision: 1, Status: draft.StatusDraft,
-		CreatedAt: time.Now().UTC().Truncate(time.Second), UpdatedAt: time.Now().UTC().Truncate(time.Second),
-		Content: draft.Content{Title: "Evil \x1b[31mred\r\nline", Notes: "a\x1b]0;x\x07b"}}
+		CreatedAt: time.Now().UTC().Truncate(time.Second), UpdatedAt: time.Now().UTC().Truncate(time.Second), Content: c}
 	if err := st.Create(context.Background(), d); err != nil {
 		t.Fatal(err)
 	}
 	r := invoke(t, "", nil, "draft", "show", d.ID, "--data-dir", root)
-	if strings.ContainsAny(r.stdout, "\x1b\r\x07") {
-		t.Errorf("raw control characters reached the terminal: %q", r.stdout)
+	if r.code != 0 {
+		t.Fatalf("%+v", r)
 	}
-	if !strings.Contains(r.stdout, `\u001b[31mred\u000d\u000aline`) {
-		t.Errorf("escapes missing: %q", r.stdout)
+	var tags []string
+	for _, tag := range []string{"title", "yield", "ingredient", "phase", "srcid", "srckind", "srclabel", "srcurl", "srcloc", "level", "pacl", "topic", "step", "notes", "gtext", "hkind"} {
+		tags = append(tags, tag)
+	}
+	for _, p := range []string{"pb", "am", "att", "pa", "ct", "g"} {
+		tags = append(tags, p+"ref", p+"note")
+	}
+	assertSafe(t, "show", r.stdout, tags...)
+	if !strings.Contains(r.stdout, `\u001b[31m`) || !strings.Contains(r.stdout, `\u202e`) {
+		t.Errorf("expected visible escapes:\n%s", r.stdout)
+	}
+	// JSON mode is the faithful view: the encoder escapes control characters itself.
+	j := invoke(t, "", nil, "draft", "show", d.ID, "--data-dir", root, "--json")
+	for _, bad := range []string{"\x1b", "\r", "\x07", "\n"[:0] + "\t"} {
+		if strings.Contains(j.stdout, bad) {
+			t.Errorf("raw %q in JSON output", bad)
+		}
+	}
+	var got struct {
+		Draft draft.Draft `json:"draft"`
+	}
+	onlyJSON(t, j.stdout, &got)
+	if got.Draft.Title != c.Title {
+		t.Error("JSON mode must preserve the text exactly")
+	}
+}
+
+func TestListEscapesTitles(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "data")
+	st, _ := localstore.Open(root, localstore.Options{})
+	now := time.Now().UTC().Truncate(time.Second)
+	d := draft.Draft{SchemaVersion: 1, ID: "drf_0123456789abcdef0123", Revision: 1, Status: draft.StatusDraft,
+		CreatedAt: now, UpdatedAt: now, Content: draft.Content{Title: hostile("listtitle")}}
+	if err := st.Create(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	r := invoke(t, "", nil, "draft", "list", "--data-dir", root)
+	assertSafe(t, "list", r.stdout, "listtitle")
+	if !strings.Contains(r.stdout, now.Format(time.RFC3339)) {
+		t.Errorf("timestamps must be RFC 3339 UTC:\n%s", r.stdout)
+	}
+}
+
+func TestValidateEscapesDecoderOutput(t *testing.T) {
+	in := `{"title":"x","\u001b[31mevil\u202e\r\t":1}`
+	r := invoke(t, in, nil, "draft", "validate", "-")
+	if r.code != 1 {
+		t.Fatalf("%+v", r)
+	}
+	assertSafe(t, "validate", r.stdout)
+}
+
+func TestCorruptFileDoesNotEchoFileContentsOnStderr(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "data")
+	seed(t, root, `{"title":"x"}`)
+	id := "drf_cccccccccccccccccccc"
+	_ = os.WriteFile(filepath.Join(root, "drafts", id+".json"), []byte(`{"schema_version":1,"SECRETBYTES":1}`), 0o600)
+	for _, args := range [][]string{
+		{"draft", "show", id, "--data-dir", root},
+		{"draft", "show", id, "--data-dir", root, "--json"},
+	} {
+		r := invoke(t, "", nil, args...)
+		if r.code != 3 || r.stdout != "" || r.err == "" {
+			t.Fatalf("%v: %+v", args, r)
+		}
+		if strings.Contains(r.err, "SECRETBYTES") {
+			t.Errorf("%v: stderr echoes file contents: %q", args, r.err)
+		}
 	}
 }
 

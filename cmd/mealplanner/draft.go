@@ -65,6 +65,10 @@ const showUsage = `usage: mealplanner draft show <id> [--data-dir DIR] [--json]
 Show one saved draft, including its sources and how each estimate or claim is based
 (agent estimate or sourced). Reads only; the data directory is never created.
 
+The human output is a summary for reading: it omits some detail, such as ingredient quantities,
+units and notes, and it escapes control and formatting characters. Use --json for the complete
+draft.
+
   --data-dir DIR absolute path of the data directory (default as for 'draft list')
   --json         print one JSON document: {"draft": {...}}, or {"error": {...}} if not found
 
@@ -170,7 +174,7 @@ func runValidate(args []string, e env) int {
 	} else {
 		f, err := os.Open(p.pos[0])
 		if err != nil {
-			fmt.Fprintf(e.stderr, "mealplanner: cannot read the input file: %v\n", err)
+			fmt.Fprintf(e.stderr, "mealplanner: cannot read the input file: %s\n", clean(err.Error(), false))
 			return exitFailure
 		}
 		defer f.Close()
@@ -179,7 +183,7 @@ func runValidate(args []string, e env) int {
 	// One byte over the limit is enough for DecodeContent to report input_too_large.
 	raw, err := io.ReadAll(io.LimitReader(src, draft.MaxInputBytes+1))
 	if err != nil {
-		fmt.Fprintf(e.stderr, "mealplanner: cannot read the input: %v\n", err)
+		fmt.Fprintf(e.stderr, "mealplanner: cannot read the input: %s\n", clean(err.Error(), false))
 		return exitFailure
 	}
 	var res draft.ValidationResult
@@ -312,7 +316,7 @@ func fail(e env, err error, asJSON bool) int {
 	code := exitFor(err)
 	var de *draft.Error
 	if !errors.As(err, &de) {
-		fmt.Fprintf(e.stderr, "mealplanner: %v\n", err)
+		fmt.Fprintf(e.stderr, "mealplanner: %s\n", clean(err.Error(), false))
 		return code
 	}
 	if asJSON && code == exitRejected {
@@ -320,10 +324,13 @@ func fail(e env, err error, asJSON bool) int {
 		return code
 	}
 	msg := de.Message
-	if de.Err != nil && code == exitFailure {
-		msg += " (" + oneLine(de.Err.Error()) + ")" // stderr only; may name a path
+	// Only I/O causes are appended: they come from the operating system and may name a path, which
+	// is acceptable on stderr. Other causes (such as a JSON decoder error on a corrupt file) can
+	// echo file contents, so only the fixed core message is printed for them.
+	if de.Err != nil && de.Category == draft.CategoryIO {
+		msg += " (" + oneLine(de.Err.Error()) + ")"
 	}
-	fmt.Fprintf(e.stderr, "mealplanner: %s\n", msg)
+	fmt.Fprintf(e.stderr, "mealplanner: %s\n", clean(msg, false))
 	return code
 }
 

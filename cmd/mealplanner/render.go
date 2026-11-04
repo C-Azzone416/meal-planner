@@ -4,21 +4,24 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/C-Azzone416/meal-planner/internal/core/draft"
 )
 
-// clean makes stored text safe to print: control characters other than newline and tab are shown
-// as escapes so a draft cannot move the cursor or recolor the terminal. multiline=false also
-// escapes newlines.
+// clean makes stored or decoded text safe to print: control characters (newline and tab survive only in multi-line text),
+// Unicode format characters (such as bidi overrides) and line/paragraph separators are shown as
+// escapes, so a draft cannot move the cursor, recolor the terminal or reorder the text around it.
+// multiline=false also escapes newlines and tabs. Every string that did not come from this program must go
+// through clean (or block) before it is printed.
 func clean(s string, multiline bool) string {
 	var b strings.Builder
 	for _, r := range s {
 		switch {
-		case r == '\t' || (r == '\n' && multiline):
+		case multiline && (r == '\t' || r == '\n'):
 			b.WriteRune(r)
-		case unicode.IsControl(r):
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029':
 			fmt.Fprintf(&b, "\\u%04x", r)
 		default:
 			b.WriteRune(r)
@@ -34,16 +37,16 @@ func block(s, indent string) string {
 
 func renderValidation(w io.Writer, res draft.ValidationResult) {
 	for _, i := range res.Errors {
-		fmt.Fprintf(w, "error    %-22s %s  %s\n", i.Code, i.Path, i.Message)
+		fmt.Fprintf(w, "error    %-22s %s  %s\n", clean(i.Code, false), clean(i.Path, false), clean(i.Message, false))
 	}
 	for _, i := range res.Warnings {
-		fmt.Fprintf(w, "warning  %-22s %s  %s\n", i.Code, i.Path, i.Message)
+		fmt.Fprintf(w, "warning  %-22s %s  %s\n", clean(i.Code, false), clean(i.Path, false), clean(i.Message, false))
 	}
 	if res.Truncated {
 		fmt.Fprintln(w, "(more findings were omitted)")
 	}
 	fmt.Fprintf(w, "structurally valid: %s (%d errors, %d warnings)\n", yesNo(res.StructurallyValid), len(res.Errors), len(res.Warnings))
-	fmt.Fprintln(w, res.Notice)
+	fmt.Fprintln(w, clean(res.Notice, false))
 }
 
 func yesNo(b bool) string {
@@ -58,7 +61,7 @@ func renderList(w io.Writer, page draft.ListPage) {
 		fmt.Fprintln(w, "no drafts")
 	}
 	for _, s := range page.Drafts {
-		fmt.Fprintf(w, "%s  r%d  %s  %s\n", s.ID, s.Revision, s.UpdatedAt.Format("2006-01-02T15:04:05Z"), clean(s.Title, false))
+		fmt.Fprintf(w, "%s  r%d  %s  %s\n", clean(s.ID, false), s.Revision, s.UpdatedAt.UTC().Format(time.RFC3339), clean(s.Title, false))
 	}
 	if len(page.Drafts) == 0 && page.Total > 0 {
 		fmt.Fprintf(w, "no drafts at offset %d (total %d)\n", page.Offset, page.Total)
@@ -67,7 +70,7 @@ func renderList(w io.Writer, page draft.ListPage) {
 		fmt.Fprintf(w, "showing %d-%d of %d; use --offset %d for more\n", page.Offset+1, page.Offset+len(page.Drafts), page.Total, page.Offset+len(page.Drafts))
 	}
 	for _, s := range page.Skipped {
-		fmt.Fprintf(w, "skipped %s: %s: %s\n", clean(s.ID, false), s.Category, clean(s.Message, false))
+		fmt.Fprintf(w, "skipped %s: %s: %s\n", clean(s.ID, false), clean(string(s.Category), false), clean(s.Message, false))
 	}
 	if page.SkippedTotal > 0 {
 		fmt.Fprintf(w, "%d unreadable %s skipped and left untouched\n", page.SkippedTotal, plural(page.SkippedTotal, "entry", "entries"))
@@ -105,16 +108,18 @@ func basisLabel(b *draft.Basis) string {
 	return s
 }
 
-func phaseLabel(p draft.Phase) string { return strings.ReplaceAll(string(p), "_", " ") }
+func phaseLabel(p draft.Phase) string {
+	return clean(strings.ReplaceAll(string(p), "_", " "), false)
+}
 
 func renderDraft(w io.Writer, d draft.Draft) {
-	fmt.Fprintf(w, "%s  revision %d\n", d.ID, d.Revision)
+	fmt.Fprintf(w, "%s  revision %d\n", clean(d.ID, false), d.Revision)
 	fmt.Fprintln(w, "status: draft (not reviewed or verified)")
 	fmt.Fprintf(w, "title: %s\n", clean(d.Title, false))
 	if d.Yield != "" {
 		fmt.Fprintf(w, "yield: %s\n", clean(d.Yield, false))
 	}
-	fmt.Fprintf(w, "created: %s  updated: %s\n", d.CreatedAt.Format("2006-01-02T15:04:05Z"), d.UpdatedAt.Format("2006-01-02T15:04:05Z"))
+	fmt.Fprintf(w, "created: %s  updated: %s\n", d.CreatedAt.UTC().Format(time.RFC3339), d.UpdatedAt.UTC().Format(time.RFC3339))
 
 	fmt.Fprintf(w, "\ningredients (%d):\n", len(d.Ingredients))
 	for _, in := range d.Ingredients {
