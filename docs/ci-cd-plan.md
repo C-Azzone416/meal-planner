@@ -224,7 +224,7 @@ Preview is **Approved** only for a push to `develop` with hosted changes. Pull r
 
 Preview runs in a separate trusted job (`preview`, a reusable-workflow call), tied to the exact pushed commit SHA (`github.sha`). It starts only after `affected` and every selected check succeeded. Preview secrets (`VERCEL_TOKEN`) are referenced only by that job and never reach the `pull_request` check jobs.
 
-**Stable alias.** If the repository variable `PREVIEW_ALIAS` is set (a hostname such as `meal-planner-develop.vercel.app`), the deploy job, after the smoke test passes, (only if it would move forward: skipped when the alias already serves a descendant commit on `develop`, found by an unauthenticated blob-less fetch of `develop`; a failed comparison fails the step) runs `vercel alias set`, then polls `/v4/aliases/<alias>` until it points at this deployment ID (up to 3 minutes) and records it in the step summary. Unset means the step is skipped with a notice. The step fails if the alias is one of the project's production domains; that guard covers this project's domains only and fails closed above 100 domains. The fetch requires the repository to stay public.
+**Stable alias.** If the repository variable `PREVIEW_ALIAS` is set (a hostname such as `meal-planner-develop.vercel.app`), the deploy job, after the smoke test passes, assigns it with Vercel's `POST /v2/deployments/{id}/aliases` API (only if it would move forward: skipped when the alias already serves a descendant commit on `develop`, found by an unauthenticated blob-less fetch of `develop`; a failed comparison fails the step), then polls `/v4/aliases/<alias>` until it points at this deployment ID (up to 3 minutes) and records it in the step summary. The REST path avoids the CLI's unsupported user lookup for project-scoped tokens; the token is sent only through curl config on stdin and the response must confirm the requested alias. Unset means the step is skipped with a notice. The step fails if the alias is one of the project's production domains; that guard covers this project's domains only and fails closed above 100 domains. The fetch requires the repository to stay public.
 
 ### One-time first-deployment bootstrap
 
@@ -428,7 +428,7 @@ GitHub documents environments and deployment protection rules as available to pu
 - [ ] Hosted change builds an artifact/manifest for the pull-request SHA.
 - [ ] Preview migration uses only the Preview direct migrator role.
 - [ ] Preview runtime uses only the Preview pooled runtime role.
-- [ ] Smoke test targets the returned deployment URL and blocks the stable gate on failure.
+- [ ] Smoke tests target both the returned deployment URL and the stable Preview alias; each must return HTTP 200 with the expected health payload before the stable gate passes.
 - [ ] Docs-only/local-tool-only changes create no deployment.
 
 ### Production

@@ -318,37 +318,36 @@ jobs:
           proj=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}?${team}")
           # An unknown production-domain list weakens the no-alias check, so say so loudly.
           domains_note=""
-          if doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?${team}"); then
-            if [[ "$(jq '(.domains // []) | length' <<< "$doms" 2> /dev/null || echo 0)" == 0 ]]; then
+          domains_inventory_complete=false
+          if doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?limit=100&${team}"); then
+            if ! domains_count=$(jq -er 'if (.domains | type) == "array" then (.domains | length) else error("domains is not an array") end' <<< "$doms"); then
+              domains_note="project domains response is INVALID: the no-production-domain-alias check could not verify the inventory"
+            elif [[ "$(jq -r '.pagination.next // empty' <<< "$doms")" != "" ]]; then
+              domains_note="project domains list is PAGINATED: the no-production-domain-alias check could not verify the complete inventory"
+            elif [[ "$domains_count" == 0 ]]; then
               domains_note="project domains list is EMPTY: the no-production-domain-alias check could not compare against any project domain"
+            else
+              domains_inventory_complete=true
             fi
           else
             doms='{"domains":[]}'
             domains_note="project domains fetch FAILED: the no-production-domain-alias check could not compare against any project domain"
           fi
           if [[ -n "$domains_note" ]]; then
-            echo "::warning::$domains_note"
+            echo "::error::$domains_note"
           fi
           prod_names=$(jq -n --argjson p "$proj" --argjson d "$doms" \
             '[($p.targets.production.alias // [])[], ($p.alias // [])[]?.domain?, ($d.domains // [])[].name] | map(select(. != null)) | unique')
-          evidence=$(jq --argjson prod_names "$prod_names" --arg expect "$EXPECT_TARGET" --arg sha "$SHA" --arg pid "$VERCEL_PROJECT_ID" '
-            {id, url, projectId, target, readyState, aliasAssigned, alias: (.alias // []), meta: (.meta // {}),
-             production_domains_known: $prod_names,
-             checks: {
-               project_matches: (.projectId == $pid),
-               sha_matches: ((.meta.sourceSha // "") == $sha),
-               target_matches: (if $expect == "production" then .target == "production" else (.target == null or .target == "preview") end),
-               ready: (.readyState == "READY"),
-               no_production_domain_alias: (((.alias // []) | map(select(. as $a | $prod_names | index($a))) | length) == 0),
-               no_alias_at_all_when_production: (if $expect == "production" then ((.alias // []) | length) == 0 and (.aliasAssigned // false) == false else true end)
-             }}' <<< "$dep")
+          evidence=$(jq --argjson prod_names "$prod_names" --argjson inventory_complete "$domains_inventory_complete" \
+            --arg expect "$EXPECT_TARGET" --arg sha "$SHA" --arg pid "$VERCEL_PROJECT_ID" \
+            -f .deploy-tools/tools/deploy/vercel-evidence.jq <<< "$dep")
           {
             echo "## Bootstrap evidence: ${EXPECT_TARGET} deployment"
             echo
             echo "- Source SHA: \`$SHA\`"
             echo "- Unique URL: $URL"
             if [[ -n "$domains_note" ]]; then
-              echo "- **WARNING: $domains_note.** Check the production domains in the Vercel dashboard before enabling Preview."
+              echo "- **ERROR: $domains_note.** Verification fails closed until the production-domain inventory is known."
             else
               echo "- Project domains fetched and non-empty (production domains known: $(jq -c . <<< "$prod_names"))"
             fi
@@ -643,36 +642,36 @@ jobs:
           proj=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}?${team}")
           # An unknown production-domain list weakens the no-alias check, so say so loudly.
           domains_note=""
-          if doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?${team}"); then
-            if [[ "$(jq '(.domains // []) | length' <<< "$doms" 2> /dev/null || echo 0)" == 0 ]]; then
+          domains_inventory_complete=false
+          if doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?limit=100&${team}"); then
+            if ! domains_count=$(jq -er 'if (.domains | type) == "array" then (.domains | length) else error("domains is not an array") end' <<< "$doms"); then
+              domains_note="project domains response is INVALID: the no-production-domain-alias check could not verify the inventory"
+            elif [[ "$(jq -r '.pagination.next // empty' <<< "$doms")" != "" ]]; then
+              domains_note="project domains list is PAGINATED: the no-production-domain-alias check could not verify the complete inventory"
+            elif [[ "$domains_count" == 0 ]]; then
               domains_note="project domains list is EMPTY: the no-production-domain-alias check could not compare against any project domain"
+            else
+              domains_inventory_complete=true
             fi
           else
             doms='{"domains":[]}'
             domains_note="project domains fetch FAILED: the no-production-domain-alias check could not compare against any project domain"
           fi
           if [[ -n "$domains_note" ]]; then
-            echo "::warning::$domains_note"
+            echo "::error::$domains_note"
           fi
           prod_names=$(jq -n --argjson p "$proj" --argjson d "$doms" \
             '[($p.targets.production.alias // [])[], ($p.alias // [])[]?.domain?, ($d.domains // [])[].name] | map(select(. != null)) | unique')
-          evidence=$(jq --argjson prod_names "$prod_names" --arg expect "$EXPECT_TARGET" --arg sha "$SHA" --arg pid "$VERCEL_PROJECT_ID" '
-            {id, url, projectId, target, readyState, aliasAssigned, alias: (.alias // []), meta: (.meta // {}),
-             production_domains_known: $prod_names,
-             checks: {
-               project_matches: (.projectId == $pid),
-               sha_matches: ((.meta.sourceSha // "") == $sha),
-               target_matches: (if $expect == "production" then .target == "production" else (.target == null or .target == "preview") end),
-               ready: (.readyState == "READY"),
-               no_production_domain_alias: (((.alias // []) | map(select(. as $a | $prod_names | index($a))) | length) == 0)
-             }}' <<< "$dep")
+          evidence=$(jq --argjson prod_names "$prod_names" --argjson inventory_complete "$domains_inventory_complete" \
+            --arg expect "$EXPECT_TARGET" --arg sha "$SHA" --arg pid "$VERCEL_PROJECT_ID" \
+            -f .deploy-tools/tools/deploy/vercel-evidence.jq <<< "$dep")
           {
             echo "## Bootstrap evidence: ${EXPECT_TARGET} deployment"
             echo
             echo "- Source SHA: \`$SHA\`"
             echo "- Unique URL: $URL"
             if [[ -n "$domains_note" ]]; then
-              echo "- **WARNING: $domains_note.** Check the production domains in the Vercel dashboard before enabling Preview."
+              echo "- **ERROR: $domains_note.** Verification fails closed until the production-domain inventory is known."
             else
               echo "- Project domains fetched and non-empty (production domains known: $(jq -c . <<< "$prod_names"))"
             fi
