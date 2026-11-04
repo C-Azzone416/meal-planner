@@ -1,0 +1,503 @@
+# Manual Production release of the hosted web/API for one exact `main` SHA.
+# See docs/ci-cd-plan.md (Hosted Production pipeline) and docs/runbooks/hosted-deploy.md.
+#
+# Build/deploy split: `vercel build` runs repository install and build scripts, so it runs in a
+# job that never has VERCEL_TOKEN. Jobs:
+#   verify  no token. Input, main-ancestry, tag and CI evidence checks, before any approval.
+#   pull    token, no checkout during the token step (production environment approval). Afterwards only
+#           tools/deploy/check-pulled-env.sh is checked out, at the workflow's own commit, to guard the env files.
+#   build   no token. Checks out the SHA, runs `vercel build`, uploads .vercel/output as a tarball.
+#   deploy  token, fresh runner, only tools/deploy checked out (production approval). Validates+extracts the
+#           tarball (checksum, safe-extract.sh), runs only `vercel deploy --prebuilt`, then the alias check and public smoke test.
+#   tag     write-capable GitHub token, no Vercel token. Pushes the annotated tag after smoke passes.
+# Both `pull` and `deploy` reference the `production` environment, so expect two approval prompts.
+name: Deploy production
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character SHA of the final main commit to release
+        type: string
+        required: true
+      version:
+        description: Release tag to create on success, e.g. app-v1.2.3
+        type: string
+        required: true
+      allow_non_tip:
+        description: Allow a SHA that is an ancestor of, not the tip of, origin/main (default false)
+        type: boolean
+        required: false
+        default: false
+
+permissions: {}
+
+# Serialize releases; never cancel one that is in progress.
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  VERCEL_CLI_VERSION: 65.9.0
+  VERCEL_TELEMETRY_DISABLED: "1"
+  NO_UPDATE_NOTIFIER: "1"
+
+jobs:
+  verify:
+    name: Verify release input
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # checkout and tag lookup
+      actions: read # ci.yml run and job conclusions for the SHA
+    env:
+      SHA: ${{ inputs.sha }}
+      VERSION: ${{ inputs.version }}
+      ALLOW_NON_TIP: ${{ inputs.allow_non_tip }}
+      REPO: ${{ github.repository }}
+      DISPATCH_REF: ${{ github.ref }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Validate inputs and dispatch ref
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase hex SHA"; exit 1; }
+          [[ "$VERSION" =~ ^app-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::version must match ^app-v[0-9]+\.[0-9]+\.[0-9]+$"; exit 1; }
+          [[ "$DISPATCH_REF" == refs/heads/main ]] || { echo "::error::dispatch this workflow from main (got $DISPATCH_REF)"; exit 1; }
+
+      - name: Check out main with history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: SHA is reachable from origin/main
+        run: |
+          git cat-file -e "${SHA}^{commit}" 2> /dev/null || { echo "::error::$SHA is not a commit in this repository"; exit 1; }
+          git merge-base --is-ancestor "$SHA" origin/main || { echo "::error::$SHA is not reachable from origin/main"; exit 1; }
+          tip=$(git rev-parse origin/main)
+          if [[ "$tip" != "$SHA" ]]; then
+            if [[ "$ALLOW_NON_TIP" == true ]]; then
+              echo "::warning::$SHA is an ancestor of, not the tip of, origin/main ($tip); allowed by allow_non_tip"
+            else
+              echo "::error::$SHA is an ancestor of, not the tip of, origin/main ($tip); set allow_non_tip=true to release it anyway"
+              exit 1
+            fi
+          fi
+
+      - name: Tag does not already exist
+        run: |
+          # The checkout above used fetch-depth 0, which fetches all tags.
+          if [[ -n "$(git tag -l "$VERSION")" ]] || git rev-parse -q --verify "refs/tags/$VERSION" > /dev/null; then
+            echo "::error::tag $VERSION already exists"
+            exit 1
+          fi
+
+      # Runs the script from main (the dispatch ref is enforced above), not from the requested SHA.
+      - name: Require successful CI / required for this SHA on main
+        run: |
+          result=$(tools/deploy/verify-ci.sh "$SHA")
+          echo "$result"
+          {
+            echo "## Release verification"
+            echo
+            echo "- SHA \`$SHA\` is reachable from origin/main"
+            echo "- Version \`$VERSION\` is unused"
+            echo "- $result"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  pull:
+    name: Pull / production
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: production
+    permissions: {}
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+    steps:
+      # No token here: this downloads the pinned CLI (and runs its install scripts) into the npx cache.
+      - name: Prefetch pinned Vercel CLI
+        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" --version
+
+      # The only token step. Nothing is checked out yet, so no repository code is present while the token is.
+      - name: Vercel pull (production)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" pull --yes --environment=production
+
+      # The guard script is the only repository code in this job: one file from the commit that defines this
+      # workflow (github.workflow_sha, never inputs.sha), checked out only after the token step has finished, so
+      # it never runs next to VERCEL_TOKEN. Same trust boundary as safe-extract.sh in the deploy job.
+      - name: Check out env guard script only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: tools/deploy/check-pulled-env.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          path: .env-guard
+
+      # `vercel pull` writes .vercel/.env.<target>.local, including a live VERCEL_OIDC_TOKEN (valid ~12 hours),
+      # and anyone can read this public repository's Actions artifacts. So the env files NEVER leave this job.
+      # This guard checks variable NAMES only, not whether a value is secret: it fails the job if a pulled env
+      # file defines anything other than Vercel system variables (VERCEL_* and the docs-cited exact names in
+      # check-pulled-env.sh), or has a line it cannot parse. A failure means build-time env vars now exist and
+      # this design must be revisited (the build job cannot receive them through an artifact). Names and line
+      # numbers are printed, values never. A failing find (e.g. no .vercel directory) fails the job. The env
+      # files are deleted afterwards, pass or fail; always() so that holds even if the checkout above failed.
+      - name: Guard - pulled env files hold only Vercel system variable names, then delete them
+        if: always()
+        run: |
+          set -euo pipefail
+          trap 'find .vercel -type f -name ".env*" -delete || true' EXIT
+          .env-guard/tools/deploy/check-pulled-env.sh .vercel
+
+      # Only project.json (project/org IDs and the pulled project settings `vercel build` reads) is shipped.
+      # Anything else under .vercel (README.txt, env files) is left behind; file names are logged, never contents.
+      - name: Package .vercel/project.json only
+        run: |
+          set -euo pipefail
+          [[ -f .vercel/project.json ]] || { echo "::error::vercel pull did not write .vercel/project.json"; exit 1; }
+          echo "left behind (not uploaded):"; find .vercel -type f ! -name project.json || { echo "::error::find failed"; exit 1; }
+          tar -cf pull.tar .vercel/project.json
+
+      # pull.tar holds only .vercel/project.json; env files never leave the pull job.
+      - name: Upload pull data
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: production-pull-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: pull.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  build:
+    name: Build / production
+    needs: pull
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      output_sha256: ${{ steps.pack.outputs.output_sha256 }}
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      SHA: ${{ inputs.sha }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Check out exact SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Confirm checkout is the requested SHA
+        run: |
+          head=$(git rev-parse HEAD)
+          [[ "$head" == "$SHA" ]] || { echo "::error::checked out $head, expected $SHA"; exit 1; }
+
+      # Schema migrations are intentionally skipped: there is no database schema yet. This guard fails
+      # loudly if migrations appear before a runner is wired. When one exists, apply only reviewed,
+      # forward-compatible migrations in their own job before `deploy`, through the direct Production
+      # migrator connection (production environment secret).
+      - name: Migrate Production database (skipped, no schema yet)
+        if: ${{ hashFiles('db/migrations/**') != '' }}
+        run: |
+          echo "::error::migrations found under db/migrations but no migration runner is wired yet"
+          exit 1
+
+      - name: Download pull data
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: production-pull-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pull
+
+      - name: Restore .vercel/project.json
+        run: tar -xf "$RUNNER_TEMP/pull/pull.tar" --no-same-owner
+
+      # The pull artifact deliberately carries no env files (they hold a live OIDC token). `vercel build` looks
+      # for .vercel/.env.<target>.local and, without it and with --yes, would try to pull it itself, which needs a
+      # token this job must not have. So write a stripped placeholder: a comment and one non-secret system variable.
+      # The project has no build-time env vars (the pull job's guard enforces that). Not verified against a live
+      # build: if `vercel build` rejects it, revisit the design rather than ship env values through an artifact.
+      - name: Write placeholder env file
+        run: |
+          printf '# Placeholder written by the build job; pulled env values are never handed between jobs.\nVERCEL_ENV=production\n' > .vercel/.env.production.local
+
+      # No VERCEL_TOKEN anywhere in this job: the build runs project install/build commands.
+      - name: Vercel build (production)
+        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" build --prod --yes
+
+      - name: Package build output and record checksum
+        id: pack
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          tar -cf "$RUNNER_TEMP/out/build-output.tar" .vercel/output .vercel/project.json
+          output_sha=$(sha256sum "$RUNNER_TEMP/out/build-output.tar" | cut -d' ' -f1)
+          echo "output_sha256=$output_sha" >> "$GITHUB_OUTPUT"
+          git ls-files | grep -E '(^|/)(go\.mod|go\.sum|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$' | sort | xargs -r sha256sum > lockfiles.txt
+          lockfiles=$(jq -Rn '[inputs | capture("^(?<h>[0-9a-f]{64})  (?<p>.*)$")] | map({(.p): .h}) | add // {}' < lockfiles.txt)
+          jq -n \
+            --arg sha "$SHA" \
+            --arg version "$VERSION" \
+            --arg target production \
+            --argjson lockfiles "$lockfiles" \
+            --arg node "$(node --version)" \
+            --arg npm "$(npm --version)" \
+            --arg go "$(go version 2>/dev/null || echo unavailable)" \
+            --arg vercel "$(npx --yes "vercel@${VERCEL_CLI_VERSION}" --version | tail -n1)" \
+            --arg output_sha "$output_sha" \
+            '{source_sha: $sha, version: $version, target: $target, lockfile_sha256: $lockfiles,
+              tools: {node: $node, npm: $npm, go: $go, vercel_cli: $vercel},
+              build_output_tar_sha256: $output_sha}' > "$RUNNER_TEMP/out/manifest.json"
+
+      # Only the build output tarball and manifest are uploaded; never the pulled env files.
+      - name: Upload build output
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: production-build-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/out/build-output.tar
+            ${{ runner.temp }}/out/manifest.json
+          retention-days: 7
+          if-no-files-found: error
+
+  deploy:
+    name: Deploy / production
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: production
+    permissions: {}
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      deployment_id: ${{ steps.id.outputs.deployment_id }}
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      SHA: ${{ inputs.sha }}
+      VERSION: ${{ inputs.version }}
+      EXPECTED_OUTPUT_SHA256: ${{ needs.build.outputs.output_sha256 }}
+    steps:
+      # Only tools/deploy is checked out, from the commit that defines this workflow (never the build
+      # artifact, never the SHA being built), so the extraction script is not attacker-influenced beyond
+      # the workflow file itself. The checkout holds no token and nothing in it is executed except safe-extract.sh.
+      - name: Check out deploy scripts only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: tools/deploy
+          fetch-depth: 1
+          persist-credentials: false
+          path: .deploy-tools
+
+      - name: Download build output
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: production-build-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/build
+
+      - name: Verify build output checksum
+        run: |
+          [[ "$EXPECTED_OUTPUT_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build job did not report a checksum"; exit 1; }
+          actual=$(sha256sum "$RUNNER_TEMP/build/build-output.tar" | cut -d' ' -f1)
+          [[ "$actual" == "$EXPECTED_OUTPUT_SHA256" ]] || { echo "::error::build output checksum mismatch (expected $EXPECTED_OUTPUT_SHA256, got $actual)"; exit 1; }
+
+      # Validates entry types and names (no symlinks, hardlinks, absolute or `..` paths, nothing outside
+      # .vercel/output and .vercel/project.json) and extracts into a fresh empty directory.
+      - name: Validate and extract build output
+        run: |
+          SAFE_EXTRACT_ALLOW_RE='^\.vercel/(output(/|$)|project\.json$)' \
+            .deploy-tools/tools/deploy/safe-extract.sh "$RUNNER_TEMP/build/build-output.tar" "$RUNNER_TEMP/deploy-src"
+
+      # No token here. Installed only after validation, outside the extraction directory and the npx cache.
+      - name: Install pinned Vercel CLI
+        run: |
+          npm install --prefix "$RUNNER_TEMP/vercel-cli" --no-audit --no-fund --no-package-lock "vercel@${VERCEL_CLI_VERSION}"
+          "$RUNNER_TEMP/vercel-cli/node_modules/.bin/vercel" --version
+
+      - name: Vercel deploy (production)
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        working-directory: ${{ runner.temp }}/deploy-src
+        run: |
+          url=$("$RUNNER_TEMP/vercel-cli/node_modules/.bin/vercel" deploy --prebuilt --prod --yes \
+            --meta "sourceSha=${SHA}" --meta "releaseVersion=${VERSION}" 2> deploy.stderr) || { cat deploy.stderr >&2; echo "::error::vercel deploy failed"; exit 1; }
+          cat deploy.stderr >&2
+          url=$(printf '%s' "$url" | tail -n1 | tr -d '[:space:]')
+          [[ "$url" =~ ^https://[A-Za-z0-9.-]+\.vercel\.app$ ]] || { echo "::error::unexpected deploy output, not a vercel.app URL"; exit 1; }
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Look up deployment ID
+        id: id
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          team=""
+          [[ "$VERCEL_ORG_ID" == team_* ]] && team="teamId=${VERCEL_ORG_ID}"
+          id=$(curl -fsS --max-time 30 -K - "https://api.vercel.com/v13/deployments/${URL#https://}?${team}" \
+            <<< "header = \"Authorization: Bearer ${VERCEL_TOKEN}\"" | jq -r '.id // empty') || id=""
+          # The alias check below needs the ID, so there is no "unavailable" fallback in production.
+          [[ "$id" =~ ^dpl_[A-Za-z0-9]+$ ]] || { echo "::error::could not look up the Vercel deployment ID for $URL"; exit 1; }
+          echo "deployment_id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Record deployment
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+          DEPLOYMENT_ID: ${{ steps.id.outputs.deployment_id }}
+        run: |
+          jq --arg url "$URL" --arg id "$DEPLOYMENT_ID" --arg out "$EXPECTED_OUTPUT_SHA256" \
+            '. + {deployment_url: $url, deployment_id: $id, build_output_tar_sha256: $out}' "$RUNNER_TEMP/build/manifest.json" > production-manifest.json
+          {
+            echo "## Production deployment"
+            echo
+            echo "- Source SHA: \`$SHA\`"
+            echo "- Version (tag, created after smoke passes): \`$VERSION\`"
+            echo "- Deployment URL: $URL"
+            echo "- Deployment ID: \`$DEPLOYMENT_ID\`"
+            echo "- Build output checksum verified: \`$EXPECTED_OUTPUT_SHA256\`"
+            echo
+            echo '```json'
+            cat production-manifest.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Keeps VERCEL_TOKEN (the alias API calls need it) in this job. `vercel deploy --prod` assigns the production
+      # alias asynchronously, so poll until the Vercel API says the alias points at THIS deployment ID. A 200 from
+      # the alias alone would not prove the new build serves it. Fails closed: no alias found, or no match before
+      # the timeout, fails the job (and so the tag job).
+      - name: Resolve production alias and confirm it points at this deployment
+        id: alias
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          DEPLOYMENT_ID: ${{ steps.id.outputs.deployment_id }}
+        run: |
+          api() { # token goes to curl through a config on stdin, never argv
+            curl -fsS --max-time 30 -K - "$1" <<< "header = \"Authorization: Bearer ${VERCEL_TOKEN}\""
+          }
+          team=""
+          [[ "$VERCEL_ORG_ID" == team_* ]] && team="teamId=${VERCEL_ORG_ID}"
+          # Project production domains: the project's production target aliases plus its non-redirect, non-branch domains.
+          proj=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}?${team}") || { echo "::error::could not fetch the Vercel project"; exit 1; }
+          doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?${team}") || doms='{"domains":[]}'
+          cands=$(jq -n --argjson p "$proj" --argjson d "$doms" \
+            '[($p.targets.production.alias // [])[], (($p.alias // [])[] | .domain? // empty), (($d.domains // [])[] | select((.redirect // null) == null and (.gitBranch // null) == null) | .name)]
+             | map(select(type == "string")) | unique')
+          [[ "$(jq 'length' <<< "$cands")" -gt 0 ]] || { echo "::error::no production domain found for the project; cannot determine the public alias"; exit 1; }
+          alias=""
+          for attempt in $(seq 1 18); do
+            dep=$(api "https://api.vercel.com/v13/deployments/${DEPLOYMENT_ID}?${team}") || dep='{}'
+            # Alias assigned to this deployment AND a project production domain; prefer a custom domain over *.vercel.app.
+            alias=$(jq -r --argjson c "$cands" '[(.alias // [])[] | select(. as $a | $c | index($a))] | (map(select(endswith(".vercel.app") | not)) + .) | .[0] // empty' <<< "$dep")
+            if [[ "$alias" =~ ^[A-Za-z0-9.-]+$ ]]; then
+              # Authoritative check: what does the alias resolve to right now?
+              pointed=$(api "https://api.vercel.com/v4/aliases/${alias}?${team}" | jq -r '.deploymentId // empty') || pointed=""
+              if [[ "$pointed" == "$DEPLOYMENT_ID" ]]; then
+                echo "alias=$alias" >> "$GITHUB_OUTPUT"
+                {
+                  echo "## Production alias"
+                  echo
+                  echo "- Alias: \`$alias\`"
+                  echo "- Deployment ID: \`$DEPLOYMENT_ID\`"
+                  echo "- Vercel API confirms the alias points at this deployment (attempt $attempt)"
+                } >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+              echo "attempt $attempt: $alias points at ${pointed:-<unknown>}, waiting for $DEPLOYMENT_ID"
+            else
+              echo "attempt $attempt: no project production alias assigned to $DEPLOYMENT_ID yet"
+            fi
+            sleep 10
+          done
+          echo "::error::the production alias did not point at deployment $DEPLOYMENT_ID within 3 minutes (or no alias was found); see docs/runbooks/hosted-deploy.md for rollback"
+          exit 1
+
+      # No token, no bypass header: this proves normal public access to the production alias. It does not by
+      # itself prove the new build serves it; the deployment-ID check above does.
+      - name: Smoke test public alias /api/health
+        env:
+          ALIAS: ${{ steps.alias.outputs.alias }}
+        run: |
+          [[ "$ALIAS" =~ ^[A-Za-z0-9.-]+$ ]] || { echo "::error::missing or invalid production alias"; exit 1; }
+          code=000
+          for attempt in $(seq 1 12); do
+            rm -f body.json
+            code=$(curl -sS -o body.json -w '%{http_code}' --max-time 15 "https://$ALIAS/api/health") || code=000
+            if [[ "$code" == 200 ]] && jq -e '.status == "ok"' body.json > /dev/null 2>&1; then
+              # Untrusted response body: capped at 2 KB, non-printables and backticks stripped, fenced.
+              body=$(head -c 2048 body.json | LC_ALL=C tr -cd '[:print:]\n' | tr -d '`')
+              {
+                echo "## Production smoke"
+                echo
+                echo "- GET https://$ALIAS/api/health (no bypass header) -> 200 (attempt $attempt)"
+                echo '```'
+                echo "$body"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "attempt $attempt: HTTP $code"
+            sleep 10
+          done
+          echo "::error::smoke test failed for https://$ALIAS/api/health (HTTP $code); see docs/runbooks/hosted-deploy.md for rollback"
+          exit 1
+
+      - name: Upload manifest
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: production-manifest-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: production-manifest.json
+          if-no-files-found: ignore
+
+  tag:
+    name: Tag / production
+    needs: deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # only for the tag push; this job has no Vercel token
+    env:
+      SHA: ${{ inputs.sha }}
+      VERSION: ${{ inputs.version }}
+      URL: ${{ needs.deploy.outputs.url }}
+      DEPLOYMENT_ID: ${{ needs.deploy.outputs.deployment_id }}
+    steps:
+      - name: Check out exact SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Confirm checkout is the requested SHA
+        run: |
+          head=$(git rev-parse HEAD)
+          [[ "$head" == "$SHA" ]] || { echo "::error::checked out $head, expected $SHA"; exit 1; }
+
+      # Only this step receives the write-capable GitHub token. A failed or already-existing tag is
+      # never overwritten (no force).
+      - name: Create and push annotated release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "Hosted release $VERSION" -m "Source: $SHA" -m "Deployment: $URL ($DEPLOYMENT_ID)" "$SHA"
+          GIT_CONFIG_COUNT=1 \
+          GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth" \
+            git push origin "refs/tags/$VERSION"
+          echo "- Tag \`$VERSION\` pushed on \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"

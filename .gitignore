@@ -10,3 +10,15 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Clubhouse agent manager
+.clubhouse/agents/
+.clubhouse/.local/
+.clubhouse/agents.json
+.clubhouse/agents.json.bak
+.clubhouse/settings.local.json
+
+# Web build artifacts.
+web/node_modules/
+web/dist/
+.vercel/

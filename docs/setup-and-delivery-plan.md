@@ -1,8 +1,10 @@
 # Setup and Delivery Plan
 
-Status: planning baseline and provider setup complete, 2026-11-01
+Status: planning baseline with a partially prepared provider connection scaffold, 2026-11-01
 
 This document separates authorized project setup from future implementation. Completing a provider setup step does not authorize application code or deployment.
+
+The operational CI/CD configuration guide is maintained in [CI/CD Configuration Plan](ci-cd-plan.md). The provider resources below are not a wired or validated delivery pipeline.
 
 ## Setup targets
 
@@ -28,7 +30,7 @@ Neon's current public materials describe Free projects as including Postgres and
 - Create one separate project named `meal-planner` in the existing personal Hobby account.
 - Do not reuse or modify another application's project or deployment.
 - Do not deploy a placeholder application.
-- Leave the Vercel Git integration unconnected. Future delivery is expected to use GitHub Actions with narrowly scoped Vercel credentials; the workflow and credentials are deferred implementation work.
+- Leave the Vercel Git integration unconnected. Future delivery is expected to use GitHub Actions with narrowly scoped Vercel credentials; the deploy workflow and credentials are deferred implementation work, while secret-free CI scaffolding starts ahead of Phase 3.
 - Record the dashboard link and non-secret project identifier only in the ignored local setup receipt.
 
 Vercel's Hobby plan is currently free for personal projects within published limits. Go HTTP functions are officially supported, but workload fit remains an implementation checkpoint.
@@ -77,9 +79,9 @@ The following non-secret setup is complete:
 
 These steps prepare identifiers and isolation boundaries only. No connection has been exercised because there is no workflow or application build yet.
 
-Protected material status:
+Protected material status (prior verification; not revalidated by a workflow):
 
-- `VERCEL_TOKEN` is installed. Vercel identifies the token as `meal-planner-github-actions`, restricts it to the single `meal-planner` project, and expires it on January 30, 2027. Vercel does not offer deployment-only permissions for this token type, so future workflow gates and protected branches remain part of the security boundary. No workflow has used or validated the token yet.
+- `VERCEL_TOKEN` is installed and was verified as restricted to the intended project with a recorded expiry. Its provider-side identifier and expiry are intentionally kept out of this public document. Vercel does not offer deployment-only permissions for this token type, so future workflow gates and protected branches remain part of the security boundary. No workflow has used or validated the token yet.
 - The remaining database connections require explicit approval at the moment they are created or installed:
   - Preview database connection: proposed as a Neon connection whose endpoint targets the preview branch and whose role is limited to the application database, stored only in the Vercel Preview environment and in the GitHub `preview` environment if build or migration steps require it. Neon role isolation, password expiry, and the final rotation mechanism must be verified before approval; absent provider-enforced expiry, use a documented 90-day rotation.
   - Production database connection: the same model, with an endpoint targeting the production branch and storage only in the corresponding Production environments. Preview and CI must never receive this value.
@@ -87,6 +89,8 @@ Protected material status:
 A Neon API key is not part of the initial minimum. Add a project-scoped `NEON_API_KEY` only if later workflow design actually automates branch creation, reset, or deletion. Neon Auth session keys, application login configuration, release signing keys, and package registry credentials are separate concerns and must not be bundled into deployment credentials.
 
 ## Approved branch and release policy
+
+The detailed trigger, check-name, artifact-integrity, migration, public-fork, and manual-verification plan is in [CI/CD Configuration Plan](ci-cd-plan.md). This section records the higher-level policy.
 
 ### Branch flow
 
@@ -109,13 +113,13 @@ The exact rules, exceptions, administrator bypass policy, and release-branch nam
 
 ### Preview and production deployment
 
-- Trusted pull requests that affect the hosted web client or API deploy an automatic Vercel Preview only after their relevant CI checks pass.
+- Pushes to `develop` that affect the hosted web client or API deploy an automatic Vercel Preview (and move the optional stable `PREVIEW_ALIAS`) only after their relevant CI checks pass. Pull requests run checks only.
 - Documentation-only and local-tool-only changes do not deploy the hosted web application.
 - Pull requests from public forks receive secret-free checks only. Untrusted code never runs with deployment credentials or other protected secrets.
 - Production deployment is deliberate and manual after CI completes on `main`.
 - Production deploys the exact final `main` commit whose `main` CI passed. A pre-merge release-branch SHA is not sufficient, even when its content appears equivalent.
 
-The GitHub Actions workflows, deployment credentials, environment protections, and approval gates that enforce this policy are deferred implementation work. The empty GitHub environments and non-secret identifiers already exist.
+The deployment workflows, deployment credentials, environment protections, and approval gates that enforce this policy are deferred implementation work; secret-free CI starts ahead of Phase 3 on a hello-world verification slice. The empty GitHub environments and non-secret identifiers already exist.
 
 ## Approved affected-component CI behavior
 
@@ -137,7 +141,7 @@ The exact workflow files and job count are not approved yet. A proposed shape is
 
 1. Detect affected components and publish a machine-readable check plan.
 2. Run independent web, hosted Go, local Go, and contract or integration groups in parallel when selected.
-3. Run an automatic Preview deployment for a trusted hosted change after the relevant checks succeed.
+3. Run an automatic Preview deployment for a hosted change pushed to `develop` after the relevant checks succeed.
 4. Evaluate all selected and intentionally skipped work in the stable fail-closed required gate.
 5. Offer a manual Production action only for the exact `main` commit that passed the required gate.
 
@@ -181,7 +185,7 @@ Exit gate:
 
 ### Phase 3: contract and persistence foundation
 
-Create the executable API contract, generated clients where appropriate, database model, migrations, and contract tests. Add CI only after these artifacts exist and their required checks are understood.
+Create the executable API contract, generated clients where appropriate, database model, migrations, and contract tests. CI scaffolding starts ahead of this phase on a hello-world verification slice; Phase 3 extends it to the contract and persistence checks once those artifacts exist.
 
 Exit gate:
 
@@ -224,7 +228,7 @@ Exit gate:
 ## Explicitly deferred setup
 
 - Vercel deployment and production domain configuration.
-- GitHub Actions or any other CI workflow.
+- Production-grade CI beyond the hello-world verification slice (secret-free CI scaffolding starts ahead of Phase 3).
 - Neon schema, Auth enablement or configuration, application database roles, connection installation, and API keys.
 - Microsoft Graph access and source-note import.
 - Object storage buckets or additional providers.
