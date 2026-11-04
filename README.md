@@ -1,8 +1,8 @@
 # Meal Planner
 
-Meal Planner is a planned web application for reducing the effort required to cook varied dinners at home. This repository currently contains planning and setup documentation only.
+Meal Planner is a planned web application for reducing the effort required to cook varied dinners at home. This repository contains planning documentation and a verification skeleton; there is no product functionality yet.
 
-> **Documentation-only status:** There is no application code, database schema, migration, executable API contract, CLI, MCP server, CI workflow, or deployment in this repository.
+> **Skeleton status:** The repository has CI workflows, a hosted `GET /api/health` function with a minimal OpenAPI contract test, a web client scaffold, a version-only `mealplanner` CLI, and a `mealplanner-mcp` stub that does not yet speak MCP. There is no recipe, planning, or draft functionality, database schema, migration, or live product deployment.
 
 ## Product direction
 
@@ -24,20 +24,26 @@ The application will keep user data private even though the source repository is
 - [Architecture plan](docs/architecture.md) — system boundaries, conceptual API shape, security posture, and verification checkpoints.
 - [Setup and delivery plan](docs/setup-and-delivery-plan.md) — provider setup, implementation phases, and release gates.
 - [CI/CD configuration plan](docs/ci-cd-plan.md) — branch protections, affected-component CI, deployment and release sequencing, configuration inventory, and verification steps.
+- [Repository layout](docs/repo-layout.md) — component map and check commands for the current skeleton.
+- [Local draft contract](docs/local-draft-contract.md) — the versioned contract for the local recipe-draft slice described below.
+
+## Local draft slice (in planning)
+
+The first planned feature work is a local staging workflow: an agent host (Codex CLI or Claude Code) creates, revises, and validates structured recipe drafts through a small stdio MCP server, and a minimal CLI inspects them. Drafts are stored as private JSON files on the local machine. This is a staging step before the hosted API and database are connected; the long-term hosted Postgres direction is unchanged. Every saved object stays a draft, and validation is structural only.
+
+The slice does not include weekly planning, serving scaling, shopping or prep lists, a cooking UI, delete or publish operations, hosted save, source-note import or automatic fetching of source links, or any LLM call by the application. Progress is tracked in the GitHub issues linked from epic #19; the contract is the source of truth until the code lands.
 
 ## Current boundaries
 
-This planning milestone intentionally excludes implementation. In particular, it does not include:
+The skeleton exists to prove build, CI, and release plumbing. Product features are not implemented. In particular, the repository does not yet include:
 
-- frontend or backend code;
+- recipe, planning, or feedback code in the web client or hosted API;
 - database tables, SQL, migrations, or seed data;
-- OpenAPI files, generated clients, or other executable contracts;
-- local-core, CLI, or MCP implementation;
-- GitHub Actions workflows;
-- a placeholder Vercel deployment; or
+- an application OpenAPI contract or generated clients (only the health-check contract exists);
+- the local recipe-draft core, store, MCP tools, or draft CLI commands; or
 - importing or modifying source recipes.
 
-Provider project creation is an organizational setup step only. No live application is deployed by this milestone.
+Provider project creation is an organizational setup step. Hosted deployment of the skeleton is governed by the [CI/CD plan](docs/ci-cd-plan.md); no product data is stored there.
 
 ## Public repository policy
 
