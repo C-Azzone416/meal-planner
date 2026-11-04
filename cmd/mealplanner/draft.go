@@ -186,17 +186,7 @@ func runValidate(args []string, e env) int {
 		fmt.Fprintf(e.stderr, "mealplanner: cannot read the input: %s\n", clean(err.Error(), false))
 		return exitFailure
 	}
-	var res draft.ValidationResult
-	if content, issues := draft.DecodeContent(raw); len(issues) > 0 {
-		res = draft.ValidationResult{
-			Scope:    draft.ValidationScope,
-			Errors:   issues,
-			Warnings: []draft.Issue{},
-			Notice:   draft.ValidationNotice,
-		}
-	} else {
-		res = draft.Validate(content)
-	}
+	res := draft.ValidateRaw(raw)
 	if asJSON {
 		writeJSON(e.stdout, map[string]any{"validation": res})
 	} else {
