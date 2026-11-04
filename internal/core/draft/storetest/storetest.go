@@ -300,6 +300,9 @@ func testListEmpty(t *testing.T, s draft.Store) {
 	if len(res.Drafts) != 0 || len(res.Skipped) != 0 {
 		t.Fatalf("empty store listed %d drafts, %d skipped", len(res.Drafts), len(res.Skipped))
 	}
+	if res.Drafts == nil {
+		t.Fatal("ListResult.Drafts must not be nil")
+	}
 }
 
 func testListAll(t *testing.T, s draft.Store) {

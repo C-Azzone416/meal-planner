@@ -248,8 +248,14 @@ func TestValidateLimits(t *testing.T) {
 	}{
 		{"title at limit", func(c *draft.Content) { c.Title = runes(draft.MaxTitleRunes, "a") }, ""},
 		{"title over limit", func(c *draft.Content) { c.Title = runes(draft.MaxTitleRunes+1, "a") }, "too_long"},
-		{"ingredients at limit", func(c *draft.Content) { c.Ingredients = make([]draft.Ingredient, draft.MaxIngredients); fill(c.Ingredients) }, ""},
-		{"ingredients over limit", func(c *draft.Content) { c.Ingredients = make([]draft.Ingredient, draft.MaxIngredients+1); fill(c.Ingredients) }, "too_many_items"},
+		{"ingredients at limit", func(c *draft.Content) {
+			c.Ingredients = make([]draft.Ingredient, draft.MaxIngredients)
+			fill(c.Ingredients)
+		}, ""},
+		{"ingredients over limit", func(c *draft.Content) {
+			c.Ingredients = make([]draft.Ingredient, draft.MaxIngredients+1)
+			fill(c.Ingredients)
+		}, "too_many_items"},
 		{"instructions at limit", func(c *draft.Content) { c.Instructions = steps(draft.MaxInstructions) }, ""},
 		{"instructions over limit", func(c *draft.Content) { c.Instructions = steps(draft.MaxInstructions + 1) }, "too_many_items"},
 		{"sources at limit", func(c *draft.Content) { c.Sources = sources(draft.MaxSources) }, ""},
