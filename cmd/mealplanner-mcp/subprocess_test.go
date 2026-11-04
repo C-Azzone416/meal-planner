@@ -552,6 +552,46 @@ func TestSubprocessPipedRequestsAreAnsweredBeforeEOF(t *testing.T) {
 	}
 }
 
+// printf '%s' of the last frame (no trailing newline) is still answered.
+func TestSubprocessFinalFrameWithoutNewlineIsAnswered(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	p := start(t, dir)
+	legacy := mcp.SupportedProtocolVersions()[1]
+	p.sendRaw(p.frameLine(1, "initialize", map[string]any{"protocolVersion": legacy, "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "pipe", "version": "0"}}))
+	p.sendRaw(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	if _, err := io.WriteString(p.stdin, createLine(p, 2, "No Newline")); err != nil {
+		t.Fatal(err)
+	}
+	_ = p.stdin.Close()
+	if code := p.waitExit(10 * time.Second); code != 0 {
+		t.Fatalf("exit code = %d, stderr:\n%s", code, p.stderr.String())
+	}
+	if !p.hasResponse(2) {
+		t.Fatalf("final frame not answered; frames: %v", p.snapshot())
+	}
+	p.assertStdoutClean()
+	if n := countDrafts(t, dir); n != 1 {
+		t.Fatalf("stored drafts = %d, want 1", n)
+	}
+}
+
+// An invalid id (1.5) is never awaited, so EOF does not wait out the grace period.
+func TestSubprocessInvalidIDDoesNotDelayEOF(t *testing.T) {
+	p := start(t, filepath.Join(t.TempDir(), "data"))
+	p.initialize(mcp.SupportedProtocolVersions()[1])
+	p.sendRaw(`{"jsonrpc":"2.0","id":1.5,"method":"tools/list","params":{}}`)
+	_ = p.stdin.Close()
+	started := time.Now()
+	code := p.waitExit(4 * time.Second)
+	if time.Since(started) > 3*time.Second {
+		t.Fatalf("exit took %v", time.Since(started))
+	}
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr:\n%s", code, p.stderr.String())
+	}
+	p.assertStdoutClean()
+}
+
 // A request still running when stdin reaches EOF completes and is answered.
 func TestSubprocessInFlightRequestCompletesAtEOF(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "data")
