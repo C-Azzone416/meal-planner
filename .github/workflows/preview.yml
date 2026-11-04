@@ -372,9 +372,10 @@ jobs:
       # deployment the alias points at was built from a commit that is a descendant of SHA on develop, a newer
       # commit already holds it and this step skips. Ancestry comes from an unauthenticated, blob-less fetch of
       # develop into a throwaway repository (the repository must stay public; if it goes private the fetch fails
-      # and so does the step). Nothing is ever checked out. After `vercel alias set`, poll the Vercel API until the
-      # alias points at THIS deployment ID, as deploy-production.yml does. Token only in this step's env, config to
-      # curl on stdin. `vercel alias set` runs like the deploy step's `vercel deploy`: same cwd and env, no flags.
+      # and so does the step). Nothing is ever checked out. The CLI's `alias set` first calls GET /v2/user, which
+      # project-scoped tokens cannot use, so assign through Vercel's documented deployment-alias REST endpoint.
+      # Then poll the alias API until it points at THIS deployment ID, as deploy-production.yml does. The token is
+      # only in this step's env and reaches curl only through a config on stdin.
       - name: Point stable alias at this deployment
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -457,7 +458,23 @@ jobs:
             fi
           fi
 
-          "$RUNNER_TEMP/vercel-cli/node_modules/.bin/vercel" alias set "$URL" "$alias" || { echo "::error::vercel alias set failed"; exit 1; }
+          # `vercel alias set` is not used: it performs a user lookup that rejects this project-scoped token.
+          # The request body contains only the public alias. Never print the response body because provider errors
+          # are not a stable sanitization boundary; report only the HTTP status and validate the confirmed alias.
+          payload=$(jq -nc --arg alias "$alias" '{alias: $alias}')
+          code=$(curl -sS --max-time 30 -K - -o alias-assignment.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data "$payload" \
+            "https://api.vercel.com/v2/deployments/${id}/aliases?${team}" \
+            <<< "header = \"Authorization: Bearer ${VERCEL_TOKEN}\"") || code=000
+          if [[ ! "$code" =~ ^2[0-9][0-9]$ ]]; then
+            echo "::error::Vercel alias assignment failed (HTTP $code)"
+            exit 1
+          fi
+          assigned=$(jq -r '.alias // empty' alias-assignment.json 2> /dev/null || true)
+          if [[ "${assigned,,}" != "$alias" ]]; then
+            echo "::error::Vercel alias assignment did not confirm the requested alias"
+            exit 1
+          fi
 
           for attempt in $(seq 1 18); do
             pointed=$(api "https://api.vercel.com/v4/aliases/${alias}?${team}" | jq -r '.deploymentId // empty') || pointed=""
