@@ -20,6 +20,7 @@ const (
 	CodeInvalidID        = "invalid_id"
 	CodeInvalidRevision  = "invalid_revision"
 	CodeInvalidLimit     = "invalid_limit"
+	CodeInvalidOffset    = "invalid_offset"
 	CodeInvalidDataDir   = "invalid_data_dir"
 	CodeExactlyOneOf     = "exactly_one_of"
 
@@ -40,10 +41,14 @@ const (
 
 	CodeIOError            = "io_error"
 	CodeLockTimeout        = "lock_timeout"
+	CodeCanceled           = "canceled" // context cancelled while waiting (for example on the lock)
 	CodeDataDirUnavailable = "data_dir_unavailable"
 
 	CodeInternal           = "internal"
 	CodeIDGenerationFailed = "id_generation_failed"
+	// CodeEncodedTooLarge is returned by a Store (category internal) when the encoded stored file
+	// would exceed MaxStoredFileBytes.
+	CodeEncodedTooLarge = "encoded_too_large"
 )
 
 // Error is the one error type shared by core, CLI and MCP. Every error returned by the Service and
