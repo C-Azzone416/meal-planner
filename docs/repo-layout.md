@@ -23,7 +23,7 @@ Planned for the local recipe-draft slice (not yet created; contract in [local-dr
 | `internal/mcpadapter/` | local tools | MCP tool definitions and handlers over the core |
 | `cmd/mealplanner-mcp/`, `cmd/mealplanner/` | local tools | Gain the MCP server and `draft validate/list/show` commands; `--version` behavior is preserved |
 
-Until CI path rules are added, `internal/localstore/` and `internal/mcpadapter/` are not matched by `.github/scripts/classify.sh` and fall into its fail-closed "unknown path" case, which runs every check.
+CI path classification for these directories is described in [local-draft-contract.md section 12.2](local-draft-contract.md#122-ci-classification-note).
 
 Additional checks:
 

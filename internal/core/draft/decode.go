@@ -18,7 +18,10 @@ import (
 // Exactly one JSON object is accepted: no trailing data, no duplicate keys at any depth, no unknown fields
 // (matched case-sensitively, unlike encoding/json), no values of the wrong JSON type, and no
 // invalid UTF-8. Absent and null are equivalent. On failure it returns the zero Content and
-// exactly one issue (the first problem in document order); semantic validation is then skipped.
+// exactly one issue; semantic validation is then skipped. Syntax errors, duplicate keys and
+// over-long nesting are found first, while the document is parsed; only if it parses are unknown
+// fields, wrong types and unpaired surrogate escapes reported, and then the first one in document
+// order.
 // On success the returned Content is in canonical form (see Service.Create) and has not been
 // validated: call Validate.
 //
@@ -36,7 +39,8 @@ func DecodeContent(raw []byte) (Content, []Issue) {
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
-	root, err := parseNode(dec, 0)
+	p := &parser{dec: dec, raw: raw}
+	root, err := p.parse(0)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			return fail(IssueMalformedJSON, "/", "the input is empty")
@@ -64,6 +68,24 @@ func DecodeContent(raw []byte) (Content, []Issue) {
 	return normalize(c), nil
 }
 
+// ValidateRaw decodes raw with DecodeContent and validates the result, so every adapter reports
+// the same thing for the same input. A decode failure is a ValidationResult whose only error is
+// the decode issue (no warnings, since semantic validation is skipped); otherwise it is Validate of
+// the decoded content. It never touches a store.
+func ValidateRaw(raw []byte) ValidationResult {
+	c, issues := DecodeContent(raw)
+	if len(issues) > 0 {
+		return ValidationResult{
+			Scope:             ValidationScope,
+			StructurallyValid: false,
+			Errors:            issues,
+			Warnings:          []Issue{},
+			Notice:            ValidationNotice,
+		}
+	}
+	return Validate(c)
+}
+
 type nodeKind uint8
 
 const (
@@ -78,10 +100,11 @@ const (
 // node is a parsed JSON value with object keys kept in document order. Scalars keep only what the
 // shape check needs.
 type node struct {
-	kind  nodeKind
-	num   string
-	keys  []string
-	items []node // array elements, or object values parallel to keys
+	kind       nodeKind
+	num        string
+	badUnicode bool // a string with an unpaired surrogate escape, which encoding/json would silently replace
+	keys       []string
+	items      []node // array elements, or object values parallel to keys
 }
 
 type duplicateKeyError struct{}
@@ -92,11 +115,32 @@ const maxDecodeDepth = 64
 
 var errTooDeep = errors.New("nesting too deep")
 
-func parseNode(dec *json.Decoder, depth int) (node, error) {
+// parser builds a node tree from the token stream. It also looks at the raw text of every string
+// token, because encoding/json replaces an unpaired \uD800-\uDFFF escape with U+FFFD and so hides it.
+type parser struct {
+	dec  *json.Decoder
+	raw  []byte
+	last int64 // input offset after the previous token
+}
+
+// token returns the next token and the raw text consumed for it (the token plus any delimiters and
+// whitespace before it).
+func (p *parser) token() (json.Token, []byte, error) {
+	tok, err := p.dec.Token()
+	if err != nil {
+		return nil, nil, err
+	}
+	end := p.dec.InputOffset()
+	seg := p.raw[p.last:end]
+	p.last = end
+	return tok, seg, nil
+}
+
+func (p *parser) parse(depth int) (node, error) {
 	if depth > maxDecodeDepth {
 		return node{}, errTooDeep
 	}
-	tok, err := dec.Token()
+	tok, seg, err := p.token()
 	if err != nil {
 		return node{}, err
 	}
@@ -106,8 +150,8 @@ func parseNode(dec *json.Decoder, depth int) (node, error) {
 		case '{':
 			n := node{kind: nodeObject}
 			seen := map[string]bool{}
-			for dec.More() {
-				kt, err := dec.Token()
+			for p.dec.More() {
+				kt, kseg, err := p.token()
 				if err != nil {
 					return node{}, err
 				}
@@ -119,27 +163,28 @@ func parseNode(dec *json.Decoder, depth int) (node, error) {
 					return node{}, &duplicateKeyError{}
 				}
 				seen[key] = true
-				v, err := parseNode(dec, depth+1)
+				_ = kseg // a key with an unpaired surrogate matches no field, so it is an unknown field
+				v, err := p.parse(depth + 1)
 				if err != nil {
 					return node{}, noEOF(err)
 				}
 				n.keys = append(n.keys, key)
 				n.items = append(n.items, v)
 			}
-			if _, err := dec.Token(); err != nil { // the closing brace
+			if _, _, err := p.token(); err != nil { // the closing brace
 				return node{}, noEOF(err)
 			}
 			return n, nil
 		case '[':
 			n := node{kind: nodeArray}
-			for dec.More() {
-				v, err := parseNode(dec, depth+1)
+			for p.dec.More() {
+				v, err := p.parse(depth + 1)
 				if err != nil {
 					return node{}, noEOF(err)
 				}
 				n.items = append(n.items, v)
 			}
-			if _, err := dec.Token(); err != nil {
+			if _, _, err := p.token(); err != nil {
 				return node{}, noEOF(err)
 			}
 			return n, nil
@@ -148,13 +193,61 @@ func parseNode(dec *json.Decoder, depth int) (node, error) {
 	case json.Number:
 		return node{kind: nodeNumber, num: t.String()}, nil
 	case string:
-		return node{kind: nodeString}, nil
+		return node{kind: nodeString, badUnicode: hasUnpairedSurrogate(seg)}, nil
 	case bool:
 		return node{kind: nodeBool}, nil
 	case nil:
 		return node{kind: nodeNull}, nil
 	}
 	return node{}, errors.New("unexpected token")
+}
+
+// hasUnpairedSurrogate reports whether the JSON text seg contains a \uD800-\uDBFF escape not
+// immediately followed by a \uDC00-\uDFFF escape, or a \uDC00-\uDFFF escape not preceded by one.
+func hasUnpairedSurrogate(seg []byte) bool {
+	hex4 := func(i int) (rune, bool) { // the four hex digits after "\u" at seg[i:i+2]
+		if i+6 > len(seg) || seg[i] != '\\' || seg[i+1] != 'u' {
+			return 0, false
+		}
+		var r rune
+		for _, c := range seg[i+2 : i+6] {
+			switch {
+			case c >= '0' && c <= '9':
+				r = r<<4 | rune(c-'0')
+			case c >= 'a' && c <= 'f':
+				r = r<<4 | rune(c-'a'+10)
+			case c >= 'A' && c <= 'F':
+				r = r<<4 | rune(c-'A'+10)
+			default:
+				return 0, false
+			}
+		}
+		return r, true
+	}
+	for i := 0; i < len(seg); {
+		if seg[i] != '\\' {
+			i++
+			continue
+		}
+		r, ok := hex4(i)
+		if !ok {
+			i += 2 // some other escape, or an escaped backslash
+			continue
+		}
+		switch {
+		case r >= 0xD800 && r <= 0xDBFF:
+			lo, ok := hex4(i + 6)
+			if !ok || lo < 0xDC00 || lo > 0xDFFF {
+				return true
+			}
+			i += 12
+		case r >= 0xDC00 && r <= 0xDFFF:
+			return true
+		default:
+			i += 6
+		}
+	}
+	return false
 }
 
 // noEOF turns a premature end of input inside a value into a syntax error, so only an empty
@@ -186,8 +279,8 @@ func jsonFields(t reflect.Type) map[string]reflect.Type {
 	return m
 }
 
-// checkShape verifies that n has the JSON shape of t, returning the first problem in document
-// order. null is accepted wherever a value is optional (anywhere except as a list element).
+// checkShape verifies that n has the JSON shape of t (and that its strings are valid text),
+// returning the first problem in document order. null is accepted wherever a value is optional (anywhere except as a list element).
 func checkShape(n node, t reflect.Type, path string) *Issue {
 	if n.kind == nodeNull {
 		return nil
@@ -227,6 +320,12 @@ func checkShape(n node, t reflect.Type, path string) *Issue {
 	case reflect.String:
 		if n.kind != nodeString {
 			return typeIssue(path, "a string")
+		}
+		if n.badUnicode {
+			if path == "" {
+				path = "/"
+			}
+			return &Issue{Code: IssueInvalidChars, Path: path, Message: "contains an unpaired surrogate escape, which is not valid text"}
 		}
 		return nil
 	case reflect.Int, reflect.Int64:

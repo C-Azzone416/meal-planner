@@ -310,12 +310,16 @@ func checkContext(ctx context.Context) error {
 	return nil
 }
 
-// asError returns err unchanged if it is or wraps a *Error, and otherwise wraps it as
-// internal/internal so every error the Service returns is a *Error.
+// asError returns err unchanged if it is or wraps a *Error. A bare context cancellation or
+// deadline becomes io/canceled, and anything else internal/internal, so every error the Service
+// returns is a *Error.
 func asError(err error) error {
 	var e *Error
 	if errors.As(err, &e) {
 		return err
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return &Error{Category: CategoryIO, Code: CodeCanceled, Message: "the request was cancelled before it was committed", Err: err}
 	}
 	return &Error{Category: CategoryInternal, Code: CodeInternal, Message: "unexpected internal error", Err: err}
 }

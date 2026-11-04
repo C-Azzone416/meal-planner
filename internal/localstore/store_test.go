@@ -807,3 +807,60 @@ func repeat(s string, n int) string {
 	}
 	return string(b)
 }
+
+// A draft file that disappears between ReadDir and the read is not an unreadable entry: it is not
+// reported as skipped, and the rest of the list is unaffected.
+func TestListSilentlySkipsFileThatVanishesMidList(t *testing.T) {
+	s, root := newStore(t)
+	for _, n := range []int{1, 2, 3} {
+		mustCreate(t, s, mkDraft(testID(n), 1, minimal(fmt.Sprint(n))))
+	}
+	s.hooks.afterReadDir = func() {
+		if err := os.Remove(filepath.Join(root, "drafts", testID(2)+".json")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := s.List(ctxb())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, d := range res.Drafts {
+		ids = append(ids, d.ID)
+	}
+	if !reflect.DeepEqual(ids, []string{testID(1), testID(3)}) {
+		t.Fatalf("listed %v", ids)
+	}
+	if len(res.Skipped) != 0 {
+		t.Fatalf("a vanished file was reported as skipped: %+v", res.Skipped)
+	}
+	// A genuinely unreadable entry is still reported.
+	s.hooks.afterReadDir = nil
+	if err := os.WriteFile(filepath.Join(root, "drafts", testID(4)+".json"), []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, _ = s.List(ctxb())
+	if len(res.Skipped) != 1 || res.Skipped[0].ID != testID(4) || res.Skipped[0].Category != draft.CategoryCorrupt {
+		t.Fatalf("skipped = %+v", res.Skipped)
+	}
+}
+
+// Writing into a read-only drafts directory gives a path-free message with a writability hint.
+func TestReadOnlyDraftsDirectoryHint(t *testing.T) {
+	skipIfRoot(t)
+	s, root := newStore(t)
+	mustCreate(t, s, mkDraft(testID(1), 1, minimal("one")))
+	dir := filepath.Join(root, "drafts")
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	err := s.Create(ctxb(), mkDraft(testID(2), 1, minimal("two")))
+	de := wantErr(t, err, draft.CategoryIO, draft.CodeIOError, root)
+	if !contains(de.Message, "check that it is writable") {
+		t.Fatalf("message lacks the hint: %q", de.Message)
+	}
+	if _, err := s.Get(ctxb(), testID(2)); err == nil {
+		t.Fatal("a failed create left a draft")
+	}
+}

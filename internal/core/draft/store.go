@@ -13,7 +13,7 @@ type StoreInfo struct {
 
 // ListResult is every readable draft plus a description of each entry that could not be read.
 type ListResult struct {
-	Drafts  []Draft
+	Drafts  []Draft // never nil
 	Skipped []SkippedEntry
 }
 
@@ -24,7 +24,8 @@ type ListResult struct {
 type Store interface {
 	// Create stores d as a new draft. d is fully formed (ID, revision 1, timestamps) and
 	// already validated by the service. It NEVER overwrites: if a draft with d.ID exists it
-	// returns conflict/already_exists. If the store already holds MaxStoredDrafts it returns
+	// returns conflict/already_exists. If the store already holds MaxStoredDrafts files matching the
+	// draft-file name pattern, readable or not (counted under the lock), it returns
 	// limit_exceeded/store_full. On any error nothing is left behind.
 	Create(ctx context.Context, d Draft) error
 
