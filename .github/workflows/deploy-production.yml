@@ -236,6 +236,23 @@ jobs:
       - name: Vercel build (production)
         run: npx --yes "vercel@${VERCEL_CLI_VERSION}" build --prod --yes
 
+      # `vercel build` leaves some files (the compiled Go binary lives in the runner's /tmp) outside the function
+      # directory and points at them from .vc-config.json `filePathMap`. The deploy runner does not have them, so
+      # copy them in before packaging and drop the map (see docs/runbooks/hosted-deploy.md). The script comes from
+      # the commit that defines this workflow, checked out after the build and next to no token.
+      - name: Check out materialize script only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: tools/deploy/materialize-output.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          path: .deploy-tools
+
+      - name: Make build output self-contained
+        run: .deploy-tools/tools/deploy/materialize-output.sh .
+
       - name: Package build output and record checksum
         id: pack
         run: |
@@ -317,6 +334,11 @@ jobs:
         run: |
           SAFE_EXTRACT_ALLOW_RE='^\.vercel/(output(/|$)|project\.json$)' \
             .deploy-tools/tools/deploy/safe-extract.sh "$RUNNER_TEMP/build/build-output.tar" "$RUNNER_TEMP/deploy-src"
+
+      # Defence in depth: the build job copies every `filePathMap` file into the output. A map left over would point
+      # at the build runner's disk, which this runner does not have, so refuse before the token is used.
+      - name: Check build output is self-contained
+        run: .deploy-tools/tools/deploy/materialize-output.sh --check "$RUNNER_TEMP/deploy-src"
 
       # No token here. Installed only after validation, outside the extraction directory and the npx cache.
       - name: Install pinned Vercel CLI
