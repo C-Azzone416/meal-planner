@@ -258,3 +258,112 @@ func TestDecodeThenValidateMatchesGoValue(t *testing.T) {
 		t.Fatalf("decoded:\n%+v\nwant:\n%+v", c, want)
 	}
 }
+
+// An unpaired surrogate escape would be silently replaced by U+FFFD by encoding/json, so it is
+// rejected instead. Pairs, escaped backslashes and a literal U+FFFD are fine.
+func TestDecodeContentUnpairedSurrogates(t *testing.T) {
+	bad := []struct{ name, in, path string }{
+		{"lone high", `{"title":"a\ud800b"}`, "/title"},
+		{"lone high at end", `{"title":"a\ud83d"}`, "/title"},
+		{"lone low", `{"title":"a\udc00b"}`, "/title"},
+		{"lone low upper case", `{"title":"a\uDFFFb"}`, "/title"},
+		{"high then ordinary escape", `{"title":"\ud800A"}`, "/title"},
+		{"high then high", `{"title":"\ud83d😀"}`, "/title"},
+		{"low then high (reversed pair)", `{"title":"\ude00\ud83d"}`, "/title"},
+		{"high then plain text", `{"title":"\ud83dx"}`, "/title"},
+		{"nested field", `{"title":"x","ingredients":[{"text":"ok"},{"text":"\ud800"}]}`, "/ingredients/1/text"},
+		{"deeper field", `{"title":"x","estimates":{"attention":{"value":"low","basis":{"kind":"sourced","note":"\udc00"}}}}`, "/estimates/attention/basis/note"},
+		{"after an escaped backslash", `{"title":"\\\ud800"}`, "/title"},
+	}
+	for _, tc := range bad {
+		t.Run(tc.name, func(t *testing.T) {
+			c, issues := draft.DecodeContent([]byte(tc.in))
+			if len(issues) != 1 || issues[0].Code != "invalid_characters" || issues[0].Path != tc.path {
+				t.Fatalf("got %+v, want invalid_characters at %s", issues, tc.path)
+			}
+			if !reflect.DeepEqual(c, draft.Content{}) {
+				t.Fatalf("a failed decode returned content: %+v", c)
+			}
+			if strings.Contains(issues[0].Message, "ud800") || strings.Contains(issues[0].Message, "\\u") {
+				t.Fatalf("message echoes input: %q", issues[0].Message)
+			}
+		})
+	}
+	good := []struct{ name, in, title string }{
+		{"valid pair", `{"title":"😀"}`, "😀"},
+		{"valid pair upper case", `{"title":"😀"}`, "😀"},
+		{"two pairs", `{"title":"😀🍲"}`, "😀🍲"},
+		{"pair among text", `{"title":"a😀b"}`, "a😀b"},
+		{"escaped backslash then u text", `{"title":"\\ud800"}`, `\ud800`},
+		{"ordinary escapes", `{"title":"éA\n"}`, "éA\n"},
+		{"literal replacement character is kept", "{\"title\":\"a�b\"}", "a�b"},
+		{"BMP edge just below the surrogates", `{"title":"퟿"}`, "퟿"},
+		{"BMP edge just above the surrogates", `{"title":""}`, ""},
+	}
+	for _, tc := range good {
+		t.Run(tc.name, func(t *testing.T) {
+			c, issues := draft.DecodeContent([]byte(tc.in))
+			if len(issues) != 0 {
+				t.Fatalf("issues: %+v", issues)
+			}
+			if c.Title != tc.title {
+				t.Fatalf("title = %q, want %q", c.Title, tc.title)
+			}
+		})
+	}
+	// A key with an unpaired surrogate is simply an unknown field.
+	if _, issues := draft.DecodeContent([]byte(`{"title":"x","a\ud800":1}`)); len(issues) != 1 || issues[0].Code != "unknown_field" {
+		t.Fatalf("key with surrogate: %+v", issues)
+	}
+	// Syntax errors and duplicate keys are found in the parse pass, before any shape or text check.
+	if _, issues := draft.DecodeContent([]byte(`{"title":"\ud800","title":"x"}`)); len(issues) != 1 || issues[0].Code != "duplicate_key" {
+		t.Fatalf("duplicate key before surrogate: %+v", issues)
+	}
+	if _, issues := draft.DecodeContent([]byte(`{"title":"\ud800","bogus":1}`)); len(issues) != 1 || issues[0].Code != "invalid_characters" {
+		t.Fatalf("first problem in document order: %+v", issues)
+	}
+	if _, issues := draft.DecodeContent([]byte(`{"bogus":1,"title":"\ud800"}`)); len(issues) != 1 || issues[0].Code != "unknown_field" {
+		t.Fatalf("first problem in document order: %+v", issues)
+	}
+}
+
+func TestValidateRaw(t *testing.T) {
+	// Decode failures: exactly the decode issue, no warnings, nothing else.
+	for name, in := range map[string]string{
+		"malformed": `{"title": `, "empty": ``, "unknown field": `{"title":"x","status":"reviewed"}`,
+		"duplicate key": `{"title":"a","title":"b"}`, "wrong type": `{"title":5}`, "surrogate": `{"title":"\ud800"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			res := draft.ValidateRaw([]byte(in))
+			_, issues := draft.DecodeContent([]byte(in))
+			want := draft.ValidationResult{Scope: draft.ValidationScope, StructurallyValid: false, Errors: issues, Warnings: []draft.Issue{}, Notice: draft.ValidationNotice}
+			if !reflect.DeepEqual(res, want) {
+				t.Fatalf("got %+v, want %+v", res, want)
+			}
+			if len(res.Errors) != 1 || res.Warnings == nil {
+				t.Fatalf("want one error and non-nil warnings: %+v", res)
+			}
+		})
+	}
+	// Decodable input: the same as Validate of the decoded content.
+	for _, name := range []string{"valid_minimal.json", "valid_full.json", "invalid_content.json"} {
+		raw := readFixture(t, name)
+		got := draft.ValidateRaw(raw)
+		want := draft.Validate(decodeFixture(t, name))
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: got %+v, want %+v", name, got, want)
+		}
+	}
+	res := draft.ValidateRaw(readFixture(t, "valid_minimal.json"))
+	if !res.StructurallyValid || len(res.Warnings) != 3 {
+		t.Errorf("minimal: %+v", res)
+	}
+	if res := draft.ValidateRaw(readFixture(t, "invalid_content.json")); res.StructurallyValid || len(res.Errors) != 7 {
+		t.Errorf("invalid: %+v", res)
+	}
+	// It encodes with [] lists like every other result.
+	b, _ := json.Marshal(draft.ValidateRaw([]byte(`{`)))
+	if !strings.Contains(string(b), `"warnings":[]`) || strings.Contains(string(b), "null") {
+		t.Errorf("encoded: %s", b)
+	}
+}
