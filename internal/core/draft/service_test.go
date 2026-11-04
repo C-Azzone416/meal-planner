@@ -952,3 +952,29 @@ func TestValidateIsPureOnService(t *testing.T) {
 		t.Fatal(res)
 	}
 }
+
+// A bare context error from a store (not wrapped in a *draft.Error) is a cancellation, not an
+// internal error.
+func TestBareContextErrorsMapToCanceled(t *testing.T) {
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded, fmt.Errorf("read: %w", context.DeadlineExceeded)} {
+		e := newEnv(t)
+		d := e.create(t, draft.Content{Title: "T"})
+		e.st.createErr, e.st.getErr, e.st.listErr, e.st.replaceErr = cause, cause, cause, cause
+		checks := map[string]func() error{
+			"Create": func() error { _, err := e.svc.Create(ctx, draft.Content{Title: "x"}); return err },
+			"Get":    func() error { _, err := e.svc.Get(ctx, d.ID); return err },
+			"List":   func() error { _, err := e.svc.List(ctx, draft.ListOptions{}); return err },
+			"Update": func() error { _, err := e.svc.Update(ctx, d.ID, 1, draft.Content{Title: "x"}); return err },
+		}
+		for name, f := range checks {
+			err := f()
+			wantErr(t, err, draft.CategoryIO, draft.CodeCanceled)
+			if !errors.Is(err, cause) {
+				t.Errorf("%s: the cause is lost for errors.Is", name)
+			}
+		}
+		e.st.getErr = nil
+		_, err := e.svc.Update(ctx, d.ID, 1, draft.Content{Title: "x"})
+		wantErr(t, err, draft.CategoryIO, draft.CodeCanceled)
+	}
+}

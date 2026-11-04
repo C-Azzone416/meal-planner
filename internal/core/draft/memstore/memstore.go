@@ -52,7 +52,7 @@ func (s *Store) Create(ctx context.Context, d draft.Draft) error {
 	if _, ok := s.damaged[d.ID]; ok {
 		return &draft.Error{Category: draft.CategoryConflict, Code: draft.CodeAlreadyExists, Message: "a draft with this id already exists"}
 	}
-	if len(s.drafts) >= draft.MaxStoredDrafts {
+	if len(s.drafts)+len(s.damaged) >= draft.MaxStoredDrafts { // every draft-named entry counts, readable or not
 		return &draft.Error{Category: draft.CategoryLimitExceeded, Code: draft.CodeStoreFull, Message: "the store already holds the maximum number of drafts"}
 	}
 	s.drafts[d.ID] = d.Clone()
