@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 	"strings"
 	"testing"
@@ -196,4 +198,185 @@ func waitPending(t *testing.T, g *frameGate, n int) {
 		}
 	}
 	t.Fatalf("gate never counted %d pending responses", n)
+}
+
+// stepReader yields scripted chunks. Between chunks it can wait for a condition, which lets a test
+// control exactly when bytes (such as a trailing newline) reach the gate.
+type stepReader struct {
+	steps []func() []byte // each returns the next chunk; nil with done set ends the stream
+	i     int
+}
+
+func (r *stepReader) Read(p []byte) (int, error) {
+	if r.i >= len(r.steps) {
+		return 0, io.EOF
+	}
+	b := r.steps[r.i]()
+	r.i++
+	return copy(p, b), nil
+}
+
+// fakeSDK reads from g like the SDK's JSON decoder: it answers a request as soon as the bytes it
+// has read form one complete JSON object, without waiting for the newline.
+func fakeSDK(g *frameGate, w io.Writer, answered chan<- struct{}) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var acc []byte
+		replied := false
+		buf := make([]byte, 4096)
+		for {
+			n, err := g.Read(buf)
+			acc = append(acc, buf[:n]...)
+			if !replied && json.Valid(bytes.TrimSpace(acc)) {
+				replied = true
+				io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{}}`+"\n")
+				close(answered)
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return done
+}
+
+// Regression: the request object is complete, its newline arrives only after the response was
+// written (or would have been). The gate must register the id before the SDK can consume the
+// request, otherwise the response is released before the request is counted and EOF waits out the
+// whole grace period.
+func TestGateRegistersBeforeTheSDKCanConsumeARequest(t *testing.T) {
+	g := newFrameGate(2 * time.Second)
+	answered := make(chan struct{})
+	src := &stepReader{steps: []func() []byte{
+		func() []byte { return []byte(`{"jsonrpc":"2.0","id":1,"method":"x"}`) },
+		func() []byte {
+			select {
+			case <-answered: // before the fix: the SDK answered from the unterminated object
+			case <-time.After(300 * time.Millisecond): // after the fix: it cannot until the newline
+			}
+			return []byte("\n")
+		},
+	}}
+	g.start(src)
+	start := time.Now()
+	done := fakeSDK(g, g.wrapWriter(io.Discard), answered)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("gate never delivered EOF")
+	}
+	if g.Expired() || time.Since(start) > time.Second {
+		t.Fatalf("EOF waited for the grace period (expired=%v, %v)", g.Expired(), time.Since(start))
+	}
+}
+
+func TestGateUnterminatedFinalFrameIsRegisteredBeforeDelivery(t *testing.T) {
+	g := newFrameGate(2 * time.Second)
+	answered := make(chan struct{})
+	g.start(&stepReader{steps: []func() []byte{
+		func() []byte { return []byte(`{"jsonrpc":"2.0","id":1,"method":"x"}`) }, // then EOF, no newline
+	}})
+	start := time.Now()
+	done := fakeSDK(g, g.wrapWriter(io.Discard), answered)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("gate never delivered EOF")
+	}
+	select {
+	case <-answered:
+	default:
+		t.Fatal("the unterminated final frame was never delivered")
+	}
+	if g.Expired() || time.Since(start) > time.Second {
+		t.Fatalf("expired=%v after %v", g.Expired(), time.Since(start))
+	}
+}
+
+func TestGateDeliversBytesUnmodified(t *testing.T) {
+	in := `{"jsonrpc":"2.0","id":1,"method":"x"}` + "\r\n" + `{"jsonrpc":"2.0","method":"n"}` + "\n" + `tail without newline`
+	g := newFrameGate(100 * time.Millisecond)
+	g.start(strings.NewReader(in))
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		io.WriteString(g.wrapWriter(io.Discard), `{"jsonrpc":"2.0","id":1,"result":{}}`+"\n")
+	}()
+	b, _ := io.ReadAll(g)
+	if string(b) != in {
+		t.Fatalf("got %q", b)
+	}
+}
+
+func TestGateLongLinesPassThroughUntracked(t *testing.T) {
+	long := `{"jsonrpc":"2.0","id":1,"method":"x","pad":"` + strings.Repeat("a", maxTrackedLine) + `"}` + "\n"
+	g := newFrameGate(5 * time.Second)
+	g.start(strings.NewReader(long + `{"jsonrpc":"2.0","id":2,"method":"y"}` + "\n"))
+	waitPending(t, g, 1)
+	io.WriteString(g.wrapWriter(io.Discard), `{"jsonrpc":"2.0","id":2,"result":{}}`+"\n")
+	done := readAllAsync(g)
+	select {
+	case b := <-done:
+		if !strings.HasPrefix(b, long) || g.Expired() {
+			t.Fatalf("len=%d expired=%v", len(b), g.Expired())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the gate waited on an untracked line (or on a tracked one after it)")
+	}
+}
+
+func TestGateStringIDsMatchAcrossEscapeSpellings(t *testing.T) {
+	cases := []struct{ name, req, resp string }{
+		{"escaped request, plain response", `"abc"`, `"abc"`},
+		{"plain request, escaped response", `"abc"`, `"abc"`},
+		{"slash escape", `"a\/b"`, `"a/b"`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			g := newFrameGate(5 * time.Second)
+			pr, pw := io.Pipe()
+			g.start(pr)
+			io.WriteString(pw, `{"jsonrpc":"2.0","id":`+c.req+`,"method":"x"}`+"\n")
+			waitPending(t, g, 1)
+			pw.Close()
+			done := readAllAsync(g)
+			io.WriteString(g.wrapWriter(io.Discard), `{"jsonrpc":"2.0","id":`+c.resp+`,"result":{}}`+"\n")
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("response id did not clear the request")
+			}
+			if g.Expired() {
+				t.Fatal("Expired")
+			}
+		})
+	}
+}
+
+func TestGateCancelledEscapedRequestID(t *testing.T) {
+	g := newFrameGate(5 * time.Second)
+	g.start(strings.NewReader(`{"jsonrpc":"2.0","id":"a","method":"x"}` + "\n" +
+		`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"a"}}` + "\n"))
+	select {
+	case <-readAllAsync(g):
+	case <-time.After(2 * time.Second):
+		t.Fatal("an equivalent cancellation id did not release the request")
+	}
+	if g.Expired() {
+		t.Fatal("Expired")
+	}
+}
+
+func TestGateStringAndNumberIDsStayDistinct(t *testing.T) {
+	for _, c := range []struct{ req, resp string }{{`"1"`, `1`}, {`1`, `"1"`}} {
+		g := newFrameGate(150 * time.Millisecond)
+		g.start(strings.NewReader(`{"jsonrpc":"2.0","id":` + c.req + `,"method":"x"}` + "\n"))
+		waitPending(t, g, 1)
+		done := readAllAsync(g)
+		io.WriteString(g.wrapWriter(io.Discard), `{"jsonrpc":"2.0","id":`+c.resp+`,"result":{}}`+"\n")
+		<-done
+		if !g.Expired() {
+			t.Fatalf("response id %s answered request id %s", c.resp, c.req)
+		}
+	}
 }
