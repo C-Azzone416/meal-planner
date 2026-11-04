@@ -42,6 +42,7 @@ jobs:
           bash tools/deploy/check-pulled-env_test.sh
           bash tools/deploy/safe-extract_test.sh
           bash tools/deploy/materialize-output_test.sh
+          bash tools/deploy/vercel-evidence_test.sh
 
       - name: Classify changed paths
         id: classify
@@ -242,8 +243,10 @@ jobs:
     uses: ./.github/workflows/preview.yml
     with:
       sha: ${{ github.sha }}
-    secrets:
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    # Match the proven Packed Smart pattern. The called workflow binds its
+    # deploy job to the preview environment, so its preview-only bypass secret
+    # is available there without copying it to repository scope.
+    secrets: inherit
 
   required:
     name: required

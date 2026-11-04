@@ -428,7 +428,7 @@ GitHub documents environments and deployment protection rules as available to pu
 - [ ] Hosted change builds an artifact/manifest for the pull-request SHA.
 - [ ] Preview migration uses only the Preview direct migrator role.
 - [ ] Preview runtime uses only the Preview pooled runtime role.
-- [ ] Smoke test targets the returned deployment URL and blocks the stable gate on failure.
+- [ ] Smoke tests target both the returned deployment URL and the stable Preview alias; each must return HTTP 200 with the expected health payload before the stable gate passes.
 - [ ] Docs-only/local-tool-only changes create no deployment.
 
 ### Production
