@@ -186,14 +186,14 @@ Deploy / preview
 CI / required
 ```
 
-The workflow is named `CI` (file `.github/workflows/ci.yml`) and the gate job's `name:` is exactly `required`. GitHub displays that as `CI / required`, but `CI / required` is only the display form: the actual check context a ruleset requires, and the job that release and production workflows look up (workflow file `ci.yml`, job `required`, on a push to `main`), is `required`. Do not rename the workflow, file, or job. Other jobs likewise report as `CI / <job>`. `preview` is a call to the reusable `preview.yml`; its smoke test runs inside that workflow and `required` treats the `preview` job result as covering both Preview and Preview smoke. Pull requests cancel stale runs; push runs are keyed on the SHA and are never cancelled, so every `develop`/`main` commit keeps CI evidence.
+The workflow is named `CI` (file `.github/workflows/ci.yml`) and the gate job's `name:` is exactly `required`. GitHub displays that as `CI / required`, but `CI / required` is only the display form: the actual check context a ruleset requires, and the job that release and production workflows look up (workflow file `ci.yml`, job `required`, on a push to `main`), is `required`. Do not rename the workflow, file, or job. Other jobs likewise report as `CI / <job>`. `preview` is a call to the reusable `preview.yml`; its smoke test runs inside that workflow and `required` treats the `preview` job result as covering the whole Preview run, including its smoke steps (there is no separate smoke job). Pull requests cancel stale runs; push runs are keyed on the SHA and are never cancelled, so every `develop`/`main` commit keeps CI evidence.
 
 Only `CI / required` is configured as a ruleset requirement. It runs unconditionally (`always()`), needs every job, and must:
 
 1. read the classifier output;
 2. inspect every selected job result;
 3. accept an intentional skip only when the classifier did not select that job;
-4. require Preview and Preview smoke success when `hosted_preview` is selected (it is never selected for a pull request, so `preview` is then skipped and accepted);
+4. require `preview` success (deploy and smoke steps) when `hosted_preview` is selected (it is never selected for a pull request, so `preview` is then skipped and accepted);
 5. fail on cancellation, failure, missing output, unknown result, or an unexpectedly skipped selected job (and fail if `affected` itself did not succeed, or if a job ran although it was not selected); and
 6. publish a human-readable selection/result summary.
 

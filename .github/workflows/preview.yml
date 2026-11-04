@@ -443,7 +443,7 @@ jobs:
               git -C "$gd" init -q
               fetched=false
               for _ in 1 2 3; do
-                if git -C "$gd" fetch -q --filter=blob:none --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/develop; then fetched=true; break; fi
+                if GIT_TERMINAL_PROMPT=0 git -C "$gd" fetch -q --filter=blob:none --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/develop; then fetched=true; break; fi
                 sleep 5
               done
               $fetched || { echo "::error::could not fetch develop history to compare commits"; exit 1; }

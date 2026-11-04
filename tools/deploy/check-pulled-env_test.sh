@@ -170,6 +170,18 @@ for l in 2 3 4 5; do check "b64: line $l unparseable" has b64 "line $l: unparsea
 check "b64: uppercase base64 not printed" lacks b64 "$b64"
 check "b64: no name printed" lacks b64 "unexpected variable name"
 
+# An uppercase-only line ending in a single `=` is a valid name with an empty value, so it is reported as a name
+# (documented in the script header).
+printf 'ABCDEF=\n' > "$work/upper-eq.env"
+expect 1 upper-eq "$work/upper-eq.env"
+check "upper-eq: reported as a name" has upper-eq "unexpected variable name ABCDEF"
+
+# Linear scan: a large file must finish quickly (the old head-trimming loop was quadratic).
+{ printf 'VERCEL_ENV=preview\n'; for ((i = 0; i < 20000; i++)); do printf 'VERCEL_X%s="v"\n' "$i"; done; } > "$work/big.env"
+SECONDS=0
+expect 0 big "$work/big.env"
+check "big: 20000 lines in under 20s" test "$SECONDS" -lt 20
+
 # F2: a lone CR is a line break to dotenv, so it must not hide a second assignment.
 printf 'VERCEL_ENV=preview\rDATABASE_URL=%s\n' "$secret" > "$work/lone-cr.env"
 expect 1 lone-cr "$work/lone-cr.env"
@@ -180,7 +192,7 @@ expect 1 lone-cr-quoted "$work/lone-cr-quoted.env"
 # NUL bytes fail closed.
 printf 'VERCEL_ENV=preview\0\nVERCEL_URL=%s\n' "$secret" > "$work/nul.env"
 expect 1 nul "$work/nul.env"
-check "nul: reported" has nul "contains NUL bytes"
+check "nul: reported" has nul "contains NUL bytes or changed while being read"
 
 # F3: a .env* entry that is a symlink or not a regular file fails closed, as does a symlinked argument.
 mkdir -p "$work/links/.vercel" "$work/links/.vercel/.env.d"
