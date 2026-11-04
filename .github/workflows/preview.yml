@@ -10,7 +10,7 @@
 #   deploy token, fresh runner, only tools/deploy checked out. Verifies the tarball checksum, validates and
 #          extracts it with safe-extract.sh, then only runs `vercel deploy --prebuilt`, then the smoke test
 #          (the `preview` environment's optional VERCEL_AUTOMATION_BYPASS_SECRET is read here, in step env only),
-#          then, if vars.PREVIEW_ALIAS is set, points that stable alias at the new deployment.
+#          then, if vars.PREVIEW_ALIAS is set, points that stable alias at the new deployment and smokes it too.
 name: Preview
 
 on:
@@ -19,9 +19,6 @@ on:
       sha:
         description: Full 40-character commit SHA to deploy as Preview
         type: string
-        required: true
-    secrets:
-      VERCEL_TOKEN:
         required: true
     outputs:
       url:
@@ -327,8 +324,8 @@ jobs:
           path: preview-manifest.json
           if-no-files-found: error
 
-      # Runs in this job so it can read the `preview` environment secret directly; a caller cannot pass
-      # environment secrets into a reusable workflow. The secret is only in this step's env, the token only in the deploy step's.
+      # Runs in this environment-bound job so the inherited secrets context resolves the preview-only
+      # bypass secret. The secret is only in this step's env; the token is only in deploy/alias step env.
       - name: Smoke test /api/health
         env:
           URL: ${{ steps.deploy.outputs.url }}
@@ -479,4 +476,47 @@ jobs:
             sleep 10
           done
           echo "::error::the alias $alias did not point at deployment $id within 3 minutes"
+          exit 1
+
+      # Proves the user-facing stable Preview URL serves the deployment after the alias API check.
+      # Deployment Protection stays enabled, so this smoke uses the preview-only automation bypass.
+      - name: Smoke test stable Preview alias /api/health
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          if [[ -z "${PREVIEW_ALIAS:-}" ]]; then
+            echo "::notice::PREVIEW_ALIAS is not set; skipping the stable alias smoke"
+            exit 0
+          fi
+          alias="${PREVIEW_ALIAS,,}"
+          [[ "$alias" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ && "$alias" == *.* && "$alias" != *..* ]] || { echo "::error::PREVIEW_ALIAS must be a hostname such as meal-planner-develop.vercel.app"; exit 1; }
+          code=000
+          for attempt in $(seq 1 12); do
+            rm -f body.json
+            code=$(
+              { if [[ -n "${VERCEL_AUTOMATION_BYPASS_SECRET:-}" ]]; then
+                  printf 'header = "x-vercel-protection-bypass: %s"\n' "$VERCEL_AUTOMATION_BYPASS_SECRET"
+                fi; } |
+                curl -sS -K - -o body.json -w '%{http_code}' --max-time 15 "https://$alias/api/health"
+            ) || code=000
+            if [[ "$code" == 200 ]] && jq -e '.status == "ok"' body.json > /dev/null 2>&1; then
+              body=$(head -c 2048 body.json | LC_ALL=C tr -cd '[:print:]\n' | tr -d '`')
+              {
+                echo "## Stable Preview smoke"
+                echo
+                echo "- GET https://$alias/api/health -> 200 (attempt $attempt)"
+                echo '```'
+                echo "$body"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "attempt $attempt: HTTP $code"
+            sleep 10
+          done
+          if [[ "$code" =~ ^3[0-9][0-9]$ || "$code" == 401 || "$code" == 403 ]]; then
+            if [[ -n "${VERCEL_AUTOMATION_BYPASS_SECRET:-}" ]]; then bypass="the bypass secret was sent"; else bypass="no bypass secret is configured"; fi
+            echo "::error::HTTP $code: Vercel Deployment Protection may be blocking the stable Preview alias (401/403 or a redirect to a login page; $bypass)"
+          fi
+          echo "::error::stable Preview smoke failed for https://$alias/api/health"
           exit 1
