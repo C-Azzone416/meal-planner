@@ -79,7 +79,7 @@ Keep the host's normal trust and approval prompts on. `draft_update` replaces a 
 
 Tools: `server_status`, `draft_create`, `draft_list`, `draft_get`, `draft_update`, `draft_validate`. A typical session: `draft_create`, `draft_get` (to read the revision), `draft_update` with that `expected_revision` and the complete content, `draft_validate` for candidates. A stale `expected_revision` returns `conflict`/`revision_mismatch` with the current revision; read the draft again and retry. Create is not idempotent: if a create fails ambiguously, call `draft_list` before retrying, because repeating it makes another draft.
 
-**Ordering note.** A host may issue several tool calls at once. The server answers each call independently, and responses are matched to requests by JSON-RPC `id`, not by arrival order. Do not issue a dependent call (for example an update that needs the revision from a read) until the read has returned.
+**Ordering and protocol notes.** A host may issue several tool calls at once, and they can complete out of order: match each response to its request by JSON-RPC `id`, never by arrival order. Do not issue a dependent call (for example an update that needs the revision from a read) until the read has returned. Request ids must be unique among pending requests: reusing the id of a request that has not been answered makes the server wait out its 5-second shutdown grace and exit with status 1 at end of input. An id that is a boolean, array or object, or a line on stdin that is not valid JSON, ends the session. Stock hosts do none of this; it matters only to people writing their own client.
 
 Inspect the same drafts from a terminal:
 
@@ -96,14 +96,14 @@ echo '{"title": "Synthetic Toast"}' | /ABSOLUTE/PATH/mealplanner draft validate 
 
 ## Verification record
 
-Method: non-interactive runs, each host given only a per-run server definition (no `codex mcp add`, no `claude mcp add`, no edits to host configuration), a freshly created temporary data directory, and synthetic prompts. Each run drives real tool calls; registration was never counted as a pass. Only the host's own transcript and the CLI's reading of the same directory are used as evidence.
+Method: non-interactive runs (first against an earlier build, then repeated with identical results against the final binaries named below), each host given only a per-run server definition (no `codex mcp add`, no `claude mcp add`, no edits to host configuration), a freshly created temporary data directory, and synthetic prompts. Each run drives real tool calls; registration was never counted as a pass. Only the host's own transcript and the CLI's reading of the same directory are used as evidence.
 
 | Item | Value |
 | --- | --- |
 | Date | 2026-11-04 |
 | OS | macOS 27.0.1 (build 26A434), darwin/arm64 |
 | Go | go1.26.5 darwin/arm64 |
-| Server and CLI source | merge of `feat/mcp-adapter` (9a6c307) and `feat/cli-drafts` (1534fff); built from commit 767c3a3 |
+| Server and CLI source | merge of `feat/mcp-adapter` (b923bfd) and `feat/cli-drafts` (1534fff); the binaries used for the final host runs were built from commit 75a7af6 |
 | `mealplanner-mcp --version` | `mealplanner-mcp dev` |
 | MCP Go SDK | `github.com/modelcontextprotocol/go-sdk` v1.8.0 |
 | Codex CLI | codex-cli 0.164.0, model `gpt-6-luna` |
