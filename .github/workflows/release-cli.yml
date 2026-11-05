@@ -63,12 +63,12 @@ jobs:
             echo "::error::Tag '$TAG' not found in the repository"
             exit 1
           fi
-          git fetch --no-tags origin main:refs/remotes/origin/main
+          GIT_TERMINAL_PROMPT=0 git fetch --no-tags origin main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "$sha" refs/remotes/origin/main; then
             echo "::error::Tagged commit $sha is not reachable from origin/main"
             exit 1
           fi
-          tools/release/verify-ci.sh "$sha"
+          tools/deploy/verify-ci.sh "$sha"
           prerelease=false
           [ "${version%%.*}" = "0" ] && prerelease=true
           {
