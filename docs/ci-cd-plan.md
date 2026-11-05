@@ -186,14 +186,14 @@ Deploy / preview
 CI / required
 ```
 
-The workflow is named `CI` (file `.github/workflows/ci.yml`) and the gate job's `name:` is exactly `required`. GitHub displays that as `CI / required`, but `CI / required` is only the display form: the actual check context a ruleset requires, and the job that release and production workflows look up (workflow file `ci.yml`, job `required`, on a push to `main`), is `required`. Do not rename the workflow, file, or job. Other jobs likewise report as `CI / <job>`. `preview` is a call to the reusable `preview.yml`; its smoke test runs inside that workflow and `required` treats the `preview` job result as covering both Preview and Preview smoke. Pull requests cancel stale runs; push runs are keyed on the SHA and are never cancelled, so every `develop`/`main` commit keeps CI evidence.
+The workflow is named `CI` (file `.github/workflows/ci.yml`) and the gate job's `name:` is exactly `required`. GitHub displays that as `CI / required`, but `CI / required` is only the display form: the actual check context a ruleset requires, and the job that release and production workflows look up (workflow file `ci.yml`, job `required`, on a push to `main`), is `required`. Do not rename the workflow, file, or job. Other jobs likewise report as `CI / <job>`. `preview` is a call to the reusable `preview.yml`; its smoke test runs inside that workflow and `required` treats the `preview` job result as covering the whole Preview run, including its smoke steps (there is no separate smoke job). Pull requests cancel stale runs; push runs are keyed on the SHA and are never cancelled, so every `develop`/`main` commit keeps CI evidence.
 
 Only `CI / required` is configured as a ruleset requirement. It runs unconditionally (`always()`), needs every job, and must:
 
 1. read the classifier output;
 2. inspect every selected job result;
 3. accept an intentional skip only when the classifier did not select that job;
-4. require Preview and Preview smoke success when `hosted_preview` is selected (it is never selected for a pull request, so `preview` is then skipped and accepted);
+4. require `preview` success (deploy and smoke steps) when `hosted_preview` is selected (it is never selected for a pull request, so `preview` is then skipped and accepted);
 5. fail on cancellation, failure, missing output, unknown result, or an unexpectedly skipped selected job (and fail if `affected` itself did not succeed, or if a job ran although it was not selected); and
 6. publish a human-readable selection/result summary.
 
@@ -224,7 +224,7 @@ Preview is **Approved** only for a push to `develop` with hosted changes. Pull r
 
 Preview runs in a separate trusted job (`preview`, a reusable-workflow call), tied to the exact pushed commit SHA (`github.sha`). It starts only after `affected` and every selected check succeeded. Preview secrets (`VERCEL_TOKEN`) are referenced only by that job and never reach the `pull_request` check jobs.
 
-**Stable alias.** If the repository variable `PREVIEW_ALIAS` is set (a hostname such as `meal-planner-develop.vercel.app`), the deploy job, after the smoke test passes, (only if it would move forward: skipped when the alias already serves a descendant commit on `develop`, found by an unauthenticated blob-less fetch of `develop`; a failed comparison fails the step) runs `vercel alias set`, then polls `/v4/aliases/<alias>` until it points at this deployment ID (up to 3 minutes) and records it in the step summary. Unset means the step is skipped with a notice. The step fails if the alias is one of the project's production domains; that guard covers this project's domains only and fails closed above 100 domains. The fetch requires the repository to stay public.
+**Stable alias.** If the repository variable `PREVIEW_ALIAS` is set (a hostname such as `meal-planner-develop.vercel.app`), the deploy job, after the smoke test passes, assigns it with Vercel's `POST /v2/deployments/{id}/aliases` API (only if it would move forward: skipped when the alias already serves a descendant commit on `develop`, found by an unauthenticated blob-less fetch of `develop`; a failed comparison fails the step), then polls `/v4/aliases/<alias>` until it points at this deployment ID (up to 3 minutes) and records it in the step summary. The REST path avoids the CLI's unsupported user lookup for project-scoped tokens; the token is sent only through curl config on stdin and the response must confirm the requested alias. Unset means the step is skipped with a notice. The step fails if the alias is one of the project's production domains; that guard covers this project's domains only and fails closed above 100 domains. The fetch requires the repository to stay public.
 
 ### One-time first-deployment bootstrap
 
@@ -428,7 +428,7 @@ GitHub documents environments and deployment protection rules as available to pu
 - [ ] Hosted change builds an artifact/manifest for the pull-request SHA.
 - [ ] Preview migration uses only the Preview direct migrator role.
 - [ ] Preview runtime uses only the Preview pooled runtime role.
-- [ ] Smoke test targets the returned deployment URL and blocks the stable gate on failure.
+- [ ] Smoke tests target both the returned deployment URL and the stable Preview alias; each must return HTTP 200 with the expected health payload before the stable gate passes.
 - [ ] Docs-only/local-tool-only changes create no deployment.
 
 ### Production

@@ -10,7 +10,7 @@
 #   deploy token, fresh runner, only tools/deploy checked out. Verifies the tarball checksum, validates and
 #          extracts it with safe-extract.sh, then only runs `vercel deploy --prebuilt`, then the smoke test
 #          (the `preview` environment's optional VERCEL_AUTOMATION_BYPASS_SECRET is read here, in step env only),
-#          then, if vars.PREVIEW_ALIAS is set, points that stable alias at the new deployment.
+#          then, if vars.PREVIEW_ALIAS is set, points that stable alias at the new deployment and smokes it too.
 name: Preview
 
 on:
@@ -19,9 +19,6 @@ on:
       sha:
         description: Full 40-character commit SHA to deploy as Preview
         type: string
-        required: true
-    secrets:
-      VERCEL_TOKEN:
         required: true
     outputs:
       url:
@@ -177,6 +174,23 @@ jobs:
       - name: Vercel build (preview)
         run: npx --yes "vercel@${VERCEL_CLI_VERSION}" build --target=preview --yes
 
+      # `vercel build` leaves some files (the compiled Go binary lives in the runner's /tmp) outside the function
+      # directory and points at them from .vc-config.json `filePathMap`. The deploy runner does not have them, so
+      # copy them in before packaging and drop the map (see docs/runbooks/hosted-deploy.md). The script comes from
+      # the commit that defines this workflow, checked out after the build and next to no token.
+      - name: Check out materialize script only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: tools/deploy/materialize-output.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          path: .deploy-tools
+
+      - name: Make build output self-contained
+        run: .deploy-tools/tools/deploy/materialize-output.sh .
+
       - name: Package build output and record checksum
         id: pack
         run: |
@@ -261,6 +275,11 @@ jobs:
           SAFE_EXTRACT_ALLOW_RE='^\.vercel/(output(/|$)|project\.json$)' \
             .deploy-tools/tools/deploy/safe-extract.sh "$RUNNER_TEMP/build/build-output.tar" "$RUNNER_TEMP/deploy-src"
 
+      # Defence in depth: the build job copies every `filePathMap` file into the output. A map left over would point
+      # at the build runner's disk, which this runner does not have, so refuse before the token is used.
+      - name: Check build output is self-contained
+        run: .deploy-tools/tools/deploy/materialize-output.sh --check "$RUNNER_TEMP/deploy-src"
+
       # No token here. Installed only after validation, outside the extraction directory and the npx cache.
       - name: Install pinned Vercel CLI
         run: |
@@ -305,8 +324,8 @@ jobs:
           path: preview-manifest.json
           if-no-files-found: error
 
-      # Runs in this job so it can read the `preview` environment secret directly; a caller cannot pass
-      # environment secrets into a reusable workflow. The secret is only in this step's env, the token only in the deploy step's.
+      # Runs in this environment-bound job so the inherited secrets context resolves the preview-only
+      # bypass secret. The secret is only in this step's env; the token is only in deploy/alias step env.
       - name: Smoke test /api/health
         env:
           URL: ${{ steps.deploy.outputs.url }}
@@ -353,9 +372,10 @@ jobs:
       # deployment the alias points at was built from a commit that is a descendant of SHA on develop, a newer
       # commit already holds it and this step skips. Ancestry comes from an unauthenticated, blob-less fetch of
       # develop into a throwaway repository (the repository must stay public; if it goes private the fetch fails
-      # and so does the step). Nothing is ever checked out. After `vercel alias set`, poll the Vercel API until the
-      # alias points at THIS deployment ID, as deploy-production.yml does. Token only in this step's env, config to
-      # curl on stdin. `vercel alias set` runs like the deploy step's `vercel deploy`: same cwd and env, no flags.
+      # and so does the step). Nothing is ever checked out. The CLI's `alias set` first calls GET /v2/user, which
+      # project-scoped tokens cannot use, so assign through Vercel's documented deployment-alias REST endpoint.
+      # Then poll the alias API until it points at THIS deployment ID, as deploy-production.yml does. The token is
+      # only in this step's env and reaches curl only through a config on stdin.
       - name: Point stable alias at this deployment
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -423,7 +443,7 @@ jobs:
               git -C "$gd" init -q
               fetched=false
               for _ in 1 2 3; do
-                if git -C "$gd" fetch -q --filter=blob:none --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/develop; then fetched=true; break; fi
+                if GIT_TERMINAL_PROMPT=0 git -C "$gd" fetch -q --filter=blob:none --no-tags "https://github.com/${GITHUB_REPOSITORY}.git" refs/heads/develop; then fetched=true; break; fi
                 sleep 5
               done
               $fetched || { echo "::error::could not fetch develop history to compare commits"; exit 1; }
@@ -438,7 +458,23 @@ jobs:
             fi
           fi
 
-          "$RUNNER_TEMP/vercel-cli/node_modules/.bin/vercel" alias set "$URL" "$alias" || { echo "::error::vercel alias set failed"; exit 1; }
+          # `vercel alias set` is not used: it performs a user lookup that rejects this project-scoped token.
+          # The request body contains only the public alias. Never print the response body because provider errors
+          # are not a stable sanitization boundary; report only the HTTP status and validate the confirmed alias.
+          payload=$(jq -nc --arg alias "$alias" '{alias: $alias}')
+          code=$(curl -sS --max-time 30 -K - -o alias-assignment.json -w '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' --data "$payload" \
+            "https://api.vercel.com/v2/deployments/${id}/aliases?${team}" \
+            <<< "header = \"Authorization: Bearer ${VERCEL_TOKEN}\"") || code=000
+          if [[ ! "$code" =~ ^2[0-9][0-9]$ ]]; then
+            echo "::error::Vercel alias assignment failed (HTTP $code)"
+            exit 1
+          fi
+          assigned=$(jq -r '.alias // empty' alias-assignment.json 2> /dev/null || true)
+          if [[ "${assigned,,}" != "$alias" ]]; then
+            echo "::error::Vercel alias assignment did not confirm the requested alias"
+            exit 1
+          fi
 
           for attempt in $(seq 1 18); do
             pointed=$(api "https://api.vercel.com/v4/aliases/${alias}?${team}" | jq -r '.deploymentId // empty') || pointed=""
@@ -457,4 +493,47 @@ jobs:
             sleep 10
           done
           echo "::error::the alias $alias did not point at deployment $id within 3 minutes"
+          exit 1
+
+      # Proves the user-facing stable Preview URL serves the deployment after the alias API check.
+      # Deployment Protection stays enabled, so this smoke uses the preview-only automation bypass.
+      - name: Smoke test stable Preview alias /api/health
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          if [[ -z "${PREVIEW_ALIAS:-}" ]]; then
+            echo "::notice::PREVIEW_ALIAS is not set; skipping the stable alias smoke"
+            exit 0
+          fi
+          alias="${PREVIEW_ALIAS,,}"
+          [[ "$alias" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ && "$alias" == *.* && "$alias" != *..* ]] || { echo "::error::PREVIEW_ALIAS must be a hostname such as meal-planner-develop.vercel.app"; exit 1; }
+          code=000
+          for attempt in $(seq 1 12); do
+            rm -f body.json
+            code=$(
+              { if [[ -n "${VERCEL_AUTOMATION_BYPASS_SECRET:-}" ]]; then
+                  printf 'header = "x-vercel-protection-bypass: %s"\n' "$VERCEL_AUTOMATION_BYPASS_SECRET"
+                fi; } |
+                curl -sS -K - -o body.json -w '%{http_code}' --max-time 15 "https://$alias/api/health"
+            ) || code=000
+            if [[ "$code" == 200 ]] && jq -e '.status == "ok"' body.json > /dev/null 2>&1; then
+              body=$(head -c 2048 body.json | LC_ALL=C tr -cd '[:print:]\n' | tr -d '`')
+              {
+                echo "## Stable Preview smoke"
+                echo
+                echo "- GET https://$alias/api/health -> 200 (attempt $attempt)"
+                echo '```'
+                echo "$body"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "attempt $attempt: HTTP $code"
+            sleep 10
+          done
+          if [[ "$code" =~ ^3[0-9][0-9]$ || "$code" == 401 || "$code" == 403 ]]; then
+            if [[ -n "${VERCEL_AUTOMATION_BYPASS_SECRET:-}" ]]; then bypass="the bypass secret was sent"; else bypass="no bypass secret is configured"; fi
+            echo "::error::HTTP $code: Vercel Deployment Protection may be blocking the stable Preview alias (401/403 or a redirect to a login page; $bypass)"
+          fi
+          echo "::error::stable Preview smoke failed for https://$alias/api/health"
           exit 1

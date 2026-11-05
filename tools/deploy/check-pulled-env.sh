@@ -13,7 +13,9 @@
 # in the value, single-, double- (with backslash escapes) and backtick-quoted values that may span lines,
 # and CRLF line endings. Anything else fails closed (exit 1): an unterminated quote, a lone CR (a line break to
 # dotenv, so it could hide a second assignment), a NUL byte, a name that is not uppercase [A-Z][A-Z0-9_]* (so a
-# stray base64 line is never printed as a "name"), an unquoted value starting with `=` (base64 padding), and a
+# mixed-case or lowercase stray base64 line is never printed as a "name"; a line that is only uppercase letters,
+# digits and underscores followed by a single `=`, like `ABCDEF=`, parses as a name with an empty value and IS
+# printed if it is outside the allowlist), an unquoted value starting with `=` (base64 padding), and a
 # .env* path that is a symlink or not a regular file. A file that cannot be opened or read exits 2.
 #
 # Allowlist: VERCEL_* plus these exact names, each listed as a system environment variable at
@@ -104,14 +106,13 @@ check_file() {
   bytes=$(wc -c < "$f") || usage_error "cannot read $f"
   content=$(cat -- "$f" && printf x) || usage_error "cannot read $f"
   content=${content%x}
-  if ((${#content} != bytes)); then # command substitution drops NUL bytes
-    echo "::error::check-pulled-env: $f contains NUL bytes: unparseable"
+  if ((${#content} != bytes)); then # command substitution drops NUL bytes; a file that changed during the read differs too
+    echo "::error::check-pulled-env: $f contains NUL bytes or changed while being read: unparseable"
     bad=1
   fi
 
-  while [[ -n $content ]]; do
-    line=${content%%$'\n'*}
-    if [[ $line == "$content" ]]; then content=""; else content=${content#*$'\n'}; fi
+  # A here-string read keeps this linear; trimming the head of $content for every line was quadratic.
+  while IFS= read -r line || [[ -n $line ]]; do
     n=$((n + 1))
     line=${line%$'\r'}
     if [[ $line == *$'\r'* ]]; then # a lone CR is a line break to dotenv
@@ -147,7 +148,7 @@ check_file() {
       =*) unparseable "$n" ;; # base64 padding, not a value Vercel writes
       *) record "$name" "$n" "${value%"${value##*[![:space:]]}"}" ;; # unquoted: trailing whitespace is not part of it
     esac
-  done
+  done <<< "$content"
   [[ -z $q ]] || unparseable "$start" # unterminated quoted value
 
   if ((bad)); then

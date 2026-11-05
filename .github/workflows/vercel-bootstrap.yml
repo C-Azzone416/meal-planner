@@ -199,6 +199,23 @@ jobs:
       - name: Vercel build (production)
         run: npx --yes "vercel@${VERCEL_CLI_VERSION}" build --target=production --yes
 
+      # `vercel build` leaves some files (the compiled Go binary lives in the runner's /tmp) outside the function
+      # directory and points at them from .vc-config.json `filePathMap`. The deploy runner does not have them, so
+      # copy them in before packaging and drop the map (see docs/runbooks/hosted-deploy.md). The script comes from
+      # the commit that defines this workflow, checked out after the build and next to no token.
+      - name: Check out materialize script only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: tools/deploy/materialize-output.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          path: .deploy-tools
+
+      - name: Make build output self-contained
+        run: .deploy-tools/tools/deploy/materialize-output.sh .
+
       - name: Package build output and record checksum
         id: pack
         run: |
@@ -261,6 +278,11 @@ jobs:
           SAFE_EXTRACT_ALLOW_RE='^\.vercel/(output(/|$)|project\.json$)' \
             .deploy-tools/tools/deploy/safe-extract.sh "$RUNNER_TEMP/build/build-output.tar" "$RUNNER_TEMP/deploy-src"
 
+      # Defence in depth: the build job copies every `filePathMap` file into the output. A map left over would point
+      # at the build runner's disk, which this runner does not have, so refuse before the token is used.
+      - name: Check build output is self-contained
+        run: .deploy-tools/tools/deploy/materialize-output.sh --check "$RUNNER_TEMP/deploy-src"
+
       # No token here. Installed only after validation, outside the extraction directory and the npx cache.
       - name: Install pinned Vercel CLI
         run: |
@@ -296,37 +318,36 @@ jobs:
           proj=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}?${team}")
           # An unknown production-domain list weakens the no-alias check, so say so loudly.
           domains_note=""
-          if doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?${team}"); then
-            if [[ "$(jq '(.domains // []) | length' <<< "$doms" 2> /dev/null || echo 0)" == 0 ]]; then
+          domains_inventory_complete=false
+          if doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?limit=100&${team}"); then
+            if ! domains_count=$(jq -er 'if (.domains | type) == "array" then (.domains | length) else error("domains is not an array") end' <<< "$doms"); then
+              domains_note="project domains response is INVALID: the no-production-domain-alias check could not verify the inventory"
+            elif [[ "$(jq -r '.pagination.next // empty' <<< "$doms")" != "" ]]; then
+              domains_note="project domains list is PAGINATED: the no-production-domain-alias check could not verify the complete inventory"
+            elif [[ "$domains_count" == 0 ]]; then
               domains_note="project domains list is EMPTY: the no-production-domain-alias check could not compare against any project domain"
+            else
+              domains_inventory_complete=true
             fi
           else
             doms='{"domains":[]}'
             domains_note="project domains fetch FAILED: the no-production-domain-alias check could not compare against any project domain"
           fi
           if [[ -n "$domains_note" ]]; then
-            echo "::warning::$domains_note"
+            echo "::error::$domains_note"
           fi
           prod_names=$(jq -n --argjson p "$proj" --argjson d "$doms" \
             '[($p.targets.production.alias // [])[], ($p.alias // [])[]?.domain?, ($d.domains // [])[].name] | map(select(. != null)) | unique')
-          evidence=$(jq --argjson prod_names "$prod_names" --arg expect "$EXPECT_TARGET" --arg sha "$SHA" --arg pid "$VERCEL_PROJECT_ID" '
-            {id, url, projectId, target, readyState, aliasAssigned, alias: (.alias // []), meta: (.meta // {}),
-             production_domains_known: $prod_names,
-             checks: {
-               project_matches: (.projectId == $pid),
-               sha_matches: ((.meta.sourceSha // "") == $sha),
-               target_matches: (if $expect == "production" then .target == "production" else (.target == null or .target == "preview") end),
-               ready: (.readyState == "READY"),
-               no_production_domain_alias: (((.alias // []) | map(select(. as $a | $prod_names | index($a))) | length) == 0),
-               no_alias_at_all_when_production: (if $expect == "production" then ((.alias // []) | length) == 0 and (.aliasAssigned // false) == false else true end)
-             }}' <<< "$dep")
+          evidence=$(jq --argjson prod_names "$prod_names" --argjson inventory_complete "$domains_inventory_complete" \
+            --arg expect "$EXPECT_TARGET" --arg sha "$SHA" --arg pid "$VERCEL_PROJECT_ID" \
+            -f .deploy-tools/tools/deploy/vercel-evidence.jq <<< "$dep")
           {
             echo "## Bootstrap evidence: ${EXPECT_TARGET} deployment"
             echo
             echo "- Source SHA: \`$SHA\`"
             echo "- Unique URL: $URL"
             if [[ -n "$domains_note" ]]; then
-              echo "- **WARNING: $domains_note.** Check the production domains in the Vercel dashboard before enabling Preview."
+              echo "- **ERROR: $domains_note.** Verification fails closed until the production-domain inventory is known."
             else
               echo "- Project domains fetched and non-empty (production domains known: $(jq -c . <<< "$prod_names"))"
             fi
@@ -504,6 +525,23 @@ jobs:
       - name: Vercel build (preview)
         run: npx --yes "vercel@${VERCEL_CLI_VERSION}" build --target=preview --yes
 
+      # `vercel build` leaves some files (the compiled Go binary lives in the runner's /tmp) outside the function
+      # directory and points at them from .vc-config.json `filePathMap`. The deploy runner does not have them, so
+      # copy them in before packaging and drop the map (see docs/runbooks/hosted-deploy.md). The script comes from
+      # the commit that defines this workflow, checked out after the build and next to no token.
+      - name: Check out materialize script only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: tools/deploy/materialize-output.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          path: .deploy-tools
+
+      - name: Make build output self-contained
+        run: .deploy-tools/tools/deploy/materialize-output.sh .
+
       - name: Package build output and record checksum
         id: pack
         run: |
@@ -564,6 +602,11 @@ jobs:
           SAFE_EXTRACT_ALLOW_RE='^\.vercel/(output(/|$)|project\.json$)' \
             .deploy-tools/tools/deploy/safe-extract.sh "$RUNNER_TEMP/build/build-output.tar" "$RUNNER_TEMP/deploy-src"
 
+      # Defence in depth: the build job copies every `filePathMap` file into the output. A map left over would point
+      # at the build runner's disk, which this runner does not have, so refuse before the token is used.
+      - name: Check build output is self-contained
+        run: .deploy-tools/tools/deploy/materialize-output.sh --check "$RUNNER_TEMP/deploy-src"
+
       # No token here. Installed only after validation, outside the extraction directory and the npx cache.
       - name: Install pinned Vercel CLI
         run: |
@@ -599,36 +642,36 @@ jobs:
           proj=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}?${team}")
           # An unknown production-domain list weakens the no-alias check, so say so loudly.
           domains_note=""
-          if doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?${team}"); then
-            if [[ "$(jq '(.domains // []) | length' <<< "$doms" 2> /dev/null || echo 0)" == 0 ]]; then
+          domains_inventory_complete=false
+          if doms=$(api "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/domains?limit=100&${team}"); then
+            if ! domains_count=$(jq -er 'if (.domains | type) == "array" then (.domains | length) else error("domains is not an array") end' <<< "$doms"); then
+              domains_note="project domains response is INVALID: the no-production-domain-alias check could not verify the inventory"
+            elif [[ "$(jq -r '.pagination.next // empty' <<< "$doms")" != "" ]]; then
+              domains_note="project domains list is PAGINATED: the no-production-domain-alias check could not verify the complete inventory"
+            elif [[ "$domains_count" == 0 ]]; then
               domains_note="project domains list is EMPTY: the no-production-domain-alias check could not compare against any project domain"
+            else
+              domains_inventory_complete=true
             fi
           else
             doms='{"domains":[]}'
             domains_note="project domains fetch FAILED: the no-production-domain-alias check could not compare against any project domain"
           fi
           if [[ -n "$domains_note" ]]; then
-            echo "::warning::$domains_note"
+            echo "::error::$domains_note"
           fi
           prod_names=$(jq -n --argjson p "$proj" --argjson d "$doms" \
             '[($p.targets.production.alias // [])[], ($p.alias // [])[]?.domain?, ($d.domains // [])[].name] | map(select(. != null)) | unique')
-          evidence=$(jq --argjson prod_names "$prod_names" --arg expect "$EXPECT_TARGET" --arg sha "$SHA" --arg pid "$VERCEL_PROJECT_ID" '
-            {id, url, projectId, target, readyState, aliasAssigned, alias: (.alias // []), meta: (.meta // {}),
-             production_domains_known: $prod_names,
-             checks: {
-               project_matches: (.projectId == $pid),
-               sha_matches: ((.meta.sourceSha // "") == $sha),
-               target_matches: (if $expect == "production" then .target == "production" else (.target == null or .target == "preview") end),
-               ready: (.readyState == "READY"),
-               no_production_domain_alias: (((.alias // []) | map(select(. as $a | $prod_names | index($a))) | length) == 0)
-             }}' <<< "$dep")
+          evidence=$(jq --argjson prod_names "$prod_names" --argjson inventory_complete "$domains_inventory_complete" \
+            --arg expect "$EXPECT_TARGET" --arg sha "$SHA" --arg pid "$VERCEL_PROJECT_ID" \
+            -f .deploy-tools/tools/deploy/vercel-evidence.jq <<< "$dep")
           {
             echo "## Bootstrap evidence: ${EXPECT_TARGET} deployment"
             echo
             echo "- Source SHA: \`$SHA\`"
             echo "- Unique URL: $URL"
             if [[ -n "$domains_note" ]]; then
-              echo "- **WARNING: $domains_note.** Check the production domains in the Vercel dashboard before enabling Preview."
+              echo "- **ERROR: $domains_note.** Verification fails closed until the production-domain inventory is known."
             else
               echo "- Project domains fetched and non-empty (production domains known: $(jq -c . <<< "$prod_names"))"
             fi

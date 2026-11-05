@@ -5,7 +5,7 @@
 #
 # Rule (fails closed on anything else): the newest ci.yml run for this SHA from a push to main must be
 # completed, and its job named exactly `required` (displayed as "CI / required") must have concluded success.
-# tools/release/verify-ci.sh (cli-release) implements the same rule; the two copies can be merged later.
+# Also used by the CLI release workflow (release-cli.yml).
 set -euo pipefail
 
 sha=${1:?usage: verify-ci.sh <full-sha>}

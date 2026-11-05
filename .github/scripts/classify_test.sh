@@ -32,10 +32,14 @@ check "hosted api"               "api/health.go"                 "hosted_go loca
 check "hosted pkg"               "hosted/x/y.go"        "hosted_go local_go contracts integration"
 check "vercel.json"              "vercel.json"                   "hosted_go local_go contracts integration"
 check "hosted preview on"        "api/health.go"                 "hosted_go local_go contracts integration hosted_preview" $T
-check "cli only"                 "cmd/mealplan/main.go"          "local_go contracts integration"
-check "cli preview never"        "cmd/mealplan/main.go"          "local_go contracts integration" $T
-check "mcp only"                 "cmd/mealplan-mcp/main.go"      "local_go contracts integration"
+check "cli only"                 "cmd/mealplanner/main.go"          "local_go contracts integration"
+check "cli preview never"        "cmd/mealplanner/main.go"          "local_go contracts integration" $T
+check "mcp only"                 "cmd/mealplanner-mcp/main.go"      "local_go contracts integration"
 check "persistence/migration"    "hosted/db/migrations/001.sql" "hosted_go local_go contracts integration"
+check "localstore"               "internal/localstore/store.go"  "local_go contracts integration"
+check "localstore preview never" "internal/localstore/store.go"  "local_go contracts integration" $T
+check "mcpadapter"                "internal/mcpadapter/server.go" "local_go contracts integration"
+check "mcpadapter preview never" "internal/mcpadapter/server.go" "local_go contracts integration" $T
 check "core"                     "internal/core/recipe.go"       "hosted_go local_go contracts integration"
 check "core preview on"          "internal/core/recipe.go"       "hosted_go local_go contracts integration hosted_preview" $T
 check "contracts"                "contracts/openapi.yaml"        "web hosted_go local_go contracts integration"
@@ -51,7 +55,7 @@ check "nested md is not docs"    "web/README.md"                 "web"
 check "nested md outside docs"   "api/README.md"                 "hosted_go local_go contracts integration"
 check "unknown nested md"        "tools/README.md"               "web hosted_go local_go contracts integration"
 check "docs + web"               $'docs/a.md\nweb/x.ts'          "web"
-check "web + cli"                $'web/x.ts\ncmd/a/main.go'      "web local_go contracts integration"
+check "web + cli"                $'web/x.ts\ncmd/mealplanner/main.go'      "web local_go contracts integration"
 check "docs + unknown"           $'docs/a.md\nfoo.bin'           "web hosted_go local_go contracts integration"
 check "empty diff"               ""                              ""
 check "CLASSIFY_ALL"             ""                              "web hosted_go local_go contracts integration" CLASSIFY_ALL=true

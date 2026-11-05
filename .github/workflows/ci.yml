@@ -41,6 +41,8 @@ jobs:
           bash .github/scripts/gate_test.sh
           bash tools/deploy/check-pulled-env_test.sh
           bash tools/deploy/safe-extract_test.sh
+          bash tools/deploy/materialize-output_test.sh
+          bash tools/deploy/vercel-evidence_test.sh
 
       - name: Classify changed paths
         id: classify
@@ -154,7 +156,7 @@ jobs:
         run: |
           test -z "$(gofmt -l .)"
           go vet ./...
-      - run: go test ./internal/core/... ./cmd/...
+      - run: go test ./internal/core/... ./internal/localstore/... ./internal/mcpadapter/... ./cmd/...
       - run: go build ./cmd/...
       - name: Cross-compile
         env:
@@ -197,7 +199,7 @@ jobs:
         env:
           # Disposable CI-only container on the runner: synthetic data, never reachable
           # from outside the job, destroyed afterwards. Not a real credential.
-          POSTGRES_PASSWORD: ci-disposable-password
+          POSTGRES_PASSWORD: ci-only-not-a-secret
           POSTGRES_DB: mealplanner_test
         ports:
           - 5432:5432
@@ -208,7 +210,7 @@ jobs:
           --health-retries 10
     env:
       # Points at the disposable service container above; see the comment there.
-      TEST_DATABASE_URL: postgres://postgres:ci-disposable-password@localhost:5432/mealplanner_test?sslmode=disable
+      TEST_DATABASE_URL: postgres://postgres:ci-only-not-a-secret@localhost:5432/mealplanner_test?sslmode=disable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -241,8 +243,10 @@ jobs:
     uses: ./.github/workflows/preview.yml
     with:
       sha: ${{ github.sha }}
-    secrets:
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    # Match the proven Packed Smart pattern. The called workflow binds its
+    # deploy job to the preview environment, so its preview-only bypass secret
+    # is available there without copying it to repository scope.
+    secrets: inherit
 
   required:
     name: required

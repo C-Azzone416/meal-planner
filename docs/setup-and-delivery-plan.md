@@ -149,6 +149,12 @@ Implementation must preserve the behavior above even if the eventual workflow us
 
 ## Delivery phases
 
+### Local draft slice (staging, ahead of the numbered phases)
+
+A local-only recipe-draft workflow (Go core, private JSON file store, stdio MCP adapter, minimal CLI) is being built before Phase 2 platform verification so the agent-host path can be exercised without hosted dependencies. It is a staging workflow: the hosted Postgres direction and the phases below are unchanged, and it reuses the existing build, CI, and release plumbing. The contract and decisions are in the [local draft contract](local-draft-contract.md).
+
+Non-goals: planning features, hosted draft save, Neon schema or Auth, hosted MCP, source-note import or automatic source fetching, any LLM call by the application, a reviewed or approved state, and new provider credentials. The local slice does not satisfy any numbered phase's exit gate.
+
 ### Phase 0: planning and provider organization
 
 Deliver the sanitized documents in this repository and create empty provider projects. Do not implement or deploy the application.
