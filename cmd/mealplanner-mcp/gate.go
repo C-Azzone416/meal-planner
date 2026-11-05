@@ -225,10 +225,23 @@ func (g *frameGate) Read(p []byte) (int, error) {
 	}
 }
 
-// Stop ends input as if stdin had reached EOF: bytes already read are still delivered and answered
-// (within the grace period), nothing further is read.
+// Stop ends input as if stdin had reached EOF: bytes already read, including a final unterminated
+// frame, are still registered, delivered and answered (within the grace period); nothing further is
+// read.
 func (g *frameGate) Stop() {
 	g.mu.Lock()
+	if !g.stopped && !g.skipLine && len(g.lineBuf) > 0 {
+		// Same as EOF: a partial line that is already a complete JSON value is a frame whose newline
+		// has not arrived. Register it, then deliver it with the newline added so the SDK can
+		// process it now. A partial line that is not valid JSON is dropped (a truncated frame would
+		// only make the SDK fail), and nothing waits on it.
+		if b := g.lineBuf; json.Valid(b) {
+			g.line(b)
+			g.queue.Write(b)
+			g.queue.WriteByte('\n')
+		}
+		g.lineBuf = nil
+	}
 	g.stopped = true
 	g.cond.Broadcast()
 	g.mu.Unlock()

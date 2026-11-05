@@ -623,6 +623,30 @@ func TestSubprocessSIGTERMWhileIdleExitsZero(t *testing.T) {
 	p.assertStdoutClean()
 }
 
+// A complete request with no trailing newline, stdin left open, then SIGTERM: it is still answered.
+func TestSubprocessSIGTERMAnswersAnUnterminatedRequest(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	p := start(t, dir)
+	p.initialize(mcp.SupportedProtocolVersions()[1])
+	if _, err := io.WriteString(p.stdin, createLine(p, 80, "Unterminated")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond) // stdin stays open; the bytes have been read
+	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if code := p.waitExit(10 * time.Second); code != 0 {
+		t.Fatalf("exit code = %d, stderr:\n%s", code, p.stderr.String())
+	}
+	if !p.hasResponse(80) {
+		t.Fatalf("the unterminated request was not answered; frames: %v", p.snapshot())
+	}
+	p.assertStdoutClean()
+	if n := countDrafts(t, dir); n != 1 {
+		t.Fatalf("stored drafts = %d, want 1", n)
+	}
+}
+
 func TestSubprocessSIGTERMWhileBusyAnswersThenExitsZero(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "data")
 	p := startBin(t, stallBinPath, dir, "MEALPLANNER_TEST_STALL_MS=800")
