@@ -1,6 +1,6 @@
 # Repository Layout
 
-Component map for the verification skeleton. All commands run from the repository root.
+Component map for the verification skeleton. All commands run from the repository root. The skeleton contains no product functionality yet; the local recipe-draft slice described below is planned, not present.
 
 | Path | Component | Purpose | Check commands |
 | --- | --- | --- | --- |
@@ -13,6 +13,17 @@ Component map for the verification skeleton. All commands run from the repositor
 | `contracts/` | contract | `openapi.yaml` (OpenAPI 3.1) and `contract_test.go` checking the hosted handler against it | `go test ./contracts/...` |
 | `web/` | web client | Vite + React + TypeScript; Node version in `web/.nvmrc` | `npm ci --prefix web`, then `npm run --prefix web lint` / `typecheck` / `test` / `build` (output `web/dist`) |
 | `vercel.json` | hosted deploy | Builds `web/` to static `web/dist`; `api/*.go` are detected as Go functions | none locally |
+
+Planned for the local recipe-draft slice (not yet created; contract in [local-draft-contract.md](local-draft-contract.md)):
+
+| Path | Component | Purpose |
+| --- | --- | --- |
+| `internal/core/draft/` (+ `memstore/`, `storetest/`) | local core | Draft model, structural validation, service, persistence interface, in-memory store, store conformance suite |
+| `internal/localstore/` | local tools | Versioned JSON file store, data-directory resolution, cross-process lock |
+| `internal/mcpadapter/` | local tools | MCP tool definitions and handlers over the core |
+| `cmd/mealplanner-mcp/`, `cmd/mealplanner/` | local tools | Gain the MCP server and `draft validate/list/show` commands; `--version` behavior is preserved |
+
+CI path classification for these directories is described in [local-draft-contract.md section 12.2](local-draft-contract.md#122-ci-classification-note).
 
 Additional checks:
 

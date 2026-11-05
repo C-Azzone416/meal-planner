@@ -2,7 +2,7 @@
 
 Status: planning baseline, 2026-11-01
 
-This document describes architectural direction and conceptual boundaries. It deliberately contains no executable API schema, database schema, migration, handler, or generated client.
+This document describes architectural direction and conceptual boundaries. It deliberately contains no executable API schema, database schema, migration, handler, or generated client. The repository now has a verification skeleton (see [repository layout](repo-layout.md)); the components below remain proposals unless stated otherwise.
 
 ## Settled architecture
 
@@ -83,7 +83,18 @@ The following conceptual modules are proposed, not yet created:
 | CLI adapter | Human-invoked commands and readable output | Duplicate domain logic |
 | MCP adapter | Narrow tool definitions and request mapping | Broad account access or unrestricted data mutation |
 
-Final directory names are intentionally deferred until the first implementation slice establishes real dependency boundaries.
+Final directory names for the hosted API and web client are intentionally deferred until their first implementation slice establishes real dependency boundaries. The local draft slice below fixes names for its own packages.
+
+## Local draft staging slice
+
+Before the hosted API and database are connected, a first slice proves the local-tool path with no hosted dependency: the reusable local core (`internal/core/draft`) defines recipe drafts, structural validation and a persistence interface; a file store (`internal/localstore`) keeps versioned JSON drafts in a private local data directory; and thin adapters expose it through a stdio MCP server (`cmd/mealplanner-mcp`) and a small CLI (`cmd/mealplanner`). The authoritative description is the [local draft contract](local-draft-contract.md).
+
+Boundaries of this slice:
+
+- It is a **staging workflow**, not a replacement for the hosted application database. Postgres remains the long-term home of structured recipes. The local store is one implementation of the core's persistence interface; a later implementation can submit drafts through the authenticated draft API without changing the adapters.
+- Every locally saved object is a draft. There is no reviewed or approved state, so this slice does not satisfy Checkpoint E, which concerns a *reviewed* draft traveling through the core and the authenticated API.
+- It makes no network calls: no hosted API, no OneNote/Microsoft Graph, no automatic fetching of source links, and no LLM call by the application. The agent host supplies candidate content.
+- Non-goals: planning, scaling, shopping or prep lists, delete or publish operations, import, sync, and any new provider credentials.
 
 ## Proposed contract shape
 
