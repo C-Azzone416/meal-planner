@@ -327,12 +327,15 @@ func TestGateLongLinesPassThroughUntracked(t *testing.T) {
 
 func TestGateStringIDsMatchAcrossEscapeSpellings(t *testing.T) {
 	cases := []struct{ name, req, resp string }{
-		{"escaped request, plain response", `"abc"`, `"abc"`},
-		{"plain request, escaped response", `"abc"`, `"abc"`},
+		{"escaped request, plain response", `"\u0061bc"`, `"abc"`},
+		{"plain request, escaped response", `"abc"`, `"\u0061\u0062c"`},
 		{"slash escape", `"a\/b"`, `"a/b"`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			if !strings.Contains(c.req+c.resp, `\`) {
+				t.Fatal("fixture has no backslash escape")
+			}
 			g := newFrameGate(5 * time.Second)
 			pr, pw := io.Pipe()
 			g.start(pr)
@@ -355,8 +358,12 @@ func TestGateStringIDsMatchAcrossEscapeSpellings(t *testing.T) {
 
 func TestGateCancelledEscapedRequestID(t *testing.T) {
 	g := newFrameGate(5 * time.Second)
-	g.start(strings.NewReader(`{"jsonrpc":"2.0","id":"a","method":"x"}` + "\n" +
-		`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"a"}}` + "\n"))
+	in := `{"jsonrpc":"2.0","id":"\u0061","method":"x"}` + "\n" +
+		`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"a"}}` + "\n"
+	if !strings.Contains(in, `\u0061`) {
+		t.Fatal("fixture has no backslash escape")
+	}
+	g.start(strings.NewReader(in))
 	select {
 	case <-readAllAsync(g):
 	case <-time.After(2 * time.Second):
@@ -379,4 +386,51 @@ func TestGateStringAndNumberIDsStayDistinct(t *testing.T) {
 			t.Fatalf("response id %s answered request id %s", c.resp, c.req)
 		}
 	}
+}
+
+// Regression: a complete request read without a trailing newline, stdin still open, then a signal
+// (Stop). The request must be registered, delivered to the SDK and answered before shutdown.
+func TestGateStopRegistersAndDeliversAnUnterminatedRequest(t *testing.T) {
+	g := newFrameGate(2 * time.Second)
+	pr, pw := io.Pipe()
+	g.start(pr)
+	go io.WriteString(pw, `{"jsonrpc":"2.0","id":1,"method":"x"}`) // no newline; the pipe stays open
+	time.Sleep(150 * time.Millisecond)                             // the pump has read it
+	g.Stop()
+	answered := make(chan struct{})
+	done := fakeSDK(g, g.wrapWriter(io.Discard), answered)
+	select {
+	case <-answered:
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("the unterminated request was never delivered to the SDK after Stop")
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no EOF after the request was answered")
+	}
+	if g.Expired() {
+		t.Fatal("Expired")
+	}
+	pw.Close()
+}
+
+// A partial line that is not a complete JSON value is neither registered nor delivered on Stop, so
+// the SDK is not handed a truncated frame.
+func TestGateStopDropsAnIncompletePartialLine(t *testing.T) {
+	g := newFrameGate(time.Second)
+	pr, pw := io.Pipe()
+	g.start(pr)
+	go io.WriteString(pw, `{"jsonrpc":"2.0","id":1,"meth`)
+	time.Sleep(150 * time.Millisecond)
+	g.Stop()
+	select {
+	case b := <-readAllAsync(g):
+		if b != "" || g.Expired() {
+			t.Fatalf("got %q expired=%v", b, g.Expired())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop with an incomplete partial line did not reach EOF")
+	}
+	pw.Close()
 }
