@@ -390,18 +390,20 @@ type WriteResult struct {
 
 `Validate(Content) ValidationResult` is a pure function: no store, no clock, no I/O. `DecodeContent([]byte) (Content, []Issue)` is the single strict decoder (field names exact-case, unknown fields rejected, duplicate keys at any level rejected as `duplicate_key` by a token-level pre-pass before `encoding/json` decodes, exactly one JSON value, no trailing data, empty input is `malformed_json`) used by CLI file/stdin input and by the MCP adapter, so that both produce identical results for identical input. The MCP adapter receives the `draft` argument as raw JSON and passes it unmodified to `DecodeContent`; it never decodes it into a typed struct first. After decoding, nil lists are normalized to `[]` and all-absent `Estimates`/`PhaseEstimates` to nil. If decoding fails, the decode issue is the whole error list and semantic validation is skipped (the decoder reports at most one issue). Otherwise `Validate` reports **all** findings in schema order (field order, then list index), capped at 50 errors and 50 warnings (`truncated: true` if capped).
 
+`DecodeContent` as built: it also rejects raw input over `MaxInputBytes` as `input_too_large`, as defense in depth for callers that did not check; a root that is not a JSON object, or is `null`, is `invalid_type` at `/`; invalid UTF-8, and nesting more than 64 levels below the root, are `malformed_json`; an unpaired surrogate escape (a `\uD800`–`\uDFFF` escape that does not form a valid pair) is `invalid_characters` at the field's path, because `encoding/json` would otherwise silently replace it with U+FFFD. Syntax errors, duplicate keys and nesting depth are found while the document is parsed, so they are reported before unknown fields, wrong types and surrogate escapes, which are then reported first-in-document-order. `draft.ValidateRaw(raw []byte) ValidationResult` runs `DecodeContent` and then `Validate`; on a decode failure it returns a result whose only error is the decode issue, with empty warnings and `scope` and `notice` set. The CLI `draft validate` and the MCP `draft_validate` both use it, so they report identical results for identical input.
+
 ### 5.1 Errors (block the save; nothing is written)
 
 | Code | Meaning |
 | --- | --- |
-| `malformed_json` | Not parseable as a single JSON object (including empty input, trailing data). |
-| `input_too_large` | Raw input exceeds 256 KiB (checked by CLI input readers before decoding). |
-| `duplicate_key` | The same key appears twice in one JSON object, at any level. The issue category is `invalid_argument`. |
+| `malformed_json` | Not parseable as a single JSON value (including empty input, trailing data), not valid UTF-8, or nested more than 64 levels below the root. |
+| `input_too_large` | Raw input exceeds 256 KiB (checked by CLI input readers before decoding, and again by `DecodeContent`). |
+| `duplicate_key` | The same key appears twice in one JSON object, at any level. The issue category is `invalid_argument`. The core uses it only as an issue code inside `validation_failed`, for a duplicate key inside the draft content; the MCP adapter also uses it as a top-level code (section 8). |
 | `unknown_field` | A field not in this schema (names are exact-case), including server-assigned fields. |
-| `invalid_type` | Wrong JSON type for a field. |
+| `invalid_type` | Wrong JSON type for a field, or a root that is not an object (including `null`; reported at `/`). |
 | `required` | A required field is missing or blank (`title`, `ingredients[].text`, `instructions[].text`, `sources[].id`/`kind`, `sources[].url` for kind `url`, a label or locator for other source kinds, estimate `value`, `basis.kind`, `guidance[].text`/`topic`). |
 | `invalid_value` | Value outside its enum, range or pattern; bad URL; `phase_basis` without `phase`; `url` on a non-`url` source. |
-| `invalid_characters` | Control characters not allowed for that field. |
+| `invalid_characters` | Control characters not allowed for that field; invalid UTF-8 in a string passed to `Validate` directly (invalid UTF-8 in raw input is `malformed_json`); or an unpaired surrogate escape in raw input. |
 | `too_long` | A string exceeds its limit. |
 | `too_many_items` | A list exceeds its limit. |
 | `draft_too_large` | `json.Marshal` (Go default, compact) of the decoded, normalized `Content` exceeds 128 KiB. |
@@ -467,7 +469,7 @@ One error type and one set of categories are shared by core, CLI and MCP.
 
 | Category | Meaning | Codes |
 | --- | --- | --- |
-| `invalid_argument` | The request is not acceptable: bad input, bad ID format, bad paging, bad data directory. Nothing was changed. | `validation_failed`, `invalid_id`, `invalid_revision`, `invalid_limit`, `invalid_offset`, `invalid_data_dir` |
+| `invalid_argument` | The request is not acceptable: bad input, bad ID format, bad paging, bad data directory. Nothing was changed. | `validation_failed`, `invalid_id`, `invalid_revision`, `invalid_limit`, `invalid_offset`, `invalid_data_dir`; `invalid_arguments` and `duplicate_key` (adapter-only as top-level codes, below) |
 | `not_found` | No draft with that ID. | `draft_not_found` |
 | `conflict` | The request lost a race or is stale. Nothing was changed. | `revision_mismatch`, `already_exists` |
 | `corrupt` | A stored file is damaged: unparseable, wrong shape, ID not matching its file name, not a regular file, over the read cap. | `invalid_json`, `invalid_content`, `id_mismatch`, `not_regular_file`, `file_too_large` |
@@ -544,9 +546,10 @@ func (e *Error) Unwrap() error // returns Err
 
 Rules:
 
-- Every error returned by the `Service` and by any `Store` is (or wraps, so `errors.As` works) a `*draft.Error`. Anything else reaching an adapter is mapped to `internal`.
+- Every error returned by the `Service` and by any `Store` is (or wraps, so `errors.As` works) a `*draft.Error`. Anything else reaching an adapter is mapped to `internal`, except that a bare `context.Canceled` or `context.DeadlineExceeded` from a store is mapped to `io`/`canceled`.
 - `Message` is safe to show to an agent: it MUST NOT contain filesystem paths, recipe text, titles or source URLs. Issue messages describe the rule and may name the field path, never echo the value. `Err` may contain paths and is for stderr logs only.
 - Adapters pass `category`, `code`, `message`, `issues`, `warnings`, `current_revision` through unchanged. They do not invent categories.
+- The MCP adapter has two codes of its own, both with category `invalid_argument` and no `issues`: `invalid_arguments` (arguments that do not match the tool's input schema: a missing required property, a type mismatch including a `draft` that is not a JSON object or is `null`, or an unknown root property) and `duplicate_key` (the same key twice in the `arguments` root). The core uses `duplicate_key` only as an issue code inside `validation_failed`, for a duplicate key inside the draft content. The core never returns `invalid_arguments`.
 
 ## 9. Core API (`internal/core/draft`)
 
@@ -570,6 +573,7 @@ func (s *Service) Validate(in Content) ValidationResult        // pure, touches 
 func (s *Service) Info(ctx context.Context) (StoreInfo, error) // store status for server_status
 
 func DecodeContent(raw []byte) (Content, []Issue)  // strict decoder, see section 5
+func ValidateRaw(raw []byte) ValidationResult      // DecodeContent then Validate; used by the CLI and MCP adapters
 func Validate(in Content) ValidationResult         // what Service.Validate calls
 ```
 
@@ -591,7 +595,7 @@ The interface lives in `internal/core/draft` so the domain depends on no store i
 // StoreInfo is the store's status, without recipe content or paths.
 type StoreInfo struct {
 	DataDirExists      bool
-	PrivatePermissions bool // data root and drafts directory have no group/other access bits (always false where not supported)
+	PrivatePermissions bool // data root and drafts directory have no group/other access bits; true when the root does not exist yet (it will be created 0700); always false where not supported
 	CrossProcessLock   bool // true when writes are protected by the cross-process lock
 	DraftCount         int  // readable drafts
 	SkippedCount       int  // unreadable entries
@@ -703,7 +707,7 @@ var _ draft.Store = (*Store)(nil)
 ```
 
 - `Open` never creates or modifies anything. Read operations on a missing data root behave as an empty store.
-- Directories are created with `0700` and files with `0600`. An existing data root is **not** `chmod`ed; if it has group/other bits, `Info.PrivatePermissions` is `false` and `server_status` reports it, and operation continues. Draft files are always written `0600`.
+- Directories are created with `0700` and files with `0600`. An existing data root is **not** `chmod`ed; if it has group/other bits, `Info.PrivatePermissions` is `false` and `server_status` reports it, and operation continues. `Info.PrivatePermissions` is `true` when the data root does not exist yet, because the first `Create` will make it `0700`. Draft files are always written `0600`.
 - File name is exactly `<id>.json`. `List` considers only names matching `^drf_[0-9a-f]{20}\.json$`; other names (including `.tmp-*` and `.DS_Store`) are ignored and not reported. The file's `id` must equal its name, else `corrupt`/`id_mismatch`.
 - A draft file is the `Draft` JSON object, indented with two spaces, with a trailing newline, fields in the declared struct order, so files are readable and diff-friendly.
 - **Containment.** IDs are validated before any path is built, and have no separators or `.`, so a path can only name a file directly in `drafts/`. In addition, `drafts/`, `.lock` and each draft file are checked with `Lstat` and must be a directory or regular file respectively, and `.lock` and draft files are opened with `O_NOFOLLOW` (on platforms that define it, section 10.6) so a symlink swapped in between the check and the open is refused as well; a symlink or other type is refused (`corrupt`/`not_regular_file` for a draft file, `io`/`data_dir_unavailable` for the directory). The data root itself may be a symlink the user chose. No symlink is followed inside the root.
@@ -716,12 +720,12 @@ var _ draft.Store = (*Store)(nil)
 
 1. Marshal the draft; refuse (`internal`/`encoded_too_large`) if the encoded file would exceed `MaxStoredFileBytes` (512 KiB).
 2. Create `drafts/` (`MkdirAll`, `0700`) and `.lock` if missing (`Create` only; `Replace` of an absent draft is `not_found` without creating anything).
-3. Write the content to `drafts/.tmp-<random>` in the **same directory** (so rename cannot cross filesystems), mode `0600`, `Sync()` the file, close it.
+3. Write the content to `drafts/.tmp-<random>` in the **same directory** (so rename cannot cross filesystems), mode `0600`, `Sync()` the file, close it. If the temp file cannot be created, the error is `io`/`io_error` with the path-free message "cannot write to the drafts directory; check that it is writable".
 4. Acquire the cross-process lock (section 10.5).
 5. Under the lock:
    - `Create`: count every file whose name matches the draft-file pattern, readable or not (must be `< MaxStoredDrafts`), `Lstat` the target (must not exist), `rename` temp → target.
    - `Replace`: re-check that the target still exists (if it is absent, remove the temp file and return `not_found`), then read and decode the current file (`corrupt`/`unsupported_schema` abort and leave it alone), compare its revision to `expectedRevision` (mismatch → `conflict`), check `next` per the interface rules, `rename` temp → target.
-6. `Sync()` the `drafts/` directory (best effort where the platform does not support it).
+6. `Sync()` the `drafts/` directory (best effort; Windows skips it, so a successful write does not log a failure every time).
 7. Release the lock.
 8. On any failure before the rename, remove the temp file (including the `not_found` path above). A crash can leave a `.tmp-*` file; it is ignored by reads and listing, never promoted, and may be deleted by hand.
 
@@ -734,7 +738,7 @@ Go's `os.File.Sync` is used for durability (it requests a full flush on macOS).
 - `Get` and `List` take no lock; atomic rename makes that safe.
 - Every file read is limited to the 512 KiB cap; a larger file is `corrupt`/`file_too_large` without being read in full.
 - Decoding first reads only `schema_version`. If it is missing or not an integer, the file is `corrupt`/`invalid_content`. If it is not in `SupportedSchemaVersions`, the file is `unsupported_schema`/`schema_unsupported` (a newer version of the tools wrote it). Only then is the rest decoded strictly (unknown fields are `corrupt`/`invalid_content`, because a same-version file must match the schema exactly). The stored content is then checked with the structural rules that do not depend on warnings: `status == "draft"`, `id` matches the file name, `revision >= 1`.
-- `Get` of a damaged file returns the error. `List` omits it from `drafts`, adds a `SkippedEntry` (with `id` when the name is well-formed, category, and a message without paths or content), counts it in `skipped_total`, and continues. **Nothing is ever deleted, repaired, rewritten or moved automatically.** `Replace` of a damaged draft fails and leaves the file as it is; the user decides what to do with it by hand.
+- `Get` of a damaged file returns the error. `List` omits it from `drafts`, adds a `SkippedEntry` (with `id` when the name is well-formed, category, and a message without paths or content), counts it in `skipped_total`, and continues. A file that vanishes between the directory read and the file read is skipped silently and is not reported as skipped. **Nothing is ever deleted, repaired, rewritten or moved automatically.** `Replace` of a damaged draft fails and leaves the file as it is; the user decides what to do with it by hand.
 - A missing data root, an empty `drafts/` directory and a directory containing only ignored names are all an empty store.
 
 ### 10.5 Concurrency
@@ -754,6 +758,7 @@ Lock scope and timeout:
 
 - The code is pure Go (stdlib only), builds with `CGO_ENABLED=0`, and the existing cross-compile checks (windows/amd64, linux/arm64, darwin/arm64) must keep passing.
 - Locking is behind build tags: `lock_flock.go` with `//go:build darwin || linux` uses `syscall.Flock`; `lock_other.go` with `//go:build !darwin && !linux` uses only an in-process mutex. `O_NOFOLLOW` is likewise behind build tags (it is not defined on Windows, where the `Lstat` check alone applies). On those platforms `Info.CrossProcessLock` is `false` and `server_status` reports it: the optimistic-revision check still catches most stale writers, but two processes can race between the check and the rename, so concurrent multi-process writes are **not supported** there. This limitation is documented, not hidden. Directory `Sync` errors and `chmod` bits are best effort on Windows, where `Info.PrivatePermissions` reports `false`.
+- On Windows the directory `Sync()` after the rename is skipped.
 - macOS is the supported and verified platform for this slice.
 
 ## 11. Schema versioning and compatibility
@@ -801,7 +806,7 @@ Because unknown fields are rejected, **any** new field, new required rule, enum 
 
 ## 13. MCP tools (`cmd/mealplanner-mcp`, via `internal/mcpadapter`)
 
-Server: stdio transport, official Go SDK `github.com/modelcontextprotocol/go-sdk` (exact version pinned in #23, together with the supported protocol versions). Server name `mealplanner-mcp`, server version `version.Version`. Only tools are advertised: no resources, prompts, sampling or elicitation.
+Server: stdio transport, official Go SDK `github.com/modelcontextprotocol/go-sdk` (pinned at `v1.8.0`, which supports protocol versions `2026-07-28`, `2025-11-25`, `2025-06-18`, `2025-03-26` and `2024-11-05`; through `initialize` it negotiates up to `2025-11-25`, so a client that requests `2026-07-28` is answered with `2025-11-25`; the stateless `2026-07-28` flow is `server/discover` plus per-request `_meta` carrying `io.modelcontextprotocol/protocolVersion` and `clientCapabilities`). Server name `mealplanner-mcp`, server version `version.Version`. Only tools are advertised: no resources, prompts, sampling or elicitation.
 
 Tool names are fixed: `draft_create`, `draft_get`, `draft_list`, `draft_update`, `draft_validate`, `server_status`.
 
@@ -814,7 +819,7 @@ Tool names are fixed: `draft_create`, `draft_get`, `draft_list`, `draft_update`,
 | `draft_validate` | no | true / – / – / false |
 | `server_status` | no | true / – / – / false |
 
-Annotations describe behavior for the host's benefit. They are hints, not authorization, and must be accurate (`draft_update` is marked destructive because it overwrites the previous content and no history is kept; `idempotentHint` is false for `draft_create` and `draft_update`).
+Annotations describe behavior for the host's benefit. They are hints, not authorization, and must be accurate (`draft_update` is marked destructive because it overwrites the previous content and no history is kept; `idempotentHint` is false for `draft_create` and `draft_update`). The read-only tools also carry `idempotentHint: false`, which is the SDK's default when the hint is not set; the hint has no meaning for a read-only tool.
 
 Every tool's input schema is a root `{"type": "object", "additionalProperties": false}` with plain typed properties (`string`, `integer`, `object`) and a `required` array naming the genuinely required ones (it aids discoverability by models). Bounds, patterns, enums beyond the type and exactly-one constraints are **not** expressed as schema keywords (no `minimum`, `maximum`, `pattern`, `enum`, `oneOf`, `anyOf` or `allOf`); they appear only in the property descriptions. The core validates everything, so a bad value comes back as an `isError` tool result with a code such as `invalid_id`, `invalid_limit`, `invalid_offset` or `invalid_revision`, which an agent can read and correct, instead of an SDK protocol error. A property that is not in `required` and is absent reaches the core as its zero value and is reported there. A tool's `draft` property is `{"type": "object"}` and nothing more: the adapter receives it as raw JSON (`json.RawMessage`) and passes it unmodified to `DecodeContent`, so MCP, CLI and core give identical results. No `outputSchema` is declared in v1. Tool descriptions must state, in the SDK description text:
 
@@ -825,7 +830,7 @@ Every tool's input schema is a root `{"type": "object", "additionalProperties": 
 
 ### 13.1 Results
 
-Because no `outputSchema` is declared, results are not validated against one; every successful call returns the output object below as `structuredContent` **and** serialized as compact JSON in a single `text` content block (identical content), for hosts that read only one of them. `draft_*` tools report domain failures (any `draft.Error`) as a tool result with `isError: true` whose `structuredContent` and text are `{"error": <Error JSON>}`, so the agent can read the issues and correct itself. Protocol-level problems (unknown tool, malformed JSON-RPC, an argument of the wrong JSON type or an unknown property, which the SDK rejects against the minimal input schema) use the SDK's protocol error path; in either case nothing is stored. The schema-level rejections are exactly these three: a missing `required` property, a type mismatch, and an unknown root property. Which error the client sees for them is whatever the pinned SDK does; #23 documents it. The only size bound MCP adds is `draft_too_large` (`MaxDraftBytes`, section 5) plus the SDK and transport limits; there is no `MaxInputBytes` check on this path. `draft_validate` is different: an invalid candidate is a *successful* call whose result has `structurally_valid: false` and the errors.
+Because no `outputSchema` is declared, results are not validated against one; every successful call returns the output object below as `structuredContent` **and** serialized as compact JSON in a single `text` content block (identical content), for hosts that read only one of them. `draft_*` tools report domain failures (any `draft.Error`) as a tool result with `isError: true` whose `structuredContent` and text are `{"error": <Error JSON>}`, so the agent can read the issues and correct itself. Protocol-level problems (an unknown tool, malformed JSON-RPC) use the SDK's protocol error path; in either case nothing is stored. Arguments that do not match the input schema (a missing `required` property, a type mismatch including a non-object or `null` `draft`, or an unknown root property) are reported by the adapter as a tool error `invalid_argument`/`invalid_arguments` (section 8), and a duplicate key in the `arguments` root as `invalid_argument`/`duplicate_key`. The size bounds MCP adds are `draft_too_large` (`MaxDraftBytes`, section 5) and `input_too_large` from `DecodeContent` for a `draft` argument over `MaxInputBytes`, plus the SDK and transport limits. `draft_validate` is different: an invalid candidate is a *successful* call whose result has `structurally_valid: false` and the errors.
 
 Error messages and logs follow section 8: no paths, titles, recipe text or URLs in anything returned to the host.
 
@@ -875,19 +880,22 @@ Example input schema (`draft_update`); the other tools differ only in their prop
 }
 ```
 
-`data_dir.source` is `flag`, `env` or `default`. `cmd/mealplanner-mcp` supplies it to `internal/mcpadapter` through an adapter option (for example `WithDataDirSource(string)`), set from the `DirSource` that `localstore.ResolveDataDir` returned; `StoreInfo` is unchanged and carries no source, and `internal/mcpadapter` still must not import `internal/localstore`. The data directory **path is deliberately not returned**: tool output is placed in the agent conversation and may be sent to a model provider, and the path can contain a user name. The user knows the path they configured. `server_status` does not fail because the store has a problem; it sets `store.available: false` and adds `store.error: {"category": ..., "message": ...}` instead. It makes no network calls and contains no recipe content, titles, URLs or secrets. Update checks and remote release information are out of scope for this slice.
+`data_dir.source` is `flag`, `env` or `default`. `cmd/mealplanner-mcp` supplies it to `internal/mcpadapter` through an adapter option (for example `WithDataDirSource(string)`), set from the `DirSource` that `localstore.ResolveDataDir` returned; `StoreInfo` is unchanged and carries no source, and `internal/mcpadapter` still must not import `internal/localstore`. The data directory **path is deliberately not returned**: tool output is placed in the agent conversation and may be sent to a model provider, and the path can contain a user name. The user knows the path they configured. `data_dir.private_permissions` follows `StoreInfo.PrivatePermissions`, so it is `true` when the data root does not exist yet. `server_status` does not fail because the store has a problem; it sets `store.available: false` and adds `store.error: {"category": ..., "message": ...}` instead. It makes no network calls and contains no recipe content, titles, URLs or secrets. Update checks and remote release information are out of scope for this slice.
 
 ### 13.3 Process behavior
 
 - **stdout is protocol only.** No banner, notice, log line or stray `fmt.Print` may reach stdout. Diagnostics go to stderr.
 - **Logging.** One structured line per tool call to stderr: tool name, outcome (`ok` or error category and code), duration, and the draft `id` when there is one (IDs are random and carry no content). Never titles, text, URLs, issue values, or the data directory path.
 - **Shutdown.** On stdin EOF, `SIGINT` or `SIGTERM` the server stops accepting calls, lets in-flight calls finish for up to 5 seconds, and exits 0 on EOF or signal with no call outstanding, 1 if the deadline passed. Context cancellation of an in-flight call aborts it before its commit point; a persisted draft is never partial (section 10.3).
-- **Flags.** `--data-dir <abs path>` and the existing `--version` (prints `mealplanner-mcp <version>` and exits 0 without resolving a data directory). Unknown flags exit 2 with usage on stderr.
+- **Framing and ordering (pinned SDK behavior, accepted).** A line that is not valid JSON, or a JSON-RPC batch, ends the session: the server exits 1, stdout stays clean, and the offending line is not processed. Requests that arrived in the same burst before that line may be dropped unanswered, so a client must not rely on them. Tool calls may complete out of order (legal JSON-RPC), so clients must match responses by `id`. `resources/list` and `prompts/list` return empty lists through the SDK although those capabilities are not advertised.
+- **Shutdown gate.** Requests are tracked when stdin bytes are read: a JSON object line with a string `method` and a non-null string or integer `id` is a request awaiting a response. Numeric ids are compared by canonical value; non-integer, boolean, array, object and `null` ids are not awaited. Notifications, batches and non-object lines are not awaited. `notifications/cancelled` releases the request named by its `requestId`. A final line without a trailing newline is tracked. Duplicate pending ids are counted separately. The server withholds stdin EOF (or a signal) from the SDK until every tracked request has had a response written or the 5-second grace period ends; it then exits 1 if any remain unanswered, else 0. Lines over 4 MiB pass through untracked.
+- **Network.** The binary links `net/http` through the SDK but never makes a network call.
+- **Flags.** `--data-dir <abs path>` and the existing `--version` (prints `mealplanner-mcp <version>` and exits 0 without resolving a data directory). `--help` prints usage to stdout and exits 0. Unknown flags exit 2 with usage on stderr.
 - **No capability beyond the tools above**: no tool takes a path, command, or URL to act on, and none fetches, publishes or calls out.
 
 ## 14. CLI (`cmd/mealplanner`)
 
-Existing behavior is unchanged: `mealplanner version`, `mealplanner --version`, no arguments prints usage to stderr and exits 2, an unknown command exits 2.
+Existing behavior is unchanged: `mealplanner version`, `mealplanner --version`, no arguments prints usage to stderr and exits 2, an unknown command exits 2. Help (`mealplanner --help`, `help` or `-h`, `draft --help`, and `draft <command> --help`) prints usage to stdout and exits 0.
 
 ```text
 mealplanner draft validate <file|-> [--json]
@@ -895,7 +903,7 @@ mealplanner draft list   [--limit N] [--offset N] [--data-dir DIR] [--json]
 mealplanner draft show   <id>       [--data-dir DIR] [--json]
 ```
 
-- `draft validate` reads one JSON object of **content** (section 4) from the named file, or from stdin when the argument is `-`. A missing argument is a usage error (so an interactive shell never hangs on stdin). It reads at most `MaxInputBytes`, uses `DecodeContent` and `Validate`, never touches the data directory or any store, and never writes. It does not accept `--data-dir`.
+- `draft validate` reads one JSON object of **content** (section 4) from the named file, or from stdin when the argument is `-`. A missing argument is a usage error (so an interactive shell never hangs on stdin). It reads at most `MaxInputBytes`, uses `draft.ValidateRaw` (`DecodeContent`, then `Validate`), never touches the data directory or any store, and never writes. It does not accept `--data-dir`.
 - `draft list` and `draft show` read the same store, with the same data-directory rules, as the MCP server. They never write. `--limit`/`--offset` follow section 7, except that the CLI accepts `--limit` 1 to 100 only: `--limit 0` and negative values are rejected as usage errors (exit 2); omit the flag for the default. A negative `--offset` is exit 2. `--data-dir` is accepted by `list` and `show` only (section 10.1).
 - There are no create, update or delete commands. Creating and editing drafts is done through MCP.
 - `--json` selects machine-readable output (below). It is accepted after the subcommand.
@@ -916,7 +924,8 @@ For exit status 2 or 3, stdout is empty and a human-readable message is written 
 **Human mode.** Layout is not part of the contract except for these requirements:
 
 - `draft validate` prints each error and warning with its code and path, then always ends with the fixed line from `ValidationNotice`.
-- `draft show` starts with the ID, revision and the line `status: draft (not reviewed or verified)`. Every item that has a basis is printed with it: agent estimates as `[agent estimate, unverified]`, sourced items as `[sourced: <source_ref or "no reference">]`. Unknown estimates are shown as `unknown`, never as `0`. Provenance sources are listed with their kind and URL (printed as text, never fetched).
+- Human output escapes control characters, Unicode format characters (category Cf), U+2028, U+2029 and, in single-line fields, tabs, so stored text cannot move the cursor, forge output or hide characters. Multi-line fields (`notes`, instruction `text`, `guidance[].text`) keep their newlines and tabs and have everything else escaped. The same escaping applies to validation codes, paths and messages and to every message written to stderr. Human timestamps are UTC RFC 3339. `--json` is for machines and is complete: it keeps what `encoding/json` does not escape (DEL, C1 controls and Cf characters), so do not print it raw to a terminal.
+- `draft show` starts with the ID, revision and the line `status: draft (not reviewed or verified)`. Every item that has a basis is printed with it: agent estimates as `[agent estimate, unverified]`, sourced items as `[sourced: <source_ref or "no reference">]`. Unknown estimates are shown as `unknown`, never as `0`. Provenance sources are listed with their kind and URL (printed as text, never fetched). Human `draft show` output is a summary: it omits each ingredient's `quantity`, `unit` and `note`. `draft show --json` is complete.
 - `draft list` prints one line per draft with ID, revision, `updated_at` and title (and a final line noting any skipped unreadable entries and their count).
 - Data written to stdout never includes the data directory path. Error text on stderr may.
 
@@ -1099,7 +1108,7 @@ Each behavior has one owner for its tests; others rely on it.
 | --- | --- |
 | Field rules, limits, enums, error/warning codes, unknown vs zero, basis rules, decoder strictness, service semantics, ordering, paging, deep-copy isolation, no import of forbidden packages; `memstore`; `storetest` suite; `duplicate_key` and exact-case names; nil-to-`[]` and all-absent-estimate normalization; negative limit/offset codes; Unicode rune counting (multi-byte, combining and astral characters); no LLM or network use; `gofmt`, `go vet` and build clean | #21 |
 | Data-dir precedence and rejection of relative paths, layout, permissions, atomic write, interruption, `Create` never overwrites, revision conflict under two processes, lock timeout, containment (traversal, symlinks), corruption and unsupported schema (get, list skip, no rewrite), read cap, store bound, restart persistence, build tags and `CGO_ENABLED=0` cross-compile; runs `storetest`; the store cap counting unreadable draft-named files; `O_NOFOLLOW` opens; `.tmp-*` cleanup older than 24 hours and nothing else; `Replace` of a vanished draft; errors after the rename not failing the call; `canceled` vs `lock_timeout`; `encoded_too_large`; read-only data directory, unknown ID, empty store, no payloads in logs, default directory outside the checkout, synthetic fixtures only | #22 |
-| Tool names/schemas/annotations, result duplication in `structuredContent` and `text`, error mapping, protocol-clean stdout, stderr logging without payloads, shutdown bounds, `--version`, subprocess round trip with restart; input schemas are root-only with plain typed properties and `required` for required ones (no bounds, patterns or `oneOf`), no `outputSchema`, `draft` passed raw to `DecodeContent`, `server_status` `data_dir.source` from the adapter option; protocol-version compatibility (current and legacy versions through the pinned SDK); malformed or unknown requests do not mutate the store; arguments cannot request shell, file or fetch actions | #23 |
+| Tool names/schemas/annotations, result duplication in `structuredContent` and `text`, error mapping, protocol-clean stdout, stderr logging without payloads, shutdown bounds, `--version`, subprocess round trip with restart; input schemas are root-only with plain typed properties and `required` for required ones (no bounds, patterns or `oneOf`), no `outputSchema`, `draft` passed raw to `DecodeContent`, `server_status` `data_dir.source` from the adapter option; protocol-version compatibility (current and legacy versions through the pinned SDK); malformed or unknown requests do not mutate the store; arguments cannot request shell, file or fetch actions; `invalid_arguments` and top-level `duplicate_key` argument errors; the shutdown gate for tracked requests | #23 |
 | Commands, flags, `--json` single-document stdout, human-output requirements, exit codes, no mutation from validate/list/show, empty/malformed/oversized input, same results as core for shared fixtures, `version`/`--version` unchanged; `--limit 0` rejected with exit 2; `--data-dir` accepted by `list`/`show` only; the category/code to exit-code table; `--help` content; unreadable files and directories; unknown commands; cross-compile | #24 |
 | End-to-end in both hosts, stale update, invalid input, restart persistence, CLI inspection of the MCP-created draft, privacy statement, CI path coverage; record OS, Go, SDK and client versions; per-host pass, fail or unavailable with evidence; README and layout links | #25 |
 
@@ -1118,3 +1127,4 @@ Shared fixtures: the examples in section 16 are the seed. #21 copies them verbat
 
 - 2026-11-04 — v1. Initial contract for issue #20.
 - 2026-11-04 — rev 2: QA/judge fixes. MCP input schemas reduced to root `object` with plain typed properties and `draft` passed raw (no `outputSchema`, no `id` form of `draft_validate`, `ValidateStored` and `exactly_one_of` removed); strict decode adds exact-case names and `duplicate_key`, `MaxDraftBytes` measured on `json.Marshal` of normalized content; store cap counts every draft-named file; rename is the commit point and later errors do not fail the call; nil/empty normalization; paging (`invalid_offset`, core `Limit` 0 = default, CLI rejects `--limit 0`); exported `Code…` constants, `Option`, `MaxIngredientShort`, `MaxStoredFileBytes`, `encoded_too_large`, `canceled`; `Replace` existence re-check, `O_NOFOLLOW`, 24-hour `.tmp-*` cleanup; `server_status` `data_dir.source` via adapter option; exit-code table and `--data-dir` scope; CI note updated for PR #26; checklist items added. Follow-up to rev 2: the schema keyword `required` is kept for genuinely required properties (discoverability); a missing one may be rejected by the SDK, as may a type mismatch or unknown root property, with the error path left to the pinned SDK (#23 documents it); bounds and patterns stay description-only.
+- 2026-11-04 — rev 3: as-built alignment. `DecodeContent` also enforces `MaxInputBytes`; non-object or `null` root is `invalid_type`; invalid UTF-8 and nesting more than 64 levels below the root are `malformed_json`; unpaired surrogate escapes are `invalid_characters`; parse-pass errors precede shape errors; `draft.ValidateRaw` added and used by CLI and MCP. The MCP adapter has two codes of its own, `invalid_arguments` (argument mismatches) and, as a top-level code, `duplicate_key` (same key twice in the `arguments` root). MCP: SDK pinned at `v1.8.0` (supports `2026-07-28`, `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`; `initialize` negotiates up to `2025-11-25`; the stateless `2026-07-28` flow is `server/discover` plus per-request `_meta`), session-ending behavior for non-JSON and batch lines, the shutdown gate for tracked requests, `--help`, out-of-order completion, empty `resources/list` and `prompts/list`, SDK-default `idempotentHint: false` on read-only tools, `net/http` linked but unused. `private_permissions` is true for a root that does not exist yet. CLI help goes to stdout with exit 0; `draft show` human output is a summary; human output escapes control, Cf and U+2028/2029 characters (and tabs in single-line fields; multi-line fields keep newlines and tabs), also in validation messages and stderr, with UTC RFC 3339 timestamps, while `--json` is complete and for machines. Core: a bare `context.Canceled`/`DeadlineExceeded` from a store is `io/canceled`. Store: a file that vanishes mid-`List` is skipped silently; Windows skips the post-rename directory sync; read-only drafts directory message carries a writability hint.
