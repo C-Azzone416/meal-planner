@@ -31,7 +31,7 @@ while IFS= read -r p || [[ -n "$p" ]]; do
     api/*|hosted/*|vercel.json)
                                hosted_go=true; local_go=true; contracts=true
                                why="hosted_go -> hosted_go, local_go (compatibility), contracts, integration" ;;
-    cmd/*|internal/localstore/*)
+    cmd/*|internal/localstore/*|internal/mcpadapter/*)
                                local_go=true; cli=true
                                why="cli -> local_go, contracts (compatibility), integration" ;;
     internal/core/*)           core=true;       why="core -> hosted_go, local_go, contracts, integration" ;;

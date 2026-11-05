@@ -38,6 +38,8 @@ check "mcp only"                 "cmd/mealplanner-mcp/main.go"      "local_go co
 check "persistence/migration"    "hosted/db/migrations/001.sql" "hosted_go local_go contracts integration"
 check "localstore"               "internal/localstore/store.go"  "local_go contracts integration"
 check "localstore preview never" "internal/localstore/store.go"  "local_go contracts integration" $T
+check "mcpadapter"                "internal/mcpadapter/server.go" "local_go contracts integration"
+check "mcpadapter preview never" "internal/mcpadapter/server.go" "local_go contracts integration" $T
 check "core"                     "internal/core/recipe.go"       "hosted_go local_go contracts integration"
 check "core preview on"          "internal/core/recipe.go"       "hosted_go local_go contracts integration hosted_preview" $T
 check "contracts"                "contracts/openapi.yaml"        "web hosted_go local_go contracts integration"
