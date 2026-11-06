@@ -20,6 +20,9 @@ jobs:
     name: affected
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       docs: ${{ steps.classify.outputs.docs }}
       web: ${{ steps.classify.outputs.web }}
@@ -34,6 +37,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Repository hygiene
+        run: bash scripts/check-repo-hygiene.sh
 
       - name: Test classifier, gate and deploy scripts
         run: |

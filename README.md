@@ -25,6 +25,7 @@ The application will keep user data private even though the source repository is
 - [Setup and delivery plan](docs/setup-and-delivery-plan.md) — provider setup, implementation phases, and release gates.
 - [CI/CD configuration plan](docs/ci-cd-plan.md) — branch protections, affected-component CI, deployment and release sequencing, configuration inventory, and verification steps.
 - [Repository layout](docs/repo-layout.md) — component map and check commands for the current skeleton.
+- [Development workflow](docs/development-workflow.md) — targeted local checks, the shared heavy-work lock, and exact-head merge evidence.
 - [Local draft contract](docs/local-draft-contract.md) — the versioned contract for the local recipe-draft slice described below.
 - [Local draft workflow](docs/local-workflow.md) — host setup, privacy boundary, and the verification record for Codex CLI and Claude Code.
 
