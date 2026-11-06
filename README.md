@@ -2,7 +2,7 @@
 
 Meal Planner is a planned web application for reducing the effort required to cook varied dinners at home. The repository now includes a navigable, responsive UI preview and a fail-closed authentication boundary. The preview uses clearly labeled sample data; planning changes are not persisted yet.
 
-> **Preview status:** The repository has CI workflows, hosted health and authentication functions, a React UI preview, a `mealplanner` CLI (`version`, plus read-only `draft validate/list/show`), and a stdio `mealplanner-mcp` server for local recipe drafts. The UI covers the planned views and uses passwordless email-code authentication when its provider is configured. There is no persisted recipe planning, hosted draft save, database schema, or migration yet.
+> **Preview status:** The repository has CI workflows, hosted health and authentication functions, a React UI preview, a `mealplanner` CLI (`version`, plus read-only `draft validate/list/show`), and a stdio `mealplanner-mcp` server for local recipe drafts. The UI covers the planned views and uses invitation-only email-and-password authentication when its provider is configured. Existing invited accounts set or recover a password with a short-lived email code. There is no persisted recipe planning, hosted draft save, database schema, or migration yet.
 
 ## Product direction
 

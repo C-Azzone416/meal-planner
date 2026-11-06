@@ -20,6 +20,7 @@ func TestAuthProxyForwardsAllowedRouteAndRehomesCookie(t *testing.T) {
 	config := AuthProxyConfig{
 		BaseURL:          "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
 		ExpectedEndpoint: testEndpointID,
+		AllowedEmail:     "allowed@example.invalid",
 		Client: authProxyDoer(func(request *http.Request) (*http.Response, error) {
 			upstream = request
 			body, err := io.ReadAll(request.Body)
@@ -41,8 +42,8 @@ func TestAuthProxyForwardsAllowedRouteAndRehomesCookie(t *testing.T) {
 			}, nil
 		}),
 	}
-	requestBody := `{"email":"allowed@example.invalid","otp":"redacted"}`
-	req := httptest.NewRequest(http.MethodPost, "https://meal.invalid/api/auth-proxy?path=sign-in/email-otp&returnTo=%2Fweek", strings.NewReader(requestBody))
+	requestBody := `{"email":"allowed@example.invalid","password":"redacted"}`
+	req := httptest.NewRequest(http.MethodPost, "https://meal.invalid/api/auth-proxy?path=sign-in/email&returnTo=%2Fweek", strings.NewReader(requestBody))
 	req.Host = "meal.invalid"
 	req.Header.Set("Origin", "https://meal.invalid")
 	req.Header.Set("Content-Type", "application/json")
@@ -54,7 +55,7 @@ func TestAuthProxyForwardsAllowedRouteAndRehomesCookie(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
 	}
-	if upstream == nil || upstream.URL.String() != "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth/sign-in/email-otp?returnTo=%2Fweek" {
+	if upstream == nil || upstream.URL.String() != "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth/sign-in/email?returnTo=%2Fweek" {
 		t.Fatalf("upstream URL = %v", upstream)
 	}
 	if upstreamBody != requestBody {
@@ -85,6 +86,86 @@ func TestAuthProxyForwardsAllowedRouteAndRehomesCookie(t *testing.T) {
 	}
 }
 
+func TestAuthProxyReturnsGenericProviderErrorsForEmailOutsidePolicy(t *testing.T) {
+	providerCalled := false
+	config := AuthProxyConfig{
+		BaseURL:          "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
+		ExpectedEndpoint: testEndpointID,
+		AllowedEmail:     "allowed@example.invalid",
+		Client: authProxyDoer(func(*http.Request) (*http.Response, error) {
+			providerCalled = true
+			return nil, nil
+		}),
+	}
+	tests := map[string]struct {
+		status int
+		body   string
+	}{
+		"email-otp/reset-password": {http.StatusBadRequest, `{"code":"INVALID_OTP","message":"Invalid OTP"}`},
+		"sign-in/email":            {http.StatusUnauthorized, `{"code":"INVALID_EMAIL_OR_PASSWORD","message":"Invalid email or password"}`},
+	}
+	for path, expected := range tests {
+		t.Run(path, func(t *testing.T) {
+			providerCalled = false
+			req := httptest.NewRequest(http.MethodPost, "https://meal.invalid/api/auth-proxy?path="+path, strings.NewReader(`{"email":"blocked@example.invalid"}`))
+			req.Host = "meal.invalid"
+			req.Header.Set("Origin", "https://meal.invalid")
+			rec := httptest.NewRecorder()
+			AuthProxy(config).ServeHTTP(rec, req)
+			if rec.Code != expected.status || rec.Body.String() != expected.body {
+				t.Fatalf("status/body = %d %q", rec.Code, rec.Body.String())
+			}
+			if providerCalled {
+				t.Fatal("provider was called for a blocked identity")
+			}
+		})
+	}
+}
+
+func TestAuthProxySilentlyDropsBlockedEmailDelivery(t *testing.T) {
+	providerCalled := false
+	config := AuthProxyConfig{
+		BaseURL:          "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
+		ExpectedEndpoint: testEndpointID,
+		AllowedEmail:     "allowed@example.invalid",
+		Client: authProxyDoer(func(*http.Request) (*http.Response, error) {
+			providerCalled = true
+			return nil, nil
+		}),
+	}
+	for _, path := range []string{"email-otp/request-password-reset"} {
+		t.Run(path, func(t *testing.T) {
+			providerCalled = false
+			req := httptest.NewRequest(http.MethodPost, "https://meal.invalid/api/auth-proxy?path="+path, strings.NewReader(`{"email":"blocked@example.invalid"}`))
+			req.Host = "meal.invalid"
+			req.Header.Set("Origin", "https://meal.invalid")
+			rec := httptest.NewRecorder()
+			AuthProxy(config).ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK || rec.Body.String() != `{"success":true}` {
+				t.Fatalf("status/body = %d %q", rec.Code, rec.Body.String())
+			}
+			if providerCalled {
+				t.Fatal("provider was called for a blocked identity")
+			}
+		})
+	}
+}
+
+func TestAuthProxyEmailRoutesFailClosedWithoutAllowedIdentity(t *testing.T) {
+	config := AuthProxyConfig{
+		BaseURL:          "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
+		ExpectedEndpoint: testEndpointID,
+	}
+	req := httptest.NewRequest(http.MethodPost, "https://meal.invalid/api/auth-proxy?path=sign-in/email", strings.NewReader(`{"email":"allowed@example.invalid","password":"private"}`))
+	req.Host = "meal.invalid"
+	req.Header.Set("Origin", "https://meal.invalid")
+	rec := httptest.NewRecorder()
+	AuthProxy(config).ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+}
+
 func TestAuthProxyRejectsUnknownRoutes(t *testing.T) {
 	rec := httptest.NewRecorder()
 	AuthProxy(AuthProxyConfig{BaseURL: "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth", ExpectedEndpoint: testEndpointID}).ServeHTTP(
@@ -96,8 +177,35 @@ func TestAuthProxyRejectsUnknownRoutes(t *testing.T) {
 	}
 }
 
+func TestAuthProxyRejectsLegacyPasswordlessRoutes(t *testing.T) {
+	for _, path := range []string{"email-otp/send-verification-otp", "sign-in/email-otp"} {
+		t.Run(path, func(t *testing.T) {
+			providerCalled := false
+			rec := httptest.NewRecorder()
+			AuthProxy(AuthProxyConfig{
+				BaseURL:          "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
+				ExpectedEndpoint: testEndpointID,
+				AllowedEmail:     "allowed@example.invalid",
+				Client: authProxyDoer(func(*http.Request) (*http.Response, error) {
+					providerCalled = true
+					return nil, nil
+				}),
+			}).ServeHTTP(
+				rec,
+				httptest.NewRequest(http.MethodPost, "https://meal.invalid/api/auth-proxy?path="+path, strings.NewReader(`{"email":"allowed@example.invalid"}`)),
+			)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404", rec.Code)
+			}
+			if providerCalled {
+				t.Fatal("provider was called for a legacy passwordless route")
+			}
+		})
+	}
+}
+
 func TestAuthProxyRejectsCrossOriginRequest(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "https://meal.invalid/api/auth-proxy?path=sign-in/email-otp", strings.NewReader(`{}`))
+	req := httptest.NewRequest(http.MethodPost, "https://meal.invalid/api/auth-proxy?path=sign-in/email", strings.NewReader(`{"email":"allowed@example.invalid","password":"private"}`))
 	req.Host = "meal.invalid"
 	req.Header.Set("Origin", "https://evil.invalid")
 	rec := httptest.NewRecorder()
