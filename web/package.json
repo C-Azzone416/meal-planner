@@ -12,8 +12,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@neon/neon-js": "^0.10.2",
+    "better-auth": "~1.7.12",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "react-router-dom": "^7.18.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
