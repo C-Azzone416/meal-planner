@@ -14,7 +14,11 @@ while IFS= read -r -d '' path; do
       failed=1
       ;;
   esac
-  size="$(stat -f %z "$path" 2>/dev/null || stat -c %s "$path")"
+  if [[ "$(uname -s)" == Darwin ]]; then
+    size="$(stat -f %z "$path")"
+  else
+    size="$(stat -c %s "$path")"
+  fi
   if (( size > 1048576 )); then
     echo "repository hygiene: tracked file exceeds 1 MiB: $path ($size bytes)" >&2
     failed=1
