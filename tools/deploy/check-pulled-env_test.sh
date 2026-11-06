@@ -254,6 +254,32 @@ check "auth: names settings without values" has auth "AUTH_ALLOWED_EMAIL, NEON_A
 check "auth: does not print hostname" lacks auth "ep-example-123"
 check "auth: does not print email" lacks auth "preview.user"
 
+# Preview/Production Secret values are write-only, so vercel@65.9.0 emits this exact non-secret placeholder.
+fixture auth-secret/.env.preview.local << EOF
+AUTH_ALLOWED_EMAIL="[SENSITIVE]"
+NEON_AUTH_BASE_URL="[SENSITIVE]"
+NEON_AUTH_ENDPOINT_ID="[SENSITIVE]"
+VERCEL_ENV="preview"
+EOF
+expect 0 auth-secret "$work/auth-secret/.env.preview.local"
+check "auth-secret: complete placeholder trio passes" has auth-secret "4 variable(s)"
+
+# Config and Secret types may be mixed; compare endpoint IDs only when both literal values are available.
+fixture auth-mixed/.env.preview.local << EOF
+AUTH_ALLOWED_EMAIL="[SENSITIVE]"
+NEON_AUTH_BASE_URL="$auth_base"
+NEON_AUTH_ENDPOINT_ID="[SENSITIVE]"
+EOF
+expect 0 auth-mixed "$work/auth-mixed/.env.preview.local"
+check "auth-mixed: does not print literal endpoint" lacks auth-mixed "$auth_endpoint"
+fixture auth-mixed-reverse/.env.preview.local << EOF
+AUTH_ALLOWED_EMAIL="[SENSITIVE]"
+NEON_AUTH_BASE_URL="[SENSITIVE]"
+NEON_AUTH_ENDPOINT_ID="$auth_endpoint"
+EOF
+expect 0 auth-mixed-reverse "$work/auth-mixed-reverse/.env.preview.local"
+check "auth-mixed-reverse: does not print literal endpoint" lacks auth-mixed-reverse "$auth_endpoint"
+
 for missing_name in NEON_AUTH_BASE_URL NEON_AUTH_ENDPOINT_ID AUTH_ALLOWED_EMAIL; do
   : > "$work/auth-partial.env"
   [[ $missing_name == NEON_AUTH_BASE_URL ]] || printf 'NEON_AUTH_BASE_URL="%s"\n' "$auth_base" >> "$work/auth-partial.env"
@@ -262,6 +288,13 @@ for missing_name in NEON_AUTH_BASE_URL NEON_AUTH_ENDPOINT_ID AUTH_ALLOWED_EMAIL;
   expect 1 "auth-missing-$missing_name" "$work/auth-partial.env"
   check "auth-missing-$missing_name: complete set required" has "auth-missing-$missing_name" "must appear exactly once as a complete set"
 done
+
+fixture auth-secret-partial/.env << EOF
+NEON_AUTH_BASE_URL="[SENSITIVE]"
+NEON_AUTH_ENDPOINT_ID="[SENSITIVE]"
+EOF
+expect 1 auth-secret-partial "$work/auth-secret-partial/.env"
+check "auth-secret-partial: complete set required" has auth-secret-partial "must appear exactly once as a complete set"
 
 fixture auth-duplicate/.env << EOF
 NEON_AUTH_BASE_URL="$auth_base"
@@ -305,9 +338,11 @@ bad_auth_value auth-base-query NEON_AUTH_BASE_URL 'https://ep-example-123.neonau
 bad_auth_value auth-base-fragment NEON_AUTH_BASE_URL 'https://ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth#x'
 bad_auth_value auth-base-slash NEON_AUTH_BASE_URL 'https://ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth/'
 bad_auth_value auth-base-upper NEON_AUTH_BASE_URL 'https://EP-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth'
+bad_auth_value auth-base-placeholder-near-miss NEON_AUTH_BASE_URL '[SENSITIVE ]'
 bad_auth_value auth-endpoint-upper NEON_AUTH_ENDPOINT_ID 'EP-example-123'
 bad_auth_value auth-endpoint-punctuation NEON_AUTH_ENDPOINT_ID 'ep-example_123'
 bad_auth_value auth-endpoint-long NEON_AUTH_ENDPOINT_ID "ep-$(printf 'a%.0s' {1..61})"
+bad_auth_value auth-endpoint-placeholder-near-miss NEON_AUTH_ENDPOINT_ID '[sensitive]'
 bad_auth_value auth-email-upper AUTH_ALLOWED_EMAIL 'Preview.User@example.invalid'
 bad_auth_value auth-email-space AUTH_ALLOWED_EMAIL 'preview user@example.invalid'
 bad_auth_value auth-email-two-at AUTH_ALLOWED_EMAIL 'preview@@example.invalid'
@@ -319,6 +354,7 @@ bad_auth_value auth-email-trailing-dot AUTH_ALLOWED_EMAIL 'preview.@example.inva
 bad_auth_value auth-email-two-dots AUTH_ALLOWED_EMAIL 'preview..user@example.invalid'
 bad_auth_value auth-email-local-long AUTH_ALLOWED_EMAIL "$(printf 'a%.0s' {1..65})@example.invalid"
 bad_auth_value auth-email-total-long AUTH_ALLOWED_EMAIL "a@$(printf 'b%.0s' {1..247}).invalid"
+bad_auth_value auth-email-placeholder-near-miss AUTH_ALLOWED_EMAIL '[SENSITIVE][SENSITIVE]'
 bad_auth_value auth-email-empty AUTH_ALLOWED_EMAIL ''
 
 fixture auth-multiline/.env << EOF

@@ -31,6 +31,11 @@
 #   AUTH_ALLOWED_EMAIL     One email address, at most 254 bytes, using the deliberately conservative ASCII shape
 #                          accepted by this application's current single-user allowlist.
 # Their purpose and private per-environment handling are documented in docs/runbooks/authentication.md.
+# Vercel Secret values outside Development are write-only and unavailable to pulls. vercel@65.9.0's
+# `envPullCommandLogic` writes the exact non-secret placeholder `[SENSITIVE]` for each such value (official product
+# behavior: https://vercel.com/changelog/environment-variables-now-use-config-and-secret-types). The auth names may
+# therefore contain that exact marker instead of the literal value. Literal Config values still receive the shape
+# checks below; the deployed runtime and fail-closed application config are responsible for validating Secret values.
 # Add an exact name only with a citation; no prefix families other than VERCEL_.
 # Allowlisted names other than VERCEL_* are printed on a pass too, so the log shows which names were present, never values.
 #
@@ -61,6 +66,7 @@ turbo_cache_re='^(local|remote):(rw|r|w)?(,(local|remote):(rw|r|w)?)*$'
 neon_auth_base_re='^https://(ep-[a-z0-9]+(-[a-z0-9]+)*)\.neonauth\.c-[0-9]+\.[a-z0-9]+(-[a-z0-9]+)*\.aws\.neon\.tech/neondb/auth$'
 neon_endpoint_re='^ep-[a-z0-9]+(-[a-z0-9]+)*$'
 allowed_email_re='^[a-z0-9_%+-]+(\.[a-z0-9_%+-]+)*@[a-z0-9]+(-[a-z0-9]+)*(\.[a-z0-9]+(-[a-z0-9]+)*)*\.[a-z]{2,63}$'
+secret_placeholder='[SENSITIVE]'
 assign_re='^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$'
 trailing_re='^[[:space:]]*(#.*)?$'
 
@@ -91,11 +97,11 @@ check_file() {
       NX_DAEMON) [[ $2 == false ]] ;;
       TURBO_CACHE) [[ ${#2} -le 32 && $2 =~ $turbo_cache_re ]] ;;
       TURBO_DOWNLOAD_LOCAL_ENABLED | TURBO_REMOTE_ONLY | TURBO_RUN_SUMMARY) [[ $2 == true || $2 == false || $2 == 1 || $2 == 0 ]] ;;
-      NEON_AUTH_BASE_URL) [[ ${#2} -le 255 && $2 =~ $neon_auth_base_re ]] ;;
-      NEON_AUTH_ENDPOINT_ID) [[ ${#2} -le 63 && $2 =~ $neon_endpoint_re ]] ;;
+      NEON_AUTH_BASE_URL) [[ $2 == "$secret_placeholder" || (${#2} -le 255 && $2 =~ $neon_auth_base_re) ]] ;;
+      NEON_AUTH_ENDPOINT_ID) [[ $2 == "$secret_placeholder" || (${#2} -le 63 && $2 =~ $neon_endpoint_re) ]] ;;
       AUTH_ALLOWED_EMAIL)
         email_local=${2%@*}
-        [[ ${#2} -le 254 && ${#email_local} -le 64 && $2 =~ $allowed_email_re ]]
+        [[ $2 == "$secret_placeholder" || (${#2} -le 254 && ${#email_local} -le 64 && $2 =~ $allowed_email_re) ]]
         ;;
       *) return 0 ;;
     esac
@@ -115,12 +121,14 @@ check_file() {
         case $1 in
           NEON_AUTH_BASE_URL)
             auth_base_count=$((auth_base_count + 1))
-            [[ $3 =~ $neon_auth_base_re ]]
-            auth_base_endpoint=${BASH_REMATCH[1]}
+            if [[ $3 != "$secret_placeholder" ]]; then
+              [[ $3 =~ $neon_auth_base_re ]]
+              auth_base_endpoint=${BASH_REMATCH[1]}
+            fi
             ;;
           NEON_AUTH_ENDPOINT_ID)
             auth_endpoint_count=$((auth_endpoint_count + 1))
-            auth_endpoint=$3
+            [[ $3 == "$secret_placeholder" ]] || auth_endpoint=$3
             ;;
           AUTH_ALLOWED_EMAIL) auth_email_count=$((auth_email_count + 1)) ;;
         esac
@@ -189,7 +197,7 @@ check_file() {
     if ((auth_base_count != 1 || auth_endpoint_count != 1 || auth_email_count != 1)); then
       echo "::error::check-pulled-env: $f: NEON_AUTH_BASE_URL, NEON_AUTH_ENDPOINT_ID and AUTH_ALLOWED_EMAIL must appear exactly once as a complete set"
       bad=1
-    elif [[ $auth_base_endpoint != "$auth_endpoint" ]]; then
+    elif [[ -n $auth_base_endpoint && -n $auth_endpoint && $auth_base_endpoint != "$auth_endpoint" ]]; then
       echo "::error::check-pulled-env: $f: NEON_AUTH_BASE_URL and NEON_AUTH_ENDPOINT_ID identify different endpoints"
       bad=1
     fi
