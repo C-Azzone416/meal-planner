@@ -15,6 +15,8 @@ type AuthConfigResponse struct {
 	BaseURL string `json:"baseUrl,omitempty"`
 }
 
+const publicAuthProxyBaseURL = "/api/auth-proxy"
+
 // AuthConfig serves GET /api/auth-config.
 func AuthConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -34,7 +36,7 @@ func AuthConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	baseURL, err := normalizeAuthBaseURL(configured)
+	_, err := normalizeAuthBaseURL(configured)
 	if err != nil {
 		http.Error(w, "authentication is not configured correctly", http.StatusInternalServerError)
 		return
@@ -42,7 +44,7 @@ func AuthConfig(w http.ResponseWriter, r *http.Request) {
 
 	_ = json.NewEncoder(w).Encode(AuthConfigResponse{
 		Enabled: true,
-		BaseURL: baseURL,
+		BaseURL: publicAuthProxyBaseURL,
 	})
 }
 

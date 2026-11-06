@@ -13,6 +13,20 @@ export interface AuthService {
   signOut(): Promise<void>
 }
 
+export class AuthCodeVerificationError extends Error {
+  constructor() {
+    super('That code could not be verified.')
+    this.name = 'AuthCodeVerificationError'
+  }
+}
+
+export class AuthSessionEstablishmentError extends Error {
+  constructor() {
+    super('The secure sign-in session could not be established.')
+    this.name = 'AuthSessionEstablishmentError'
+  }
+}
+
 interface AuthConfigResponse {
   enabled: boolean
   baseUrl?: string
@@ -45,8 +59,24 @@ function authError(error: unknown, fallback: string): Error {
   return new Error(fallback)
 }
 
+function nestedString(error: unknown, key: string): string | undefined {
+  if (!error || typeof error !== 'object') return undefined
+  const value = (error as Record<string, unknown>)[key]
+  return typeof value === 'string' ? value : undefined
+}
+
+export function isInvalidOrExpiredCodeError(error: unknown): boolean {
+  const directCode = nestedString(error, 'code')
+  const body = error && typeof error === 'object'
+    ? (error as Record<string, unknown>).body
+    : undefined
+  const bodyCode = nestedString(body, 'code')
+  return [directCode, bodyCode].some((code) => code === 'INVALID_OTP' || code === 'OTP_EXPIRED')
+}
+
 export async function loadAuthService(
   fetcher: typeof fetch = fetch,
+  pageOrigin: string = globalThis.location?.origin ?? '',
 ): Promise<AuthService | null> {
   const response = await fetcher('/api/auth-config', {
     headers: { Accept: 'application/json' },
@@ -57,8 +87,22 @@ export async function loadAuthService(
   if (!config.enabled) return null
   if (!config.baseUrl) throw new Error('Sign-in configuration is incomplete.')
 
-  const url = new URL(config.baseUrl)
-  if (url.protocol !== 'https:') {
+  let origin: URL
+  let url: URL
+  try {
+    origin = new URL(pageOrigin)
+    url = new URL(config.baseUrl, origin)
+  } catch {
+    throw new Error('Sign-in configuration is invalid.')
+  }
+  if (
+    origin.protocol !== 'https:'
+    || url.protocol !== 'https:'
+    || url.origin !== origin.origin
+    || url.pathname.replace(/\/$/, '') !== '/api/auth-proxy'
+    || url.search
+    || url.hash
+  ) {
     throw new Error('Sign-in configuration is invalid.')
   }
 
@@ -107,12 +151,15 @@ export async function loadAuthService(
 
     async verifyCode(email, code) {
       const { error } = await client.signIn.emailOtp({ email, otp: code })
-      if (error) throw authError(error, 'That code could not be verified.')
+      if (error) {
+        if (isInvalidOrExpiredCodeError(error)) throw new AuthCodeVerificationError()
+        throw new AuthSessionEstablishmentError()
+      }
 
       const user = await authorizeUser(await getCurrentUser())
       if (!user) {
         await client.signOut()
-        throw new Error('This account is not authorized for this app.')
+        throw new AuthSessionEstablishmentError()
       }
       return user
     },

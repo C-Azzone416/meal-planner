@@ -9,6 +9,7 @@ import {
   useNavigate,
 } from 'react-router-dom'
 import { AuthProvider, useAuth } from './auth/AuthProvider'
+import { AuthCodeVerificationError } from './auth/service'
 import { AppShell } from './components/AppShell'
 import {
   CookPage,
@@ -66,8 +67,10 @@ function SignInRoute() {
     try {
       await auth.verifyCode(email.trim(), code.trim())
       navigate(from && from !== '/sign-in' ? from : '/week', { replace: true })
-    } catch {
-      setError('That code is invalid or expired. Request a new code and try again.')
+    } catch (cause) {
+      setError(cause instanceof AuthCodeVerificationError
+        ? 'That code is invalid or expired. Request a new code and try again.'
+        : 'Your code was accepted, but we could not open a secure session. Request a new code and try again.')
     } finally {
       setPending(false)
     }

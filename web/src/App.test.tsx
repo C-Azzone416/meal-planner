@@ -4,7 +4,12 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AppRoutes } from './App'
 import { AuthProvider } from './auth/AuthProvider'
-import type { AuthService, AuthUser } from './auth/service'
+import {
+  AuthCodeVerificationError,
+  AuthSessionEstablishmentError,
+  type AuthService,
+  type AuthUser,
+} from './auth/service'
 
 const user: AuthUser = {
   id: 'user-test',
@@ -91,6 +96,38 @@ test('completes the email-code flow and opens the requested view', async () => {
 
   expect(await screen.findByRole('heading', { name: 'this week’s dinners' })).toBeTruthy()
   expect(service.verifyCode).toHaveBeenCalledWith('allowed@example.test', '123456')
+})
+
+test('lets the user request a fresh code from the verification step', async () => {
+  const service = makeService(null)
+  renderRoute('/sign-in', service)
+
+  fireEvent.change(await screen.findByLabelText('Email'), {
+    target: { value: 'allowed@example.test' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Email me a sign-in code' }))
+  await screen.findByLabelText('Sign-in code')
+  fireEvent.click(screen.getByRole('button', { name: 'Email me a new code' }))
+
+  await waitFor(() => expect(service.sendCode).toHaveBeenCalledTimes(2))
+})
+
+test.each([
+  [new AuthCodeVerificationError(), 'That code is invalid or expired. Request a new code and try again.'],
+  [new AuthSessionEstablishmentError(), 'Your code was accepted, but we could not open a secure session. Request a new code and try again.'],
+])('reports the right verification failure', async (failure, expected) => {
+  const service = makeService(null)
+  vi.mocked(service.verifyCode).mockRejectedValue(failure)
+  renderRoute('/sign-in', service)
+
+  fireEvent.change(await screen.findByLabelText('Email'), {
+    target: { value: 'allowed@example.test' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Email me a sign-in code' }))
+  fireEvent.change(await screen.findByLabelText('Sign-in code'), { target: { value: '123456' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Open my fridge' }))
+
+  expect((await screen.findByRole('alert')).textContent).toBe(expected)
 })
 
 test('fails closed when authentication is not configured', async () => {

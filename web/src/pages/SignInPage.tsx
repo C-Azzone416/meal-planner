@@ -37,6 +37,15 @@ export function SignInPage({
     await onVerifyCode(email, code)
   }
 
+  const resendCode = async () => {
+    setCode('')
+    try {
+      await onRequestCode(email)
+    } catch {
+      // The route owns the privacy-safe error copy.
+    }
+  }
+
   return (
     <main className="sign-in-page">
       <div className="sign-in-fridge">
@@ -69,6 +78,9 @@ export function SignInPage({
                 <button className="button button--green full-button" disabled={pending || !available}>
                   {pending ? 'Checking…' : 'Open my fridge'}
                 </button>
+                <button type="button" className="text-button" disabled={pending || !available} onClick={() => void resendCode()}>
+                  Email me a new code
+                </button>
                 <button type="button" className="text-button" onClick={() => { setCodeSent(false); setCode('') }}>
                   Use a different email
                 </button>
@@ -91,7 +103,7 @@ export function SignInPage({
                 </button>
               </>
             )}
-            <p>No passwords. New here? The same steps create your account.</p>
+            <p>Meal Planner uses one-time codes instead of passwords. New here? The same steps create your account.</p>
             {unavailable && <p className="form-message" role="status">Sign-in is not configured for this environment yet.</p>}
             {error && <p className="form-error" role="alert">{error}</p>}
           </form>

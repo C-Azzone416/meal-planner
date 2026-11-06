@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -64,7 +65,7 @@ func TestAuthConfigDisabledWithoutEnvironmentBinding(t *testing.T) {
 	}
 }
 
-func TestAuthConfigReturnsNormalizedPublicBaseURL(t *testing.T) {
+func TestAuthConfigReturnsSameOriginProxyWithoutExposingProviderURL(t *testing.T) {
 	t.Setenv("NEON_AUTH_BASE_URL", "https://auth.invalid/example/auth/")
 	t.Setenv("AUTH_ALLOWED_EMAIL", testAllowedEmail)
 	t.Setenv("NEON_AUTH_ENDPOINT_ID", testEndpointID)
@@ -78,8 +79,11 @@ func TestAuthConfigReturnsNormalizedPublicBaseURL(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if !got.Enabled || got.BaseURL != "https://auth.invalid/example/auth" {
+	if !got.Enabled || got.BaseURL != publicAuthProxyBaseURL {
 		t.Fatalf("response = %+v", got)
+	}
+	if strings.Contains(rec.Body.String(), "auth.invalid") {
+		t.Fatalf("response exposed the provider URL: %s", rec.Body.String())
 	}
 	if cache := rec.Header().Get("Cache-Control"); cache != "no-store" {
 		t.Fatalf("cache-control = %q", cache)
