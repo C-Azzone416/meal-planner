@@ -46,7 +46,7 @@ VERCEL_GIT_COMMIT_SHA=""
 VERCEL_URL=""
 EOF
 expect 0 vercel-only "$work/vercel-only/.env.preview.local"
-check "vercel-only: reports no extra system vars" has vercel-only "allowed system vars present (non-VERCEL_): none"
+check "vercel-only: reports no extra exact vars" has vercel-only "allowed exact vars present (non-VERCEL_): none"
 
 # Allowlisted exact names pass and are named on a pass.
 fixture system/.env.preview.local << EOF
@@ -55,7 +55,7 @@ CI=1
 VERCEL_OIDC_TOKEN="$secret"
 EOF
 expect 0 system "$work/system/.env.preview.local"
-check "system: names VERCEL and CI" has system "allowed system vars present (non-VERCEL_): VERCEL, CI"
+check "system: names VERCEL and CI" has system "allowed exact vars present (non-VERCEL_): VERCEL, CI"
 
 # An app variable fails and its NAME (only) is reported.
 fixture app/.env.preview.local << EOF
@@ -236,6 +236,109 @@ EOF
 expect 0 build-settings "$work/build-settings/.env.preview.local"
 check "build-settings: 8 variables" has build-settings "8 variable(s)"
 check "build-settings: names the allowed ones" has build-settings "present (non-VERCEL_): NX_DAEMON, TURBO_CACHE, TURBO_DOWNLOAD_LOCAL_ENABLED, TURBO_REMOTE_ONLY, TURBO_RUN_SUMMARY, VERCEL"
+
+# Preview auth runtime settings: the three exact names must appear once as a complete, internally consistent set.
+auth_base=https://ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth
+auth_endpoint=ep-example-123
+auth_email=preview.user+test@example.invalid
+fixture auth/.env.preview.local << EOF
+# Created by Vercel CLI
+AUTH_ALLOWED_EMAIL="$auth_email"
+NEON_AUTH_BASE_URL="$auth_base"
+NEON_AUTH_ENDPOINT_ID="$auth_endpoint"
+VERCEL_ENV="preview"
+VERCEL_OIDC_TOKEN="eyJ.$secret.sig"
+EOF
+expect 0 auth "$work/auth/.env.preview.local"
+check "auth: names settings without values" has auth "AUTH_ALLOWED_EMAIL, NEON_AUTH_BASE_URL, NEON_AUTH_ENDPOINT_ID"
+check "auth: does not print hostname" lacks auth "ep-example-123"
+check "auth: does not print email" lacks auth "preview.user"
+
+for missing_name in NEON_AUTH_BASE_URL NEON_AUTH_ENDPOINT_ID AUTH_ALLOWED_EMAIL; do
+  : > "$work/auth-partial.env"
+  [[ $missing_name == NEON_AUTH_BASE_URL ]] || printf 'NEON_AUTH_BASE_URL="%s"\n' "$auth_base" >> "$work/auth-partial.env"
+  [[ $missing_name == NEON_AUTH_ENDPOINT_ID ]] || printf 'NEON_AUTH_ENDPOINT_ID="%s"\n' "$auth_endpoint" >> "$work/auth-partial.env"
+  [[ $missing_name == AUTH_ALLOWED_EMAIL ]] || printf 'AUTH_ALLOWED_EMAIL="%s"\n' "$auth_email" >> "$work/auth-partial.env"
+  expect 1 "auth-missing-$missing_name" "$work/auth-partial.env"
+  check "auth-missing-$missing_name: complete set required" has "auth-missing-$missing_name" "must appear exactly once as a complete set"
+done
+
+fixture auth-duplicate/.env << EOF
+NEON_AUTH_BASE_URL="$auth_base"
+NEON_AUTH_BASE_URL="$auth_base"
+NEON_AUTH_ENDPOINT_ID="$auth_endpoint"
+AUTH_ALLOWED_EMAIL="$auth_email"
+EOF
+expect 1 auth-duplicate "$work/auth-duplicate/.env"
+check "auth-duplicate: rejected without a value" has auth-duplicate "must appear exactly once as a complete set"
+
+fixture auth-mismatch/.env << EOF
+NEON_AUTH_BASE_URL="$auth_base"
+NEON_AUTH_ENDPOINT_ID="ep-other-456"
+AUTH_ALLOWED_EMAIL="$auth_email"
+EOF
+expect 1 auth-mismatch "$work/auth-mismatch/.env"
+check "auth-mismatch: rejected without either endpoint" has auth-mismatch "identify different endpoints"
+check "auth-mismatch: base endpoint not printed" lacks auth-mismatch "$auth_endpoint"
+check "auth-mismatch: configured endpoint not printed" lacks auth-mismatch "ep-other-456"
+
+bad_auth_value() { # bad_auth_value <case> <NAME> <value>: replace one value in an otherwise complete auth set
+  local case_name=$1 setting=$2 invalid=$3 base=$auth_base endpoint=$auth_endpoint email=$auth_email
+  case $setting in
+    NEON_AUTH_BASE_URL) base=$invalid ;;
+    NEON_AUTH_ENDPOINT_ID) endpoint=$invalid ;;
+    AUTH_ALLOWED_EMAIL) email=$invalid ;;
+  esac
+  printf 'NEON_AUTH_BASE_URL="%s"\nNEON_AUTH_ENDPOINT_ID="%s"\nAUTH_ALLOWED_EMAIL="%s"\n' "$base" "$endpoint" "$email" > "$work/$case_name.env"
+  expect 1 "$case_name" "$work/$case_name.env"
+  check "$case_name: names only the invalid setting" has "$case_name" "$setting has an unexpected value"
+  if [[ -n $invalid ]]; then
+    check "$case_name: does not print the invalid value" lacks "$case_name" "$invalid"
+  fi
+}
+
+bad_auth_value auth-base-http NEON_AUTH_BASE_URL 'http://ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth'
+bad_auth_value auth-base-userinfo NEON_AUTH_BASE_URL 'https://user@ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth'
+bad_auth_value auth-base-wrong-host NEON_AUTH_BASE_URL 'https://ep-example-123.neonauth.example.invalid/neondb/auth'
+bad_auth_value auth-base-wrong-path NEON_AUTH_BASE_URL 'https://ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/auth'
+bad_auth_value auth-base-query NEON_AUTH_BASE_URL 'https://ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth?x=1'
+bad_auth_value auth-base-fragment NEON_AUTH_BASE_URL 'https://ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth#x'
+bad_auth_value auth-base-slash NEON_AUTH_BASE_URL 'https://ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth/'
+bad_auth_value auth-base-upper NEON_AUTH_BASE_URL 'https://EP-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth'
+bad_auth_value auth-endpoint-upper NEON_AUTH_ENDPOINT_ID 'EP-example-123'
+bad_auth_value auth-endpoint-punctuation NEON_AUTH_ENDPOINT_ID 'ep-example_123'
+bad_auth_value auth-endpoint-long NEON_AUTH_ENDPOINT_ID "ep-$(printf 'a%.0s' {1..61})"
+bad_auth_value auth-email-upper AUTH_ALLOWED_EMAIL 'Preview.User@example.invalid'
+bad_auth_value auth-email-space AUTH_ALLOWED_EMAIL 'preview user@example.invalid'
+bad_auth_value auth-email-two-at AUTH_ALLOWED_EMAIL 'preview@@example.invalid'
+bad_auth_value auth-email-no-dot AUTH_ALLOWED_EMAIL 'preview@example'
+bad_auth_value auth-email-leading-hyphen AUTH_ALLOWED_EMAIL 'preview@-example.invalid'
+bad_auth_value auth-email-trailing-hyphen AUTH_ALLOWED_EMAIL 'preview@example-.invalid'
+bad_auth_value auth-email-leading-dot AUTH_ALLOWED_EMAIL '.preview@example.invalid'
+bad_auth_value auth-email-trailing-dot AUTH_ALLOWED_EMAIL 'preview.@example.invalid'
+bad_auth_value auth-email-two-dots AUTH_ALLOWED_EMAIL 'preview..user@example.invalid'
+bad_auth_value auth-email-local-long AUTH_ALLOWED_EMAIL "$(printf 'a%.0s' {1..65})@example.invalid"
+bad_auth_value auth-email-total-long AUTH_ALLOWED_EMAIL "a@$(printf 'b%.0s' {1..247}).invalid"
+bad_auth_value auth-email-empty AUTH_ALLOWED_EMAIL ''
+
+fixture auth-multiline/.env << EOF
+NEON_AUTH_BASE_URL="$auth_base
+"
+NEON_AUTH_ENDPOINT_ID="$auth_endpoint"
+AUTH_ALLOWED_EMAIL="$auth_email"
+EOF
+expect 1 auth-multiline "$work/auth-multiline/.env"
+check "auth-multiline: rejected by name" has auth-multiline "NEON_AUTH_BASE_URL has an unexpected value"
+
+fixture auth-lookalikes/.env << EOF
+NEON_AUTH_BASE_URI="$secret"
+NEON_AUTH_ENDPOINT="$secret"
+AUTH_ALLOWED_EMAILS="$secret"
+EOF
+expect 1 auth-lookalikes "$work/auth-lookalikes/.env"
+for n in NEON_AUTH_BASE_URI NEON_AUTH_ENDPOINT AUTH_ALLOWED_EMAILS; do
+  check "auth-lookalikes: $n flagged" has auth-lookalikes "unexpected variable name $n"
+done
 
 # Every allowed value, unquoted, double-quoted and single-quoted.
 for v in true false 1 0; do

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Check that env files written by `vercel pull` define only Vercel system variable NAMES.
+# Check that env files written by `vercel pull` define only approved variable NAMES and values.
 # Usage: check-pulled-env.sh <file|dir>...   (a directory, e.g. .vercel, is searched for .env* files)
-# Exit:  0 every name is allowlisted, 1 an unexpected name or an unparseable line, 2 usage or I/O error.
+# Exit:  0 every name/value is approved, 1 an unexpected name/value, incomplete or inconsistent auth set,
+#        or unparseable line, 2 usage or I/O error.
 #
 # For the token-bearing pull jobs. `vercel pull` writes .vercel/.env.<target>.local with a live
 # VERCEL_OIDC_TOKEN, and this repository and its Actions logs are public. So this prints variable NAMES and
 # line numbers only: never values, their lengths or prefixes, and never the text of a line it cannot parse.
-# A name outside the allowlist means build-time env vars exist, which the env-free build job cannot receive,
+# A name outside the allowlist means a new deployment setting exists, which the env-free build job cannot receive,
 # so the env handoff design must be revisited (docs/runbooks/hosted-deploy.md); it must not be fixed by widening the list.
 #
 # Parses dotenv format: blank lines, `#` comments, an optional `export ` prefix, NAME=value with `=` allowed
@@ -18,12 +19,20 @@
 # printed if it is outside the allowlist), an unquoted value starting with `=` (base64 padding), and a
 # .env* path that is a symlink or not a regular file. A file that cannot be opened or read exits 2.
 #
-# Allowlist: VERCEL_* plus these exact names, each listed as a system environment variable at
+# Allowlist: VERCEL_* plus these exact names. VERCEL and CI are listed as system environment variables at
 # https://vercel.com/docs/environment-variables/system-environment-variables
 #   VERCEL  "An indicator to show that system environment variables have been exposed to your project's Deployments."
 #   CI      "An indicator that the code is running in a Continuous Integration environment."
+# Three application runtime settings are intentionally configured in Vercel Preview and are therefore returned by
+# `vercel pull`, even though the workflow deletes the pulled env file and never gives them to the build job:
+#   NEON_AUTH_BASE_URL     HTTPS URL for the Neon branch auth service; restricted to a Neon Auth hostname and the
+#                          exact `/neondb/auth` path. The endpoint ID in the hostname is not logged.
+#   NEON_AUTH_ENDPOINT_ID  Neon endpoint ID (`ep-` plus lowercase letters, digits and hyphens).
+#   AUTH_ALLOWED_EMAIL     One email address, at most 254 bytes, using the deliberately conservative ASCII shape
+#                          accepted by this application's current single-user allowlist.
+# Their purpose and private per-environment handling are documented in docs/runbooks/authentication.md.
 # Add an exact name only with a citation; no prefix families other than VERCEL_.
-# Allowlisted names other than VERCEL_* are printed on a pass too, so the log shows which ones were present.
+# Allowlisted names other than VERCEL_* are printed on a pass too, so the log shows which names were present, never values.
 #
 # Vercel build settings: `vercel pull` writes whatever GET /v3/env/pull/<project>/<target> returns for the
 # environment (read in vercel@65.9.0: pullEnvRecords -> `records = pullResult.env`, written as sorted
@@ -47,8 +56,11 @@
 set -euo pipefail
 export LC_ALL=C # byte semantics, so ${#var} counts bytes for the NUL check
 
-allowed_exact=" VERCEL CI NX_DAEMON TURBO_CACHE TURBO_DOWNLOAD_LOCAL_ENABLED TURBO_REMOTE_ONLY TURBO_RUN_SUMMARY "
+allowed_exact=" VERCEL CI NX_DAEMON TURBO_CACHE TURBO_DOWNLOAD_LOCAL_ENABLED TURBO_REMOTE_ONLY TURBO_RUN_SUMMARY NEON_AUTH_BASE_URL NEON_AUTH_ENDPOINT_ID AUTH_ALLOWED_EMAIL "
 turbo_cache_re='^(local|remote):(rw|r|w)?(,(local|remote):(rw|r|w)?)*$'
+neon_auth_base_re='^https://(ep-[a-z0-9]+(-[a-z0-9]+)*)\.neonauth\.c-[0-9]+\.[a-z0-9]+(-[a-z0-9]+)*\.aws\.neon\.tech/neondb/auth$'
+neon_endpoint_re='^ep-[a-z0-9]+(-[a-z0-9]+)*$'
+allowed_email_re='^[a-z0-9_%+-]+(\.[a-z0-9_%+-]+)*@[a-z0-9]+(-[a-z0-9]+)*(\.[a-z0-9]+(-[a-z0-9]+)*)*\.[a-z]{2,63}$'
 assign_re='^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$'
 trailing_re='^[[:space:]]*(#.*)?$'
 
@@ -72,11 +84,19 @@ find_close() {
 # check_file <file>: prints names-only findings; returns 1 if any name is unexpected or any line unparseable.
 check_file() {
   local f=$1 n=0 line value rest q="" name="" start=0 bad=0 count=0 extra=""
+  local auth_base_count=0 auth_endpoint_count=0 auth_email_count=0 auth_base_endpoint="" auth_endpoint=""
   value_ok() { # value_ok <name> <value>: <value> is in the set allowed for <name>; "" never is
+    local email_local
     case $1 in
       NX_DAEMON) [[ $2 == false ]] ;;
       TURBO_CACHE) [[ ${#2} -le 32 && $2 =~ $turbo_cache_re ]] ;;
       TURBO_DOWNLOAD_LOCAL_ENABLED | TURBO_REMOTE_ONLY | TURBO_RUN_SUMMARY) [[ $2 == true || $2 == false || $2 == 1 || $2 == 0 ]] ;;
+      NEON_AUTH_BASE_URL) [[ ${#2} -le 255 && $2 =~ $neon_auth_base_re ]] ;;
+      NEON_AUTH_ENDPOINT_ID) [[ ${#2} -le 63 && $2 =~ $neon_endpoint_re ]] ;;
+      AUTH_ALLOWED_EMAIL)
+        email_local=${2%@*}
+        [[ ${#2} -le 254 && ${#email_local} -le 64 && $2 =~ $allowed_email_re ]]
+        ;;
       *) return 0 ;;
     esac
   }
@@ -91,6 +111,19 @@ check_file() {
       if ! value_ok "$1" "$3"; then
         echo "::error::check-pulled-env: $f line $2: $1 has an unexpected value"
         bad=1
+      else
+        case $1 in
+          NEON_AUTH_BASE_URL)
+            auth_base_count=$((auth_base_count + 1))
+            [[ $3 =~ $neon_auth_base_re ]]
+            auth_base_endpoint=${BASH_REMATCH[1]}
+            ;;
+          NEON_AUTH_ENDPOINT_ID)
+            auth_endpoint_count=$((auth_endpoint_count + 1))
+            auth_endpoint=$3
+            ;;
+          AUTH_ALLOWED_EMAIL) auth_email_count=$((auth_email_count + 1)) ;;
+        esac
       fi
       [[ ", $extra, " == *", $1, "* ]] || extra="${extra:+$extra, }$1"
     else
@@ -151,12 +184,23 @@ check_file() {
   done <<< "$content"
   [[ -z $q ]] || unparseable "$start" # unterminated quoted value
 
+  local auth_total=$((auth_base_count + auth_endpoint_count + auth_email_count))
+  if ((auth_total > 0)); then
+    if ((auth_base_count != 1 || auth_endpoint_count != 1 || auth_email_count != 1)); then
+      echo "::error::check-pulled-env: $f: NEON_AUTH_BASE_URL, NEON_AUTH_ENDPOINT_ID and AUTH_ALLOWED_EMAIL must appear exactly once as a complete set"
+      bad=1
+    elif [[ $auth_base_endpoint != "$auth_endpoint" ]]; then
+      echo "::error::check-pulled-env: $f: NEON_AUTH_BASE_URL and NEON_AUTH_ENDPOINT_ID identify different endpoints"
+      bad=1
+    fi
+  fi
+
   if ((bad)); then
-    echo "::error::check-pulled-env: $f defines a name outside the Vercel system variable allowlist or could not be parsed; build-time env vars exist, so this env handoff design must be revisited"
+    echo "::error::check-pulled-env: $f defines a name or value outside the approved deployment-variable allowlist, or could not be parsed; this env handoff design must be revisited"
     return 1
   fi
-  echo "ok $f: $count variable(s), all Vercel system variable names"
-  echo "allowed system vars present (non-VERCEL_): ${extra:-none}"
+  echo "ok $f: $count variable(s), all approved deployment variables"
+  echo "allowed exact vars present (non-VERCEL_): ${extra:-none}"
 }
 
 # Collect files. A failing find (e.g. an unreadable directory) is an I/O error, so its output goes to a file
