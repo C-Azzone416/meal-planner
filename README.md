@@ -1,8 +1,8 @@
 # Meal Planner
 
-Meal Planner is a planned web application for reducing the effort required to cook varied dinners at home. This repository contains planning documentation and a verification skeleton; there is no product functionality yet.
+Meal Planner is a planned web application for reducing the effort required to cook varied dinners at home. The repository now includes a navigable, responsive UI preview and a fail-closed authentication boundary. The preview uses clearly labeled sample data; planning changes are not persisted yet.
 
-> **Skeleton status:** The repository has CI workflows, a hosted `GET /api/health` function with a minimal OpenAPI contract test, a web client scaffold, a `mealplanner` CLI (`version`, plus read-only `draft validate/list/show`), and a stdio `mealplanner-mcp` server for local recipe drafts. There is no recipe planning, hosted draft save, database schema, migration, or live product deployment.
+> **Preview status:** The repository has CI workflows, hosted health and authentication functions, a React UI preview, a `mealplanner` CLI (`version`, plus read-only `draft validate/list/show`), and a stdio `mealplanner-mcp` server for local recipe drafts. The UI covers the planned views and uses passwordless email-code authentication when its provider is configured. There is no persisted recipe planning, hosted draft save, database schema, or migration yet.
 
 ## Product direction
 
@@ -27,6 +27,7 @@ The application will keep user data private even though the source repository is
 - [Repository layout](docs/repo-layout.md) — component map and check commands for the current skeleton.
 - [Local draft contract](docs/local-draft-contract.md) — the versioned contract for the local recipe-draft slice described below.
 - [Local draft workflow](docs/local-workflow.md) — host setup, privacy boundary, and the verification record for Codex CLI and Claude Code.
+- [Authentication runbook](docs/runbooks/authentication.md) — environment-specific allowlisting, provider wiring, and verification gates.
 
 ## Local draft slice
 
@@ -38,9 +39,9 @@ Setup for Codex CLI and Claude Code, the privacy boundary, and the verification 
 
 ## Current boundaries
 
-The skeleton exists to prove build, CI, and release plumbing. Product features are not implemented. In particular, the repository does not yet include:
+The current UI is an interaction and navigation preview, not a functional meal-planning system. In particular, the repository does not yet include:
 
-- recipe, planning, or feedback code in the web client or hosted API;
+- persisted recipe, planning, or feedback operations in the hosted API;
 - database tables, SQL, migrations, or seed data;
 - an application OpenAPI contract or generated clients (only the health-check contract exists);
 - draft create, update, or delete commands in the CLI, or any hosted draft save; or

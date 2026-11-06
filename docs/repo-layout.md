@@ -1,17 +1,17 @@
 # Repository Layout
 
-Component map for the verification skeleton. All commands run from the repository root. The skeleton contains no planning or hosted product functionality yet; the local recipe-draft slice is described below.
+Component map for the UI/authentication preview and local tooling. All commands run from the repository root. The web views use sample data and contain no persisted planning functionality yet; the local recipe-draft slice is described below.
 
 | Path | Component | Purpose | Check commands |
 | --- | --- | --- | --- |
 | `go.mod`, `go.sum` | all Go | Module `github.com/C-Azzone416/meal-planner`; the `go` directive is the Go version source for CI | `test -z "$(gofmt -l .)"`, `go vet ./...` |
 | `internal/core/version/` | local core | `Version` variable (default `dev`), set via `-ldflags "-X github.com/C-Azzone416/meal-planner/internal/core/version.Version=<v>"` | `go test ./internal/core/...` |
-| `hosted/` | hosted API | Plain `net/http` handlers (`GET /api/health`) | `go test ./api/... ./hosted/...` |
-| `api/health.go` | hosted API | Vercel Go function wrapping `hosted`, served at `/api/health` | `go test ./api/... ./hosted/...` |
+| `hosted/` | hosted API | Plain `net/http` handlers for health, public auth configuration, signup policy, and reusable bearer-token protection | `go test ./api/... ./hosted/...` |
+| `api/` | hosted API | Vercel Go functions for `/api/health`, `/api/auth-config`, and the signed blocking signup webhook | `go test ./api/... ./hosted/...` |
 | `cmd/mealplanner/` | local tools | CLI: `version`, `--version`, `draft validate/list/show` (read-only; see [local-draft-contract.md](local-draft-contract.md)); no args prints usage and exits 2 | `go test ./cmd/...`, `go build ./cmd/...` |
 | `cmd/mealplanner-mcp/` | local tools | stdio MCP server for local recipe drafts (`--data-dir`, `--version`); stdout is protocol-only. `workflow_test.go` is the offline MCP-to-CLI round trip described in [local-workflow.md](local-workflow.md) | `go test ./cmd/...`, `go build ./cmd/...` |
 | `contracts/` | contract | `openapi.yaml` (OpenAPI 3.1) and `contract_test.go` checking the hosted handler against it | `go test ./contracts/...` |
-| `web/` | web client | Vite + React + TypeScript; Node version in `web/.nvmrc` | `npm ci --prefix web`, then `npm run --prefix web lint` / `typecheck` / `test` / `build` (output `web/dist`) |
+| `web/` | web client | Vite + React + TypeScript; protected responsive preview routes and passwordless sign-in; Node version in `web/.nvmrc` | `npm ci --prefix web`, then `npm run --prefix web lint` / `typecheck` / `test` / `build` (output `web/dist`) |
 | `vercel.json` | hosted deploy | Builds `web/` to static `web/dist`; `api/*.go` are detected as Go functions | none locally |
 
 Local recipe-draft slice (contract in [local-draft-contract.md](local-draft-contract.md); host setup and verification record in [local-workflow.md](local-workflow.md)):
