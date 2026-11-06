@@ -2,6 +2,7 @@ package hosted
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,11 +21,38 @@ const (
 )
 
 var authProxyRoutes = map[string]map[string]bool{
-	"email-otp/send-verification-otp": {http.MethodPost: true},
-	"get-session":                     {http.MethodGet: true, http.MethodPost: true},
-	"sign-in/email-otp":               {http.MethodPost: true},
-	"sign-out":                        {http.MethodPost: true},
-	"token":                           {http.MethodGet: true},
+	"email-otp/request-password-reset": {http.MethodPost: true},
+	"email-otp/reset-password":         {http.MethodPost: true},
+	"get-session":                      {http.MethodGet: true, http.MethodPost: true},
+	"revoke-other-sessions":            {http.MethodPost: true},
+	"sign-in/email":                    {http.MethodPost: true},
+	"sign-out":                         {http.MethodPost: true},
+}
+
+var authProxyEmailRoutes = map[string]bool{
+	"email-otp/request-password-reset": true,
+	"email-otp/reset-password":         true,
+	"sign-in/email":                    true,
+}
+
+var authProxySilentEmailRoutes = map[string]bool{
+	"email-otp/request-password-reset": true,
+}
+
+type authProxyBlockedResponse struct {
+	Status int
+	Body   string
+}
+
+var authProxyBlockedEmailResponses = map[string]authProxyBlockedResponse{
+	"email-otp/reset-password": {
+		Status: http.StatusBadRequest,
+		Body:   `{"code":"INVALID_OTP","message":"Invalid OTP"}`,
+	},
+	"sign-in/email": {
+		Status: http.StatusUnauthorized,
+		Body:   `{"code":"INVALID_EMAIL_OR_PASSWORD","message":"Invalid email or password"}`,
+	},
 }
 
 // AuthProxyConfig configures the narrow same-origin proxy used by the browser
@@ -32,6 +60,7 @@ var authProxyRoutes = map[string]map[string]bool{
 type AuthProxyConfig struct {
 	BaseURL          string
 	ExpectedEndpoint string
+	AllowedEmail     string
 	Client           HTTPDoer
 	MaxBodyBytes     int64
 	MaxResponseBytes int64
@@ -42,6 +71,7 @@ func AuthProxyFromEnvironment(w http.ResponseWriter, r *http.Request) {
 	AuthProxy(AuthProxyConfig{
 		BaseURL:          os.Getenv("NEON_AUTH_BASE_URL"),
 		ExpectedEndpoint: os.Getenv("NEON_AUTH_ENDPOINT_ID"),
+		AllowedEmail:     os.Getenv("AUTH_ALLOWED_EMAIL"),
 	}).ServeHTTP(w, r)
 }
 
@@ -99,6 +129,28 @@ func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConf
 	if int64(len(body)) > maxBodyBytes {
 		http.Error(w, "authentication request is too large", http.StatusRequestEntityTooLarge)
 		return
+	}
+	if authProxyEmailRoutes[path] {
+		if strings.TrimSpace(config.AllowedEmail) == "" {
+			http.Error(w, "authentication proxy is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		if !authProxyEmailAllowed(body, config.AllowedEmail) {
+			if authProxySilentEmailRoutes[path] {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"success":true}`))
+				return
+			}
+			if blocked, ok := authProxyBlockedEmailResponses[path]; ok {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(blocked.Status)
+				_, _ = w.Write([]byte(blocked.Body))
+				return
+			}
+			http.Error(w, "authentication request is not allowed", http.StatusForbidden)
+			return
+		}
 	}
 
 	upstream, err := url.Parse(baseURL + "/" + path)
@@ -179,6 +231,16 @@ func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConf
 
 	w.WriteHeader(response.StatusCode)
 	_, _ = w.Write(responseBody)
+}
+
+func authProxyEmailAllowed(body []byte, allowedEmail string) bool {
+	var payload struct {
+		Email string `json:"email"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(payload.Email), strings.TrimSpace(allowedEmail))
 }
 
 func authProxyUpstreamQuery(rawQuery string) string {

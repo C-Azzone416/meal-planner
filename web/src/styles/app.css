@@ -13,3 +13,5 @@
 @media (max-width:900px){.brand-row .sign-out-link{position:absolute;right:70px;font-size:12px}}
 
 @media (max-width:520px){.shopping-row{grid-template-columns:1fr auto}.shelf-future{display:none}}
+
+.sign-in-card label+label{margin-top:14px}.sign-in-card h2{font:700 24px Libre Baskerville,serif;margin:0 0 10px}

@@ -6,7 +6,7 @@ import { AppRoutes } from './App'
 import { AuthProvider } from './auth/AuthProvider'
 import {
   AuthCodeVerificationError,
-  AuthSessionEstablishmentError,
+  AuthCredentialsError,
   type AuthService,
   type AuthUser,
 } from './auth/service'
@@ -20,8 +20,9 @@ const user: AuthUser = {
 function makeService(session: AuthUser | null): AuthService {
   return {
     getSession: vi.fn().mockResolvedValue(session),
-    sendCode: vi.fn().mockResolvedValue(undefined),
-    verifyCode: vi.fn().mockResolvedValue(user),
+    signInWithPassword: vi.fn().mockResolvedValue(user),
+    sendPasswordResetCode: vi.fn().mockResolvedValue(undefined),
+    setPassword: vi.fn().mockResolvedValue(user),
     signOut: vi.fn().mockResolvedValue(undefined),
   }
 }
@@ -80,60 +81,92 @@ test.each([
   expect(await screen.findByRole('heading', { name: heading })).toBeTruthy()
 })
 
-test('completes the email-code flow and opens the requested view', async () => {
+test('signs in with email and password', async () => {
   const service = makeService(null)
   renderRoute('/sign-in', service)
 
   fireEvent.change(await screen.findByLabelText('Email'), {
     target: { value: 'allowed@example.test' },
   })
-  fireEvent.click(screen.getByRole('button', { name: 'Email me a sign-in code' }))
-
-  const code = await screen.findByLabelText('Sign-in code')
-  expect(service.sendCode).toHaveBeenCalledWith('allowed@example.test')
-  fireEvent.change(code, { target: { value: '123456' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'private-password' } })
   fireEvent.click(screen.getByRole('button', { name: 'Open my fridge' }))
 
   expect(await screen.findByRole('heading', { name: 'this week’s dinners' })).toBeTruthy()
-  expect(service.verifyCode).toHaveBeenCalledWith('allowed@example.test', '123456')
+  expect(service.signInWithPassword).toHaveBeenCalledWith('allowed@example.test', 'private-password')
 })
 
-test('lets the user request a fresh code from the verification step', async () => {
+test('sets the first password for an existing invited account', async () => {
   const service = makeService(null)
   renderRoute('/sign-in', service)
 
-  fireEvent.change(await screen.findByLabelText('Email'), {
-    target: { value: 'allowed@example.test' },
-  })
-  fireEvent.click(screen.getByRole('button', { name: 'Email me a sign-in code' }))
-  await screen.findByLabelText('Sign-in code')
-  fireEvent.click(screen.getByRole('button', { name: 'Email me a new code' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Set or reset password' }))
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'allowed@example.test' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Email my password code' }))
 
-  await waitFor(() => expect(service.sendCode).toHaveBeenCalledTimes(2))
+  expect(await screen.findByRole('heading', { name: 'choose your password' })).toBeTruthy()
+  expect(screen.getByText('Enter the code from your email, then choose a new password.')).toBeTruthy()
+  expect(service.sendPasswordResetCode).toHaveBeenCalledWith('allowed@example.test')
+
+  fireEvent.change(screen.getByLabelText('Password code'), { target: { value: '123456' } })
+  fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'private-password' } })
+  fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'private-password' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save password & open my fridge' }))
+
+  expect(await screen.findByRole('heading', { name: 'this week’s dinners' })).toBeTruthy()
+  expect(service.setPassword).toHaveBeenCalledWith('allowed@example.test', '123456', 'private-password')
 })
 
-test.each([
-  [new AuthCodeVerificationError(), 'That code is invalid or expired. Request a new code and try again.'],
-  [new AuthSessionEstablishmentError(), 'Your code was accepted, but we could not open a secure session. Request a new code and try again.'],
-])('reports the right verification failure', async (failure, expected) => {
+test('uses privacy-safe copy when requesting a password code', async () => {
   const service = makeService(null)
-  vi.mocked(service.verifyCode).mockRejectedValue(failure)
   renderRoute('/sign-in', service)
 
-  fireEvent.change(await screen.findByLabelText('Email'), {
-    target: { value: 'allowed@example.test' },
-  })
-  fireEvent.click(screen.getByRole('button', { name: 'Email me a sign-in code' }))
-  fireEvent.change(await screen.findByLabelText('Sign-in code'), { target: { value: '123456' } })
+  fireEvent.click(await screen.findByRole('button', { name: 'Set or reset password' }))
+  expect(screen.getByText('We’ll email a password code if this invited account exists.')).toBeTruthy()
+})
+
+test('reports an invalid password code without exposing provider details', async () => {
+  const service = makeService(null)
+  vi.mocked(service.setPassword).mockRejectedValue(new AuthCodeVerificationError())
+  renderRoute('/sign-in', service)
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Set or reset password' }))
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'allowed@example.test' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Email my password code' }))
+  fireEvent.change(await screen.findByLabelText('Password code'), { target: { value: '123456' } })
+  fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'private-password' } })
+  fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'private-password' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save password & open my fridge' }))
+
+  expect((await screen.findByRole('alert')).textContent).toBe('That code is invalid or expired. Request a new code and try again.')
+})
+
+test('reports invalid password credentials without exposing provider details', async () => {
+  const service = makeService(null)
+  vi.mocked(service.signInWithPassword).mockRejectedValue(new AuthCredentialsError())
+  renderRoute('/sign-in', service)
+  fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'allowed@example.test' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'not-the-password' } })
   fireEvent.click(screen.getByRole('button', { name: 'Open my fridge' }))
+  expect((await screen.findByRole('alert')).textContent).toBe('That email and password did not match.')
+})
 
-  expect((await screen.findByRole('alert')).textContent).toBe(expected)
+test('clears a sign-in error when switching to password recovery', async () => {
+  const service = makeService(null)
+  vi.mocked(service.signInWithPassword).mockRejectedValue(new AuthCredentialsError())
+  renderRoute('/sign-in', service)
+  fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'allowed@example.test' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'not-the-password' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Open my fridge' }))
+  await screen.findByRole('alert')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Set or reset password' }))
+  expect(screen.queryByRole('alert')).toBeNull()
 })
 
 test('fails closed when authentication is not configured', async () => {
   renderRoute('/sign-in', null)
   expect(await screen.findByText('Sign-in is not configured for this environment yet.')).toBeTruthy()
-  expect(screen.getByRole('button', { name: 'Email me a sign-in code' }).hasAttribute('disabled')).toBe(true)
+  expect(screen.getByRole('button', { name: 'Open my fridge' }).hasAttribute('disabled')).toBe(true)
 })
 
 test('rejects an existing unverified session', async () => {

@@ -9,7 +9,11 @@ import {
   useNavigate,
 } from 'react-router-dom'
 import { AuthProvider, useAuth } from './auth/AuthProvider'
-import { AuthCodeVerificationError } from './auth/service'
+import {
+  AuthCodeVerificationError,
+  AuthCredentialsError,
+  AuthPasswordPolicyError,
+} from './auth/service'
 import { AppShell } from './components/AppShell'
 import {
   CookPage,
@@ -48,29 +52,48 @@ function SignInRoute() {
     return <Navigate to={from && from !== '/sign-in' ? from : '/week'} replace />
   }
 
-  const requestCode = async (email: string) => {
+  const signInWithPassword = async (email: string, password: string) => {
     setPending(true)
     setError(undefined)
     try {
-      await auth.sendCode(email.trim())
+      await auth.signInWithPassword(email.trim(), password)
+      navigate(from && from !== '/sign-in' ? from : '/week', { replace: true })
+    } catch (cause) {
+      setError(cause instanceof AuthCredentialsError
+        ? 'That email and password did not match.'
+        : 'We could not open a secure session. Please try again.')
+      throw new Error('request failed', { cause })
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const requestPasswordResetCode = async (email: string) => {
+    setPending(true)
+    setError(undefined)
+    try {
+      await auth.sendPasswordResetCode(email.trim())
     } catch {
-      setError('We could not send a code. Check the address and try again.')
+      setError('We could not send a password code. Check the address and try again.')
       throw new Error('request failed')
     } finally {
       setPending(false)
     }
   }
 
-  const verifyCode = async (email: string, code: string) => {
+  const setPassword = async (email: string, code: string, password: string) => {
     setPending(true)
     setError(undefined)
     try {
-      await auth.verifyCode(email.trim(), code.trim())
+      await auth.setPassword(email.trim(), code.trim(), password)
       navigate(from && from !== '/sign-in' ? from : '/week', { replace: true })
     } catch (cause) {
       setError(cause instanceof AuthCodeVerificationError
         ? 'That code is invalid or expired. Request a new code and try again.'
-        : 'Your code was accepted, but we could not open a secure session. Request a new code and try again.')
+        : cause instanceof AuthPasswordPolicyError
+          ? 'Use a password between 8 and 128 characters.'
+          : 'Your password may have changed, but we could not open a secure session. Try signing in.')
+      throw new Error('password setup failed', { cause })
     } finally {
       setPending(false)
     }
@@ -82,8 +105,10 @@ function SignInRoute() {
       unavailable={auth.status === 'unavailable'}
       pending={pending || auth.status === 'loading'}
       error={error ?? auth.message ?? undefined}
-      onRequestCode={requestCode}
-      onVerifyCode={verifyCode}
+      onClearError={() => setError(undefined)}
+      onSignIn={signInWithPassword}
+      onRequestPasswordResetCode={requestPasswordResetCode}
+      onSetPassword={setPassword}
     />
   )
 }

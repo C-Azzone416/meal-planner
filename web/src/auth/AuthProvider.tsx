@@ -20,8 +20,9 @@ interface AuthContextValue {
   status: AuthStatus
   user: AuthUser | null
   message: string | null
-  sendCode(email: string): Promise<void>
-  verifyCode(email: string, code: string): Promise<void>
+  signInWithPassword(email: string, password: string): Promise<void>
+  sendPasswordResetCode(email: string): Promise<void>
+  setPassword(email: string, code: string, password: string): Promise<void>
   signOut(): Promise<void>
   retry(): void
 }
@@ -81,20 +82,31 @@ export function AuthProvider({
     }
   }, [attempt, serviceFactory])
 
-  const sendCode = useCallback(
-    async (email: string) => {
+  const signInWithPassword = useCallback(
+    async (email: string, password: string) => {
       if (!service) throw new Error('Sign-in is not configured yet.')
       setMessage(null)
-      await service.sendCode(email)
+      const nextUser = await service.signInWithPassword(email, password)
+      setUser(nextUser)
+      setStatus('signed-in')
     },
     [service],
   )
 
-  const verifyCode = useCallback(
-    async (email: string, code: string) => {
+  const sendPasswordResetCode = useCallback(
+    async (email: string) => {
       if (!service) throw new Error('Sign-in is not configured yet.')
       setMessage(null)
-      const nextUser = await service.verifyCode(email, code)
+      await service.sendPasswordResetCode(email)
+    },
+    [service],
+  )
+
+  const setPassword = useCallback(
+    async (email: string, code: string, password: string) => {
+      if (!service) throw new Error('Sign-in is not configured yet.')
+      setMessage(null)
+      const nextUser = await service.setPassword(email, code, password)
       setUser(nextUser)
       setStatus('signed-in')
     },
@@ -118,12 +130,22 @@ export function AuthProvider({
       status,
       user,
       message,
-      sendCode,
-      verifyCode,
+      signInWithPassword,
+      sendPasswordResetCode,
+      setPassword,
       signOut,
       retry,
     }),
-    [message, retry, sendCode, signOut, status, user, verifyCode],
+    [
+      message,
+      retry,
+      sendPasswordResetCode,
+      setPassword,
+      signInWithPassword,
+      signOut,
+      status,
+      user,
+    ],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

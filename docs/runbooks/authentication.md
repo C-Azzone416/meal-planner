@@ -14,9 +14,9 @@ Configure these server-side values in the matching deployment environment:
 
 Bearer-token issuer and audience are always derived from the origin of `NEON_AUTH_BASE_URL`, matching Neon Auth's documented defaults. They are intentionally not configurable independently.
 
-The provider URL remains server-only. `GET /api/auth-config` gives the browser the fixed same-origin `/api/auth-proxy` path. That narrow proxy forwards only the email-code, session, token, and sign-out methods used by this app; it filters incoming cookies to Neon's auth-cookie prefix and rewrites provider cookies onto the application origin. This avoids third-party-cookie failures without exposing an open reverse proxy or forwarding Vercel protection cookies.
+The provider URL remains server-only. `GET /api/auth-config` gives the browser the fixed same-origin `/api/auth-proxy` path. That narrow proxy forwards only password sign-in, password-reset email-code, session, session-revocation, and sign-out methods used by this app; it filters incoming cookies to Neon's auth-cookie prefix and rewrites provider cookies onto the application origin. It rejects the legacy passwordless sign-in routes. This avoids third-party-cookie failures without exposing an open reverse proxy or forwarding Vercel protection cookies.
 
-Meal Planner intentionally uses passwordless email OTP: the user proves inbox control with a fresh code on each sign-in. It does not share Packed Smart's separate code, setup email, password creation, and password recovery lifecycle.
+Meal Planner uses email and password for routine sign-in. An existing invited account proves inbox control with a short-lived email code when setting its first password or recovering it. The reset operation adds or replaces the credential on the same provider user; it does not create a second account. Public email self-signup stays disabled.
 
 Keep `NEON_AUTH_BASE_URL` unset until the rest of the provider configuration is complete. The public config endpoint returns `enabled: false` unless the base URL, server-only allowlist, and endpoint binding are all present, so the sign-in form stays disabled for partial configurations.
 
@@ -35,6 +35,9 @@ Managed Better Auth creates a public branch auth endpoint as soon as it is enabl
 5. Add the server-only environment values above to Preview, using the environment's intended account and never copying Preview values into Production. Redeploy the protected Preview.
 6. Confirm the provider signs webhook events, the handler can load the branch JWKS, and unsigned, stale, wrong-event, and wrong-endpoint requests remain rejected.
 7. Configure Email OTP and the trusted Preview domain. Enable the application auth URL only after the signed webhook has accepted the intended identity and rejected another identity without creating an account row.
+8. Confirm the intended Preview user already exists. Password reset deliberately does not create a user and must not be used as an invitation mechanism.
+9. Disable provider **Sign-up with Email** before deploying the password UI. Keep email sign-in enabled for existing accounts.
+10. Enable provider **Revoke sessions on password reset**. A reset must invalidate every older session before the new password session is accepted.
 
 If the automation-bypass secret is exposed, revoke it immediately and replace it before continuing. Do not reuse an existing CI bypass credential. A public-domain protection exception is a broader fallback because it exposes the entire Preview alias; use one only with separate approval.
 
@@ -42,8 +45,11 @@ If the automation-bypass secret is exposed, revoke it immediately and replace it
 
 Before considering login ready, verify all of the following in Preview:
 
-- the allowed identity can request and verify a code, revisit a direct protected URL, and sign out;
-- a different identity receives a generic denial and no account row is created;
+- the intended Preview user exists before requesting a password code, and no unexpected account rows exist;
+- provider email self-signup is disabled and session revocation on password reset is enabled;
+- the allowed identity can request a password code, set a password, sign in with it, revisit a direct protected URL, and sign out;
+- a different identity receives a generic response, no email is delivered, and no account row is created;
+- an older session is rejected after the allowed identity resets its password;
 - an unsigned, stale, wrong-event, wrong-endpoint, or incorrectly signed webhook is rejected;
 - a protected API rejects a missing token, a valid token from another auth environment, an unverified identity, and the wrong email;
 - browser history, refreshes, and direct links preserve the expected route;
