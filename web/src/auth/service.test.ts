@@ -1,4 +1,4 @@
-import { expect, test, vi } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 import { isInvalidOrExpiredCodeError, loadAuthService } from './service'
 
 function fetchResponse(body: unknown, status = 200): typeof fetch {
@@ -7,6 +7,10 @@ function fetchResponse(body: unknown, status = 200): typeof fetch {
     headers: { 'Content-Type': 'application/json' },
   })) as unknown as typeof fetch
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 test('keeps authentication disabled when the server policy is disabled', async () => {
   await expect(loadAuthService(fetchResponse({ enabled: false }))).resolves.toBeNull()
@@ -54,4 +58,53 @@ test.each([
   [null, false],
 ])('classifies only provider OTP failures as invalid or expired', (error, expected) => {
   expect(isInvalidOrExpiredCodeError(error)).toBe(expected)
+})
+
+test('authorizes with the JWT injected into a fresh real-adapter session', async () => {
+  const providerRequests: string[] = []
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    providerRequests.push(url)
+    if (url.endsWith('/sign-in/email-otp')) {
+      return new Response(JSON.stringify({
+        token: 'opaque-session-token',
+        user: { id: 'user-test', email: 'allowed@example.test', emailVerified: true },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (url.endsWith('/get-session')) {
+      return new Response(JSON.stringify({
+        session: { id: 'session-test', token: 'opaque-session-token', userId: 'user-test' },
+        user: { id: 'user-test', email: 'allowed@example.test', emailVerified: true },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', 'Set-Auth-Jwt': 'signed-api-jwt' },
+      })
+    }
+    throw new Error(`unexpected provider request: ${url}`)
+  }))
+
+  let authorization = ''
+  const appFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input) === '/api/auth-config') {
+      return new Response(JSON.stringify({ enabled: true, baseUrl: '/api/auth-proxy' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    if (String(input) === '/api/auth/authorize') {
+      authorization = new Headers(init?.headers).get('Authorization') ?? ''
+      return new Response(null, { status: 204 })
+    }
+    throw new Error(`unexpected app request: ${String(input)}`)
+  }) as unknown as typeof fetch
+
+  const service = await loadAuthService(appFetch, 'https://meal.example.test')
+  expect(service).not.toBeNull()
+  await expect(service!.verifyCode('allowed@example.test', '123456')).resolves.toMatchObject({
+    id: 'user-test',
+    email: 'allowed@example.test',
+  })
+  expect(authorization).toBe('Bearer signed-api-jwt')
+  expect(providerRequests.some((url) => url.endsWith('/get-session'))).toBe(true)
+  expect(providerRequests.some((url) => url.endsWith('/token'))).toBe(false)
 })

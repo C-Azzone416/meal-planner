@@ -33,6 +33,9 @@ interface AuthConfigResponse {
 }
 
 type NeonSession = {
+  session?: {
+    token?: string
+  }
   user?: {
     id?: string
     email?: string
@@ -40,14 +43,23 @@ type NeonSession = {
     email_verified?: boolean
   }
 }
-function toAuthUser(session: NeonSession | null | undefined): AuthUser | null {
+type NeonAuthorizedSession = {
+  token: string
+  user: AuthUser
+}
+
+function toAuthorizedSession(session: NeonSession | null | undefined): NeonAuthorizedSession | null {
   const user = session?.user
-  if (!user?.id || !user.email) return null
+  const token = session?.session?.token
+  if (!user?.id || !user.email || !token) return null
 
   return {
-    id: user.id,
-    email: user.email,
-    emailVerified: Boolean(user.emailVerified ?? user.email_verified),
+    token,
+    user: {
+      id: user.id,
+      email: user.email,
+      emailVerified: Boolean(user.emailVerified ?? user.email_verified),
+    },
   }
 }
 
@@ -114,33 +126,33 @@ export async function loadAuthService(
     fetchOptions: { credentials: 'include' },
   })(url.toString()).getBetterAuthInstance()
 
-  const getCurrentUser = async () => {
-    const { data, error } = await client.getSession()
+  const getCurrentSession = async () => {
+    const { data, error } = await client.getSession({
+      fetchOptions: { headers: { 'X-Force-Fetch': 'true' } },
+    })
     if (error) throw authError(error, 'Could not check your sign-in.')
-    return toAuthUser(data as NeonSession | null)
+    return toAuthorizedSession(data as NeonSession | null)
   }
 
-  const authorizeUser = async (user: AuthUser | null) => {
-    if (!user?.emailVerified) return null
+  const authorizeUser = async (session: NeonAuthorizedSession | null) => {
+    if (!session?.user.emailVerified) return null
 
-    const { data, error } = await client.token()
-    if (error || !data?.token) return null
     const authorization = await fetcher('/api/auth/authorize', {
       method: 'GET',
       credentials: 'same-origin',
       headers: {
         Accept: 'application/json',
-        Authorization: `Bearer ${data.token}`,
+        Authorization: `Bearer ${session.token}`,
       },
     })
     if (authorization.status === 401 || authorization.status === 403) return null
     if (!authorization.ok) throw new Error('Sign-in authorization is unavailable.')
-    return user
+    return session.user
   }
 
   return {
     async getSession() {
-      const user = await authorizeUser(await getCurrentUser())
+      const user = await authorizeUser(await getCurrentSession())
       if (!user) await client.signOut()
       return user
     },
@@ -160,7 +172,7 @@ export async function loadAuthService(
         throw new AuthSessionEstablishmentError()
       }
 
-      const user = await authorizeUser(await getCurrentUser())
+      const user = await authorizeUser(await getCurrentSession())
       if (!user) {
         await client.signOut()
         throw new AuthSessionEstablishmentError()
