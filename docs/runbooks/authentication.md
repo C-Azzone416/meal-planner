@@ -16,16 +16,23 @@ Bearer-token issuer and audience are always derived from the origin of `NEON_AUT
 
 Keep `NEON_AUTH_BASE_URL` unset until the rest of the provider configuration is complete. The public config endpoint returns `enabled: false` unless the base URL, server-only allowlist, and endpoint binding are all present, so the sign-in form stays disabled for partial configurations.
 
+The current release intentionally permits one identity per environment. When invitations expand beyond that, replace `AUTH_ALLOWED_EMAIL` with a private server-side membership store and explicit `invited`, `active`, and `revoked` states. Both the blocking creation webhook and every protected product API must consult that same membership policy. Do not ship a client-side list or broaden access with an email-domain match.
+
 ## Provider setup order
 
 Provider and deployment-protection changes require separate action-time approval. Perform them only after the code containing the webhook endpoint has been reviewed and deployed.
 
-1. Configure Email OTP in the environment's Neon Auth project.
-2. Set a blocking `user.before_create` webhook to the deployment's `POST /api/auth/before-create` endpoint.
-3. Confirm the provider signs webhook events and that its JWKS endpoint is reachable at the auth base URL.
-4. Add the server-only environment values above, using the environment's intended account and never copying preview values into production.
-5. Make the webhook URL reachable by Neon. If Preview Deployment Protection blocks it, use a narrowly scoped public preview alias exception only after approval; never put an automation bypass secret in application code or provider configuration.
-6. Enable `NEON_AUTH_BASE_URL` last, then test from a clean browser session.
+Managed Better Auth creates a public branch auth endpoint as soon as it is enabled. Neon does not currently offer an atomic enable-and-configure operation, so treat signup as open until the blocking webhook has been saved. Keep the application auth URL unset throughout this bootstrap period.
+
+1. Make the webhook route reachable without removing Preview Deployment Protection. For Vercel, create a dedicated Protection Bypass for Automation secret and place it only in Neon's private webhook URL as the `x-vercel-protection-bypass` query parameter. The secret bypasses protection for the whole Vercel project, not only this route, so never commit, log, screenshot, or reuse it. Preserve normal Vercel login protection for browser visits.
+2. Enable Managed Better Auth only on the intended Preview branch. Capture the branch auth base URL and endpoint ID privately.
+3. Immediately enable only the blocking `user.before_create` event and point it at `POST /api/auth/before-create`. Until the deployment values below are configured, the handler deliberately returns `503`, causing signup to fail closed.
+4. Audit the branch auth user list before proceeding. Stop if an unexpected account was created during the brief enable-to-webhook interval.
+5. Add the server-only environment values above to Preview, using the environment's intended account and never copying Preview values into Production. Redeploy the protected Preview.
+6. Confirm the provider signs webhook events, the handler can load the branch JWKS, and unsigned, stale, wrong-event, and wrong-endpoint requests remain rejected.
+7. Configure Email OTP and the trusted Preview domain. Enable the application auth URL only after the signed webhook has accepted the intended identity and rejected another identity without creating an account row.
+
+If the automation-bypass secret is exposed, revoke it immediately and replace it before continuing. Do not reuse an existing CI bypass credential. A public-domain protection exception is a broader fallback because it exposes the entire Preview alias; use one only with separate approval.
 
 ## Release gate
 
