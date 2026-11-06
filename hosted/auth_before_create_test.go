@@ -67,7 +67,7 @@ func newWebhookFixture(t *testing.T) *webhookFixture {
 
 func (f *webhookFixture) config() AuthWebhookConfig {
 	return AuthWebhookConfig{
-		BaseURL:          "https://auth.invalid/example/auth",
+		BaseURL:          "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
 		AllowedEmail:     testAllowedEmail,
 		ExpectedEndpoint: testEndpointID,
 		JWKSURL:          "https://jwks.invalid/.well-known/jwks.json",
@@ -192,9 +192,9 @@ func TestAuthBeforeCreateRejectsEnvelopeMismatch(t *testing.T) {
 func TestAuthBeforeCreateRejectsWrongEndpoint(t *testing.T) {
 	fixture := newWebhookFixture(t)
 	config := fixture.config()
-	config.ExpectedEndpoint = "ep-other-environment"
+	body := bytes.Replace(fixture.payload(testAllowedEmail), []byte(testEndpointID), []byte("ep-other-environment"), 1)
 	rec := httptest.NewRecorder()
-	AuthBeforeCreate(config).ServeHTTP(rec, fixture.request(fixture.payload(testAllowedEmail)))
+	AuthBeforeCreate(config).ServeHTTP(rec, fixture.request(body))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}

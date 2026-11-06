@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -27,7 +28,7 @@ func TestAuthConfigDisabledWithoutBaseURL(t *testing.T) {
 }
 
 func TestAuthConfigDisabledWithoutIdentityPolicy(t *testing.T) {
-	t.Setenv("NEON_AUTH_BASE_URL", "https://auth.invalid/example/auth")
+	t.Setenv("NEON_AUTH_BASE_URL", "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth")
 	t.Setenv("AUTH_ALLOWED_EMAIL", "")
 	t.Setenv("NEON_AUTH_ENDPOINT_ID", testEndpointID)
 	rec := httptest.NewRecorder()
@@ -46,7 +47,7 @@ func TestAuthConfigDisabledWithoutIdentityPolicy(t *testing.T) {
 }
 
 func TestAuthConfigDisabledWithoutEnvironmentBinding(t *testing.T) {
-	t.Setenv("NEON_AUTH_BASE_URL", "https://auth.invalid/example/auth")
+	t.Setenv("NEON_AUTH_BASE_URL", "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth")
 	t.Setenv("AUTH_ALLOWED_EMAIL", testAllowedEmail)
 	t.Setenv("NEON_AUTH_ENDPOINT_ID", "")
 	rec := httptest.NewRecorder()
@@ -64,8 +65,8 @@ func TestAuthConfigDisabledWithoutEnvironmentBinding(t *testing.T) {
 	}
 }
 
-func TestAuthConfigReturnsNormalizedPublicBaseURL(t *testing.T) {
-	t.Setenv("NEON_AUTH_BASE_URL", "https://auth.invalid/example/auth/")
+func TestAuthConfigReturnsSameOriginProxyWithoutExposingProviderURL(t *testing.T) {
+	t.Setenv("NEON_AUTH_BASE_URL", "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth/")
 	t.Setenv("AUTH_ALLOWED_EMAIL", testAllowedEmail)
 	t.Setenv("NEON_AUTH_ENDPOINT_ID", testEndpointID)
 	rec := httptest.NewRecorder()
@@ -78,11 +79,25 @@ func TestAuthConfigReturnsNormalizedPublicBaseURL(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if !got.Enabled || got.BaseURL != "https://auth.invalid/example/auth" {
+	if !got.Enabled || got.BaseURL != publicAuthProxyBaseURL {
 		t.Fatalf("response = %+v", got)
+	}
+	if strings.Contains(rec.Body.String(), "neonauth") {
+		t.Fatalf("response exposed the provider URL: %s", rec.Body.String())
 	}
 	if cache := rec.Header().Get("Cache-Control"); cache != "no-store" {
 		t.Fatalf("cache-control = %q", cache)
+	}
+}
+
+func TestAuthConfigRejectsProviderEndpointMismatch(t *testing.T) {
+	t.Setenv("NEON_AUTH_BASE_URL", "https://ep-other.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth")
+	t.Setenv("AUTH_ALLOWED_EMAIL", testAllowedEmail)
+	t.Setenv("NEON_AUTH_ENDPOINT_ID", testEndpointID)
+	rec := httptest.NewRecorder()
+	AuthConfig(rec, httptest.NewRequest(http.MethodGet, "/api/auth-config", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
 	}
 }
 

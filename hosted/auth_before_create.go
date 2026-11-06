@@ -98,7 +98,7 @@ func serveAuthBeforeCreate(w http.ResponseWriter, r *http.Request, config AuthWe
 		return
 	}
 
-	baseURL, err := normalizeAuthBaseURL(config.BaseURL)
+	baseURL, err := normalizeManagedAuthBaseURL(config.BaseURL, config.ExpectedEndpoint)
 	if err != nil || strings.TrimSpace(config.AllowedEmail) == "" || strings.TrimSpace(config.ExpectedEndpoint) == "" {
 		http.Error(w, "authentication webhook is not configured", http.StatusServiceUnavailable)
 		return

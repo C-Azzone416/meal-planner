@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	testIssuer   = "https://auth.invalid"
-	testAudience = "https://auth.invalid"
+	testIssuer   = "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech"
+	testAudience = "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech"
 )
 
 type bearerFixture struct {
@@ -59,11 +59,12 @@ func (ioNopCloser) Close() error { return nil }
 
 func (f *bearerFixture) config() BearerAuthConfig {
 	return BearerAuthConfig{
-		BaseURL:      "https://auth.invalid/example/auth",
-		JWKSURL:      "https://jwks.invalid/.well-known/jwks.json",
-		AllowedEmail: testAllowedEmail,
-		Client:       f.client,
-		Now:          func() time.Time { return f.now },
+		BaseURL:          "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
+		ExpectedEndpoint: testEndpointID,
+		JWKSURL:          "https://jwks.invalid/.well-known/jwks.json",
+		AllowedEmail:     testAllowedEmail,
+		Client:           f.client,
+		Now:              func() time.Time { return f.now },
 	}
 }
 
@@ -121,8 +122,8 @@ func TestVerifyBearerBindsIssuerAndAudienceToAuthOrigin(t *testing.T) {
 	fixture := newBearerFixture(t)
 	config := fixture.config()
 	claims := fixture.claims()
-	claims["iss"] = "https://auth.invalid"
-	claims["aud"] = "https://auth.invalid"
+	claims["iss"] = testIssuer
+	claims["aud"] = testAudience
 	if _, err := VerifyBearer(t.Context(), "Bearer "+fixture.token(t, claims), config); err != nil {
 		t.Fatal(err)
 	}
@@ -182,6 +183,15 @@ func TestVerifyBearerFailsClosedOnMissingPolicy(t *testing.T) {
 	fixture := newBearerFixture(t)
 	config := fixture.config()
 	config.AllowedEmail = ""
+	if _, err := VerifyBearer(t.Context(), "Bearer "+fixture.token(t, fixture.claims()), config); !errorsIs(err, ErrAuthConfiguration) {
+		t.Fatalf("error = %v, want auth configuration error", err)
+	}
+}
+
+func TestVerifyBearerFailsClosedWithoutEnvironmentBinding(t *testing.T) {
+	fixture := newBearerFixture(t)
+	config := fixture.config()
+	config.ExpectedEndpoint = ""
 	if _, err := VerifyBearer(t.Context(), "Bearer "+fixture.token(t, fixture.claims()), config); !errorsIs(err, ErrAuthConfiguration) {
 		t.Fatalf("error = %v, want auth configuration error", err)
 	}

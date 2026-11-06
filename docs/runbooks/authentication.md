@@ -8,11 +8,15 @@ Do not put real account identifiers, provider dashboard links, tokens, or endpoi
 
 Configure these server-side values in the matching deployment environment:
 
-- `NEON_AUTH_BASE_URL`: the HTTPS Neon Auth endpoint. The browser receives this URL from `GET /api/auth-config`; no credential is exposed.
+- `NEON_AUTH_BASE_URL`: the server-only HTTPS Neon Auth endpoint used by the signed webhook and same-origin auth proxy.
 - `AUTH_ALLOWED_EMAIL`: the single exact email allowed in that environment. This value remains server-only.
 - `NEON_AUTH_ENDPOINT_ID`: required expected endpoint ID from webhook events. It binds signup decisions to the intended auth environment.
 
 Bearer-token issuer and audience are always derived from the origin of `NEON_AUTH_BASE_URL`, matching Neon Auth's documented defaults. They are intentionally not configurable independently.
+
+The provider URL remains server-only. `GET /api/auth-config` gives the browser the fixed same-origin `/api/auth-proxy` path. That narrow proxy forwards only the email-code, session, token, and sign-out methods used by this app; it filters incoming cookies to Neon's auth-cookie prefix and rewrites provider cookies onto the application origin. This avoids third-party-cookie failures without exposing an open reverse proxy or forwarding Vercel protection cookies.
+
+Meal Planner intentionally uses passwordless email OTP: the user proves inbox control with a fresh code on each sign-in. It does not share Packed Smart's separate code, setup email, password creation, and password recovery lifecycle.
 
 Keep `NEON_AUTH_BASE_URL` unset until the rest of the provider configuration is complete. The public config endpoint returns `enabled: false` unless the base URL, server-only allowlist, and endpoint binding are all present, so the sign-in form stays disabled for partial configurations.
 
