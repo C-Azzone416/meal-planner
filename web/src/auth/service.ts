@@ -71,7 +71,11 @@ export function isInvalidOrExpiredCodeError(error: unknown): boolean {
     ? (error as Record<string, unknown>).body
     : undefined
   const bodyCode = nestedString(body, 'code')
-  return [directCode, bodyCode].some((code) => code === 'INVALID_OTP' || code === 'OTP_EXPIRED')
+  const details = error && typeof error === 'object'
+    ? (error as Record<string, unknown>).error
+    : undefined
+  const detailsCode = nestedString(details, 'code')
+  return [directCode, bodyCode, detailsCode].some((code) => code === 'INVALID_OTP' || code === 'OTP_EXPIRED')
 }
 
 export async function loadAuthService(

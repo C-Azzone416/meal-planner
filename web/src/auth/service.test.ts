@@ -48,6 +48,7 @@ test('fails closed when the public configuration endpoint fails', async () => {
 test.each([
   [{ code: 'INVALID_OTP' }, true],
   [{ body: { code: 'OTP_EXPIRED' } }, true],
+  [{ code: 'validation_failed', error: { code: 'INVALID_OTP' } }, true],
   [{ code: 'INTERNAL_SERVER_ERROR' }, false],
   [{ status: 502, message: 'unavailable' }, false],
   [null, false],

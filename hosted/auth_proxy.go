@@ -31,6 +31,7 @@ var authProxyRoutes = map[string]map[string]bool{
 // auth client. The provider URL remains server-only.
 type AuthProxyConfig struct {
 	BaseURL          string
+	ExpectedEndpoint string
 	Client           HTTPDoer
 	MaxBodyBytes     int64
 	MaxResponseBytes int64
@@ -38,7 +39,10 @@ type AuthProxyConfig struct {
 
 // AuthProxyFromEnvironment serves the browser auth proxy with private config.
 func AuthProxyFromEnvironment(w http.ResponseWriter, r *http.Request) {
-	AuthProxy(AuthProxyConfig{BaseURL: os.Getenv("NEON_AUTH_BASE_URL")}).ServeHTTP(w, r)
+	AuthProxy(AuthProxyConfig{
+		BaseURL:          os.Getenv("NEON_AUTH_BASE_URL"),
+		ExpectedEndpoint: os.Getenv("NEON_AUTH_ENDPOINT_ID"),
+	}).ServeHTTP(w, r)
 }
 
 // AuthProxy forwards only the Better Auth methods the Meal Planner UI uses.
@@ -53,7 +57,7 @@ func AuthProxy(config AuthProxyConfig) http.Handler {
 func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConfig) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	baseURL, err := normalizeAuthBaseURL(config.BaseURL)
+	baseURL, err := normalizeManagedAuthBaseURL(config.BaseURL, config.ExpectedEndpoint)
 	if err != nil {
 		http.Error(w, "authentication proxy is not configured", http.StatusServiceUnavailable)
 		return
@@ -77,7 +81,8 @@ func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConf
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !authProxyOriginAllowed(r) {
+	requestOrigin, originAllowed := authProxyRequestOrigin(r)
+	if !originAllowed {
 		http.Error(w, "origin is not allowed", http.StatusForbidden)
 		return
 	}
@@ -108,14 +113,12 @@ func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConf
 		http.Error(w, "could not prepare authentication request", http.StatusBadGateway)
 		return
 	}
-	for _, header := range []string{"Authorization", "Content-Type", "Referer", "User-Agent", "X-Neon-Client-Info"} {
+	for _, header := range []string{"Authorization", "Content-Type", "User-Agent", "X-Neon-Client-Info"} {
 		if value := r.Header.Get(header); value != "" {
 			request.Header.Set(header, value)
 		}
 	}
-	if origin := r.Header.Get("Origin"); origin != "" {
-		request.Header.Set("Origin", origin)
-	}
+	request.Header.Set("Origin", requestOrigin)
 	if cookies := extractNeonAuthCookies(r.Header.Get("Cookie")); cookies != "" {
 		request.Header.Set("Cookie", cookies)
 	}
@@ -147,9 +150,10 @@ func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConf
 		return
 	}
 
+	stagedHeaders := make(http.Header)
 	for _, header := range []string{"Content-Type", "Content-Encoding", "Date", "Set-Auth-Jwt", "Set-Auth-Token", "X-Neon-Ret-Request-Id"} {
 		for _, value := range response.Header.Values(header) {
-			w.Header().Add(header, value)
+			stagedHeaders.Add(header, value)
 		}
 	}
 	var cookies []string
@@ -165,7 +169,12 @@ func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConf
 		cookies = append(cookies, rewritten)
 	}
 	for _, cookie := range cookies {
-		w.Header().Add("Set-Cookie", cookie)
+		stagedHeaders.Add("Set-Cookie", cookie)
+	}
+	for header, values := range stagedHeaders {
+		for _, value := range values {
+			w.Header().Add(header, value)
+		}
 	}
 
 	w.WriteHeader(response.StatusCode)
@@ -204,14 +213,9 @@ func extractNeonAuthCookies(header string) string {
 	return strings.Join(cookies, "; ")
 }
 
-func authProxyOriginAllowed(r *http.Request) bool {
-	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	if origin == "" {
-		return true
-	}
-	parsed, err := url.Parse(origin)
-	if err != nil || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return false
+func authProxyRequestOrigin(r *http.Request) (string, bool) {
+	if r.Host == "" || strings.ContainsAny(r.Host, "/\\@") {
+		return "", false
 	}
 	scheme := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0])
 	if scheme == "" {
@@ -221,7 +225,19 @@ func authProxyOriginAllowed(r *http.Request) bool {
 			scheme = "http"
 		}
 	}
-	return parsed.Scheme == scheme && parsed.Host == r.Host
+	if scheme != "https" && scheme != "http" {
+		return "", false
+	}
+	requestOrigin := (&url.URL{Scheme: scheme, Host: r.Host}).String()
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return requestOrigin, true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", false
+	}
+	return requestOrigin, parsed.Scheme == scheme && parsed.Host == r.Host
 }
 
 func rewriteAuthProxyCookie(header string) (string, error) {

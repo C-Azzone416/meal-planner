@@ -18,7 +18,8 @@ func TestAuthProxyForwardsAllowedRouteAndRehomesCookie(t *testing.T) {
 	var upstream *http.Request
 	var upstreamBody string
 	config := AuthProxyConfig{
-		BaseURL: "https://auth.invalid/example/auth",
+		BaseURL:          "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
+		ExpectedEndpoint: testEndpointID,
 		Client: authProxyDoer(func(request *http.Request) (*http.Response, error) {
 			upstream = request
 			body, err := io.ReadAll(request.Body)
@@ -53,7 +54,7 @@ func TestAuthProxyForwardsAllowedRouteAndRehomesCookie(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
 	}
-	if upstream == nil || upstream.URL.String() != "https://auth.invalid/example/auth/sign-in/email-otp?returnTo=%2Fweek" {
+	if upstream == nil || upstream.URL.String() != "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth/sign-in/email-otp?returnTo=%2Fweek" {
 		t.Fatalf("upstream URL = %v", upstream)
 	}
 	if upstreamBody != requestBody {
@@ -86,7 +87,7 @@ func TestAuthProxyForwardsAllowedRouteAndRehomesCookie(t *testing.T) {
 
 func TestAuthProxyRejectsUnknownRoutes(t *testing.T) {
 	rec := httptest.NewRecorder()
-	AuthProxy(AuthProxyConfig{BaseURL: "https://auth.invalid/example/auth"}).ServeHTTP(
+	AuthProxy(AuthProxyConfig{BaseURL: "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth", ExpectedEndpoint: testEndpointID}).ServeHTTP(
 		rec,
 		httptest.NewRequest(http.MethodPost, "/api/auth-proxy?path=admin/create-user", nil),
 	)
@@ -100,9 +101,66 @@ func TestAuthProxyRejectsCrossOriginRequest(t *testing.T) {
 	req.Host = "meal.invalid"
 	req.Header.Set("Origin", "https://evil.invalid")
 	rec := httptest.NewRecorder()
-	AuthProxy(AuthProxyConfig{BaseURL: "https://auth.invalid/example/auth"}).ServeHTTP(rec, req)
+	AuthProxy(AuthProxyConfig{BaseURL: "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth", ExpectedEndpoint: testEndpointID}).ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestAuthProxySynthesizesOriginForOriginlessSessionGet(t *testing.T) {
+	var upstreamOrigin string
+	config := AuthProxyConfig{
+		BaseURL:          "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
+		ExpectedEndpoint: testEndpointID,
+		Client: authProxyDoer(func(request *http.Request) (*http.Response, error) {
+			upstreamOrigin = request.Header.Get("Origin")
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`null`)),
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+			}, nil
+		}),
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://meal.invalid/api/auth-proxy?path=get-session", nil)
+	req.Host = "meal.invalid"
+	rec := httptest.NewRecorder()
+	AuthProxy(config).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if upstreamOrigin != "https://meal.invalid" {
+		t.Fatalf("origin = %q", upstreamOrigin)
+	}
+}
+
+func TestAuthProxyDoesNotEmitSessionHeadersWhenCookieValidationFails(t *testing.T) {
+	config := AuthProxyConfig{
+		BaseURL:          "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
+		ExpectedEndpoint: testEndpointID,
+		Client: authProxyDoer(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{}`)),
+				Header: http.Header{
+					"Content-Type":   []string{"application/json"},
+					"Set-Auth-Jwt":   []string{"private-jwt"},
+					"Set-Auth-Token": []string{"private-token"},
+					"Set-Cookie":     []string{"__Secure-neon-auth.invalid-cookie"},
+				},
+			}, nil
+		}),
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://meal.invalid/api/auth-proxy?path=get-session", nil)
+	req.Host = "meal.invalid"
+	rec := httptest.NewRecorder()
+	AuthProxy(config).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+	for _, header := range []string{"Set-Auth-Jwt", "Set-Auth-Token", "Set-Cookie"} {
+		if value := rec.Header().Get(header); value != "" {
+			t.Fatalf("%s leaked: %q", header, value)
+		}
 	}
 }
 
@@ -112,6 +170,17 @@ func TestAuthProxyFailsClosedWithoutProviderConfig(t *testing.T) {
 		rec,
 		httptest.NewRequest(http.MethodGet, "/api/auth-proxy?path=get-session", nil),
 	)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestAuthProxyRejectsProviderEndpointMismatch(t *testing.T) {
+	rec := httptest.NewRecorder()
+	AuthProxy(AuthProxyConfig{
+		BaseURL:          "https://ep-other.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
+		ExpectedEndpoint: testEndpointID,
+	}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/auth-proxy?path=get-session", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rec.Code)
 	}

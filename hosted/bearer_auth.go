@@ -28,11 +28,12 @@ var (
 
 // BearerAuthConfig configures Neon JWT verification for protected APIs.
 type BearerAuthConfig struct {
-	BaseURL      string
-	JWKSURL      string
-	AllowedEmail string
-	Client       HTTPDoer
-	Now          func() time.Time
+	BaseURL          string
+	ExpectedEndpoint string
+	JWKSURL          string
+	AllowedEmail     string
+	Client           HTTPDoer
+	Now              func() time.Time
 }
 
 // UserIdentity is the verified caller identity placed on protected requests.
@@ -63,8 +64,9 @@ type bearerClaims struct {
 // protected API handlers.
 func BearerAuthConfigFromEnvironment() BearerAuthConfig {
 	return BearerAuthConfig{
-		BaseURL:      os.Getenv("NEON_AUTH_BASE_URL"),
-		AllowedEmail: os.Getenv("AUTH_ALLOWED_EMAIL"),
+		BaseURL:          os.Getenv("NEON_AUTH_BASE_URL"),
+		ExpectedEndpoint: os.Getenv("NEON_AUTH_ENDPOINT_ID"),
+		AllowedEmail:     os.Getenv("AUTH_ALLOWED_EMAIL"),
 	}
 }
 
@@ -103,7 +105,7 @@ func UserFromContext(ctx context.Context) (UserIdentity, bool) {
 // VerifyBearer validates a Neon Ed25519 JWT and the app's environment-specific
 // identity restrictions.
 func VerifyBearer(ctx context.Context, authorization string, config BearerAuthConfig) (UserIdentity, error) {
-	baseURL, err := normalizeAuthBaseURL(config.BaseURL)
+	baseURL, err := normalizeManagedAuthBaseURL(config.BaseURL, config.ExpectedEndpoint)
 	if err != nil || strings.TrimSpace(config.AllowedEmail) == "" {
 		return UserIdentity{}, ErrAuthConfiguration
 	}
