@@ -146,13 +146,12 @@ jobs:
 
       # `vercel pull` writes .vercel/.env.<target>.local, including a live VERCEL_OIDC_TOKEN (valid ~12 hours),
       # and anyone can read this public repository's Actions artifacts. So the env files NEVER leave this job.
-      # This guard checks variable NAMES only, not whether a value is secret: it fails the job if a pulled env
-      # file defines anything other than Vercel system variables (VERCEL_* and the docs-cited exact names in
-      # check-pulled-env.sh), or has a line it cannot parse. A failure means build-time env vars now exist and
-      # this design must be revisited (the build job cannot receive them through an artifact). Names and line
-      # numbers are printed, values never. A failing find (e.g. no .vercel directory) fails the job. The env
-      # files are deleted afterwards, pass or fail; always() so that holds even if the checkout above failed.
-      - name: Guard - pulled env files hold only Vercel system variable names, then delete them
+      # This guard fails if a name or value is outside the docs-cited system/build/runtime allowlist, or a line
+      # cannot be parsed. The approved auth trio is checked for shape and consistency. A failure means this env
+      # handoff design must be revisited (the build job cannot receive values through an artifact). Names and line
+      # numbers are printed, values never. A failing find (e.g. no .vercel directory) fails the job. The env files
+      # are deleted afterwards, pass or fail; always() so that holds even if the checkout above failed.
+      - name: Guard - validate pulled env names and values, then delete them
         if: always()
         run: |
           set -euo pipefail
@@ -226,8 +225,8 @@ jobs:
       # The pull artifact deliberately carries no env files (they hold a live OIDC token). `vercel build` looks
       # for .vercel/.env.<target>.local and, without it and with --yes, would try to pull it itself, which needs a
       # token this job must not have. So write a stripped placeholder: a comment and one non-secret system variable.
-      # The project has no build-time env vars (the pull job's guard enforces that). Not verified against a live
-      # build: if `vercel build` rejects it, revisit the design rather than ship env values through an artifact.
+      # The project has no build-time env vars; approved runtime auth values are intentionally omitted here.
+      # Not verified against a live build: if `vercel build` rejects it, revisit rather than ship env values.
       - name: Write placeholder env file
         run: |
           printf '# Placeholder written by the build job; pulled env values are never handed between jobs.\nVERCEL_ENV=production\n' > .vercel/.env.production.local
