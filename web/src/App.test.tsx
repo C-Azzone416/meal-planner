@@ -104,7 +104,7 @@ test('sets the first password for an existing invited account', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Email my password code' }))
 
   expect(await screen.findByRole('heading', { name: 'choose your password' })).toBeTruthy()
-  expect(screen.getByText('Enter the code from your email, then choose a new password.')).toBeTruthy()
+  expect(screen.getByText('If you receive a code, enter it below and choose a new password.')).toBeTruthy()
   expect(service.sendPasswordResetCode).toHaveBeenCalledWith('allowed@example.test')
 
   fireEvent.change(screen.getByLabelText('Password code'), { target: { value: '123456' } })
@@ -122,6 +122,75 @@ test('uses privacy-safe copy when requesting a password code', async () => {
 
   fireEvent.click(await screen.findByRole('button', { name: 'Set or reset password' }))
   expect(screen.getByText('We’ll email a password code if this invited account exists.')).toBeTruthy()
+})
+
+const privateProjectCodeNotice = 'If this email has access, we’ll send a code. This is a private project; contact the owner to request access.'
+
+test.each(['allowed@example.test', 'unapproved@example.test'])(
+  'shows the same private-project notice after requesting and resending a code for %s',
+  async (email) => {
+    const service = makeService(null)
+    renderRoute('/sign-in', service)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Set or reset password' }))
+    expect(screen.queryByText(privateProjectCodeNotice)).toBeNull()
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: email } })
+    fireEvent.click(screen.getByRole('button', { name: 'Email my password code' }))
+
+    expect(await screen.findByText(privateProjectCodeNotice)).toBeTruthy()
+    expect(screen.getByText('If you receive a code, enter it below and choose a new password.')).toBeTruthy()
+    expect(service.sendPasswordResetCode).toHaveBeenCalledWith(email)
+    expect(service.setPassword).not.toHaveBeenCalled()
+    expect(service.signInWithPassword).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByLabelText('Password code'), { target: { value: '123456' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Email me a new password code' }))
+    await waitFor(() => expect(service.sendPasswordResetCode).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect((screen.getByLabelText('Password code') as HTMLInputElement).value).toBe(''))
+    expect(screen.getByText(privateProjectCodeNotice)).toBeTruthy()
+    expect(service.sendPasswordResetCode).toHaveBeenLastCalledWith(email)
+  },
+)
+
+test('keeps the notice generic after returning to sign in and changing email', async () => {
+  const service = makeService(null)
+  renderRoute('/sign-in', service)
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Set or reset password' }))
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'allowed@example.test' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Email my password code' }))
+  await screen.findByText(privateProjectCodeNotice)
+  fireEvent.change(screen.getByLabelText('Password code'), { target: { value: '123456' } })
+  fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'private-password' } })
+  fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'private-password' } })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Back to sign in' }))
+  expect(screen.queryByText(privateProjectCodeNotice)).toBeNull()
+  expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('')
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'unapproved@example.test' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set or reset password' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Email my password code' }))
+
+  expect(await screen.findByText(privateProjectCodeNotice)).toBeTruthy()
+  expect(service.sendPasswordResetCode).toHaveBeenLastCalledWith('unapproved@example.test')
+  for (const label of ['Password code', 'New password', 'Confirm password']) {
+    expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe('')
+  }
+})
+
+test('does not show the code-entry notice when the request fails', async () => {
+  const service = makeService(null)
+  vi.mocked(service.sendPasswordResetCode).mockRejectedValue(new Error('private provider detail'))
+  renderRoute('/sign-in', service)
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Set or reset password' }))
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'allowed@example.test' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Email my password code' }))
+
+  expect((await screen.findByRole('alert')).textContent).toBe('We could not send a password code. Check the address and try again.')
+  expect(screen.queryByText(privateProjectCodeNotice)).toBeNull()
+  expect(screen.queryByLabelText('Password code')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Email my password code' }).hasAttribute('disabled')).toBe(false)
 })
 
 test('reports an invalid password code without exposing provider details', async () => {
