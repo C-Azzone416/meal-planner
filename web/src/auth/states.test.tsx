@@ -152,3 +152,45 @@ describe('sign-out and session expiry notices', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('That email and password did not match.')
   })
 })
+
+describe('returning to the page after sign-in', () => {
+  async function signInFrom(path: string) {
+    const { createMemoryRouter, RouterProvider } = await import('react-router-dom')
+    const service = makeService(null)
+    const router = createMemoryRouter(
+      [{
+        path: '*',
+        element: (
+          <AuthProvider serviceFactory={() => Promise.resolve(service)}>
+            <PlannerProvider storage={null}><AppRoutes /></PlannerProvider>
+          </AuthProvider>
+        ),
+      }],
+      { initialEntries: [path] },
+    )
+    render(<RouterProvider router={router} />)
+    fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'allowed@example.test' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'private-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Open my fridge' }))
+    await waitFor(() => expect(router.state.location.pathname).not.toBe('/sign-in'))
+    return router
+  }
+
+  test('keeps the query string', async () => {
+    const router = await signInFrom('/cook?day=3')
+    expect(router.state.location.pathname).toBe('/cook')
+    expect(router.state.location.search).toBe('?day=3')
+  })
+
+  test('keeps the hash too', async () => {
+    const router = await signInFrom('/recipes?q=soup#results')
+    expect(router.state.location.pathname).toBe('/recipes')
+    expect(router.state.location.search).toBe('?q=soup')
+    expect(router.state.location.hash).toBe('#results')
+  })
+
+  test('falls back to This week when there was no page to return to', async () => {
+    const router = await signInFrom('/sign-in')
+    expect(router.state.location.pathname).toBe('/week')
+  })
+})

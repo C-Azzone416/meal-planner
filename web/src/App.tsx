@@ -31,6 +31,13 @@ import {
   WeekPage,
 } from './pages'
 
+/** Where to go after signing in: an in-app path (query and hash kept), never the sign-in page or another origin. */
+function returnPath(from: string | undefined): string | undefined {
+  if (!from || !from.startsWith('/') || from.startsWith('//')) return undefined
+  if (from === '/sign-in' || from.startsWith('/sign-in?') || from.startsWith('/sign-in#')) return undefined
+  return from
+}
+
 function ProtectedShell() {
   const auth = useAuth()
   const location = useLocation()
@@ -39,7 +46,7 @@ function ProtectedShell() {
     return <main className="auth-state"><PageSkeleton label="Checking your fridge" cards={2} /></main>
   }
   if (auth.status !== 'signed-in') {
-    return <Navigate to="/sign-in" replace state={{ from: location.pathname }} />
+    return <Navigate to="/sign-in" replace state={{ from: `${location.pathname}${location.search}${location.hash}` }} />
   }
 
   return <AppShell onSignOut={() => void auth.signOut()}><Outlet /></AppShell>
@@ -51,10 +58,10 @@ function SignInRoute() {
   const location = useLocation()
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string>()
-  const from = (location.state as { from?: string } | null)?.from
+  const from = returnPath((location.state as { from?: string } | null)?.from)
 
   if (auth.status === 'signed-in') {
-    return <Navigate to={from && from !== '/sign-in' ? from : '/week'} replace />
+    return <Navigate to={from ?? '/week'} replace />
   }
 
   const signInWithPassword = async (email: string, password: string) => {
@@ -62,7 +69,7 @@ function SignInRoute() {
     setError(undefined)
     try {
       await auth.signInWithPassword(email.trim(), password)
-      navigate(from && from !== '/sign-in' ? from : '/week', { replace: true })
+      navigate(from ?? '/week', { replace: true })
     } catch (cause) {
       setError(cause instanceof AuthCredentialsError
         ? 'That email and password did not match.'
@@ -91,7 +98,7 @@ function SignInRoute() {
     setError(undefined)
     try {
       await auth.setPassword(email.trim(), code.trim(), password)
-      navigate(from && from !== '/sign-in' ? from : '/week', { replace: true })
+      navigate(from ?? '/week', { replace: true })
     } catch (cause) {
       setError(cause instanceof AuthCodeVerificationError
         ? 'That code is invalid or expired. Request a new code.'
