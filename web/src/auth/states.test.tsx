@@ -90,7 +90,8 @@ describe('password reset code request', () => {
     await screen.findByText('If that address can sign in, we sent a code.')
     fireEvent.click(screen.getByRole('button', { name: 'Back to sign in' }))
     fireEvent.click(screen.getByRole('button', { name: 'Set or reset password' }))
-    expect((screen.getByRole('button', { name: 'Email my password code' }) as HTMLButtonElement).disabled).toBe(true)
+    // findBy: the route's pending flag may still be flushing, which briefly relabels the button 'Sending…'.
+    expect(((await screen.findByRole('button', { name: 'Email my password code' })) as HTMLButtonElement).disabled).toBe(true)
     expect(service.sendPasswordResetCode).toHaveBeenCalledTimes(1)
   })
 })
