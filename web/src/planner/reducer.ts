@@ -1,6 +1,6 @@
 /** The planner reducer. Pure: random choices arrive as seeds drawn by the store. */
 import { deriveShopping, derivePrep } from './derive'
-import { normalizeName, uniqueId } from './keys'
+import { normalizeName, shoppingKey, uniqueId } from './keys'
 import {
   assignRecipe,
   cancelProposal,
@@ -203,11 +203,12 @@ export function reducer(state: PlannerState, action: PlannerAction): PlannerStat
     }
     case 'pantry/toggleLow': {
       const name = normalizeName(action.name)
+      if (!state.pantryLow.includes(name)) return { ...state, pantryLow: [...state.pantryLow, name] }
+      // Restocked: the low flag was the only reason it was on the list, so its checked progress goes too.
       return {
         ...state,
-        pantryLow: state.pantryLow.includes(name)
-          ? state.pantryLow.filter((existing) => existing !== name)
-          : [...state.pantryLow, name],
+        pantryLow: state.pantryLow.filter((existing) => existing !== name),
+        progress: { ...state.progress, shoppingChecked: without(state.progress.shoppingChecked, shoppingKey(name, '')) },
       }
     }
     case 'dismiss': {
