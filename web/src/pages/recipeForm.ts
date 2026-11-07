@@ -137,6 +137,9 @@ const INT = /^\d+$/
 const DECIMAL = /^(\d+\.?\d*|\.\d+)$/
 
 const blank = (value: string) => value.trim() === ''
+// A digit string can still overflow to Infinity (e.g. 400 nines), so every numeric field must also be finite.
+const isInt = (value: string) => INT.test(value.trim()) && Number.isFinite(Number(value))
+const isDecimal = (value: string) => DECIMAL.test(value.trim()) && Number.isFinite(Number(value))
 
 export const rowIsTouched = {
   ingredients: (row: IngredientRow) => !(blank(row.name) && blank(row.quantity) && blank(row.unit)),
@@ -156,13 +159,13 @@ export function validate(values: RecipeFormValues): FormError[] {
   else if (title.length > 120) add('f-title', 'Title must be 120 characters or fewer.')
 
   const active = values.activeMinutes.trim()
-  if (!INT.test(active) || Number(active) > 600) add('f-activeMinutes', 'Active minutes must be a whole number from 0 to 600.')
+  if (!isInt(active) || Number(active) > 600) add('f-activeMinutes', 'Active minutes must be a whole number from 0 to 600.')
   const total = values.totalMinutes.trim()
-  if (!INT.test(total) || Number(total) > 10080) add('f-totalMinutes', 'Total minutes must be a whole number from 0 to 10080.')
-  else if (INT.test(active) && Number(total) < Number(active)) add('f-totalMinutes', 'Total time can’t be shorter than active time.')
+  if (!isInt(total) || Number(total) > 10080) add('f-totalMinutes', 'Total minutes must be a whole number from 0 to 10080.')
+  else if (isInt(active) && Number(total) < Number(active)) add('f-totalMinutes', 'Total time can’t be shorter than active time.')
 
   const servings = values.servings.trim()
-  if (!INT.test(servings) || Number(servings) < 1 || Number(servings) > 12) add('f-servings', 'Servings must be a whole number from 1 to 12.')
+  if (!isInt(servings) || Number(servings) < 1 || Number(servings) > 12) add('f-servings', 'Servings must be a whole number from 1 to 12.')
 
   // Ingredients
   const ingredientFields: FormError[] = []
@@ -170,8 +173,8 @@ export function validate(values: RecipeFormValues): FormError[] {
     if (!rowIsTouched.ingredients(row)) continue
     const key = `ing-${row.id}`
     if (blank(row.name)) ingredientFields.push({ field: `${key}-name`, message: 'Ingredient name is required.' })
-    if (!blank(row.quantity) && (!DECIMAL.test(row.quantity.trim()) || Number(row.quantity) <= 0)) {
-      ingredientFields.push({ field: `${key}-quantity`, message: 'Quantity must be a number greater than 0, or left empty.' })
+    if (!blank(row.quantity) && (!isDecimal(row.quantity) || Number(row.quantity) <= 0 || Number(row.quantity) > 1_000_000)) {
+      ingredientFields.push({ field: `${key}-quantity`, message: 'Quantity must be a number greater than 0 and at most 1,000,000, or left empty.' })
     }
   }
   errors.push(...ingredientFields)
@@ -183,16 +186,16 @@ export function validate(values: RecipeFormValues): FormError[] {
     if (!rowIsTouched.prepAhead(row)) continue
     const key = `ahead-${row.id}`
     if (blank(row.text)) add(`${key}-text`, 'Prep-ahead step text is required.')
-    if (!blank(row.minutes) && !INT.test(row.minutes.trim())) add(`${key}-minutes`, 'Minutes must be a whole number, or left empty.')
-    if (!blank(row.keepsDays) && (!INT.test(row.keepsDays.trim()) || Number(row.keepsDays) < 1)) {
-      add(`${key}-keepsDays`, 'Keeps for must be a whole number of days (1 or more), or left empty.')
+    if (!blank(row.minutes) && (!isInt(row.minutes) || Number(row.minutes) > 10080)) add(`${key}-minutes`, 'Minutes must be a whole number up to 10080, or left empty.')
+    if (!blank(row.keepsDays) && (!isInt(row.keepsDays) || Number(row.keepsDays) < 1 || Number(row.keepsDays) > 3650)) {
+      add(`${key}-keepsDays`, 'Keeps for must be a whole number of days from 1 to 3650, or left empty.')
     }
   }
   for (const row of values.prepTonight) {
     if (!rowIsTouched.prepTonight(row)) continue
     const key = `tonight-${row.id}`
     if (blank(row.text)) add(`${key}-text`, 'Prep-tonight step text is required.')
-    if (!blank(row.minutes) && !INT.test(row.minutes.trim())) add(`${key}-minutes`, 'Minutes must be a whole number, or left empty.')
+    if (!blank(row.minutes) && (!isInt(row.minutes) || Number(row.minutes) > 10080)) add(`${key}-minutes`, 'Minutes must be a whole number up to 10080, or left empty.')
   }
 
   let cookSteps = 0
@@ -201,8 +204,8 @@ export function validate(values: RecipeFormValues): FormError[] {
     const key = `cook-${row.id}`
     if (blank(row.text)) add(`${key}-text`, 'Cook step text is required.')
     else cookSteps += 1
-    if (!blank(row.timerMinutes) && (!DECIMAL.test(row.timerMinutes.trim()) || Number(row.timerMinutes) <= 0)) {
-      add(`${key}-timerMinutes`, 'Timer must be a number of minutes greater than 0, or left empty.')
+    if (!blank(row.timerMinutes) && (!isDecimal(row.timerMinutes) || Number(row.timerMinutes) <= 0 || Number(row.timerMinutes) > 10080)) {
+      add(`${key}-timerMinutes`, 'Timer must be greater than 0 and at most 10080 minutes, or left empty.')
     }
   }
   if (cookSteps === 0 && !values.cookTonight.some((row) => rowIsTouched.cookTonight(row))) {

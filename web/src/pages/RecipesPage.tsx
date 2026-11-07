@@ -7,6 +7,7 @@ import { formatDuration } from '../planner/format'
 import { usePlanner } from '../planner/store'
 import { DAY_SHORT_NAMES, type DayIndex } from '../planner/types'
 import '../styles/recipes.css'
+import { recipePath } from './recipePath'
 
 const filters = ['All', 'Low attention', 'Dump-and-go', 'Under 15 min', 'Vegetarian']
 const magnetColors = ['rust', 'green', 'gold', 'purple'] as const
@@ -71,7 +72,7 @@ export function RecipesPage() {
           return <li className="paper-card recipe-card rx-card" key={recipe.id}>
             <span className="card-magnet"><Magnet color={magnetColors[index % magnetColors.length]}>{recipe.icon}</Magnet></span>
             {days && <p className="rust-script">on {days.map((day) => DAY_SHORT_NAMES[day]).join(', ')}</p>}
-            <h3><Link className="rx-card-link" to={`/recipes/${recipe.id}`}>{recipe.title}</Link></h3>
+            <h3><Link className="rx-card-link" to={recipePath(recipe.id)}>{recipe.title}</Link></h3>
             <p>{recipe.activeMinutes} min hands-on · {formatDuration(recipe.totalMinutes)} total</p>
             <div className="tag-list">{recipe.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
           </li>

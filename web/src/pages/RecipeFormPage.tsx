@@ -7,6 +7,7 @@ import { usePlanner } from '../planner/store'
 import { AISLES, DAY_NAMES, type Recipe } from '../planner/types'
 import '../styles/recipes.css'
 import { RecipeNotFound } from './RecipeDetailPage'
+import { recipePath } from './recipePath'
 import {
   blankRow,
   emptyForm,
@@ -174,14 +175,14 @@ function RecipeForm({ recipe }: { recipe?: Recipe }) {
     bypass.current = true
     if (recipe) {
       planner.updateRecipe({ ...recipe, ...fields, id: recipe.id })
-      navigate(`/recipes/${recipe.id}`, { state: { saved: true } })
+      navigate(recipePath(recipe.id), { state: { saved: true } })
     } else {
       const id = planner.addRecipe(fields)
-      navigate(`/recipes/${id}`, { state: { saved: true } })
+      navigate(recipePath(id), { state: { saved: true } })
     }
   }
 
-  const cancelTarget = recipe ? `/recipes/${recipe.id}` : '/recipes'
+  const cancelTarget = recipe ? recipePath(recipe.id) : '/recipes'
   const rowProps = (section: SectionKey, noun: string, rowId: string, index: number) => ({
     section,
     noun,
