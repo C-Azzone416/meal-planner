@@ -61,7 +61,10 @@ Shopping and prep are never stored; only progress is (`progress.shoppingChecked`
 
 ## Persistence
 
-`localStorage['mealplanner.preview.v1'] = { version: 1, state: { recipes, drafts, plan, progress, pantryLow, houseRules } }`. Proposal, undo and status are transient. Unparseable, wrong-version or structurally invalid data is discarded: the seed is loaded, `resetNotice` is set ("We reset the preview data because it could not be read."), and the next write overwrites the bad value. There is no cross-tab sync.
+`localStorage['mealplanner.preview.v1'] = { version: 2, state: { recipes, drafts, plan, progress, pantryLow, houseRules } }`. Proposal, undo and status are transient. Unparseable, wrong-version (a version 1 blob included: key encoding changed in version 2) or structurally invalid data (lone UTF-16 surrogates included) is discarded: the seed is loaded, `resetNotice` is set ("We reset the preview data because it could not be read."), and the next write overwrites the bad value. There is no cross-tab sync.
+
+## Payload safety
+Every action is deep-cloned (`structuredClone`) before it is applied, so mutating the object you passed after the call has no effect. `DeepReadonly<T>` is exported from `types.ts` for code that wants to treat store data as immutable. Recipes/drafts containing ill-formed text are refused with a status.
 
 ## Decisions worth knowing
 

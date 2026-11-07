@@ -231,5 +231,12 @@ export interface PlannerState {
   seq: number
 }
 
+/** Recursively read-only version of a type, for code that wants to treat store data as immutable. */
+export type DeepReadonly<T> = T extends (infer U)[]
+  ? readonly DeepReadonly<U>[]
+  : T extends object
+    ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+    : T
+
 /** Random source: returns a float in [0, 1). Injectable for tests. */
 export type Rng = () => number

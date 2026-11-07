@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { parsePersisted, serialize } from './persist'
+import { loadState, parsePersisted, RESET_NOTICE, STORAGE_KEY, serialize } from './persist'
 import { createSeedState } from './seed'
 import type { PlannerState } from './types'
 
@@ -65,5 +65,34 @@ describe('hydration only trusts validated fields', () => {
 
   test('rejects a recipe planned on two nights', () => {
     expect(parsePersisted(stored((s) => { s.plan.nights[3].recipeId = s.plan.nights[1].recipeId }))).toBeNull()
+  })
+})
+
+describe('persisted version 2 and well-formed text', () => {
+  test('serialises as version 2', () => {
+    expect(JSON.parse(serialize(createSeedState())).version).toBe(2)
+  })
+
+  test('a version 1 blob is discarded with the reset notice (key format changed)', () => {
+    const v1 = JSON.stringify({ version: 1, state: JSON.parse(serialize(createSeedState())).state })
+    expect(parsePersisted(v1)).toBeNull()
+    const loaded = loadState({ getItem: () => v1, setItem: () => undefined, removeItem: () => undefined })
+    expect(loaded.resetNotice).toBe(RESET_NOTICE)
+    expect(loaded.state.recipes).toHaveLength(8)
+    expect(STORAGE_KEY).toBe('mealplanner.preview.v1') // the key name is unchanged
+  })
+
+  test.each([
+    ['a recipe id', (s: PlannerState) => { s.recipes[0].id = 'bad\uD800id'; s.plan.nights[1].recipeId = s.recipes[0].id }],
+    ['an ingredient name', (s: PlannerState) => { s.recipes[0].ingredients[0].name = 'x\uDC00' }],
+    ['a draft title', (s: PlannerState) => { s.drafts[0].title = '\uD83D' }],
+    ['a pantryLow entry', (s: PlannerState) => { s.pantryLow = ['oil\uD800'] }],
+    ['a progress key', (s: PlannerState) => { s.progress.prepDone['bad\uD800'] = { doneFactor: 1, text: 't', minutes: 1, mealTitle: 'm' } }],
+  ])('rejects a lone surrogate in %s', (_name, mutate) => {
+    expect(parsePersisted(stored(mutate))).toBeNull()
+  })
+
+  test('well-formed emoji (surrogate pairs) are fine', () => {
+    expect(parsePersisted(stored((s) => { s.recipes[0].title = 'Pizza 🍕 night' }))).not.toBeNull()
   })
 })

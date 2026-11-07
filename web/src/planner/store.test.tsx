@@ -61,7 +61,7 @@ describe('PlannerProvider', () => {
     const first = mount(storage)
     act(() => first.result.current.setSkipped(5))
     const saved = JSON.parse(storage.data.get(STORAGE_KEY) as string)
-    expect(saved.version).toBe(1)
+    expect(saved.version).toBe(2)
     expect(saved.state.plan.nights[5].status).toBe('skipped')
     expect(saved.state.undo).toBeUndefined() // transient state is not persisted
     first.unmount()
@@ -74,11 +74,12 @@ describe('PlannerProvider', () => {
   test.each([
     ['unparseable JSON', '{nope'],
     ['an old version', JSON.stringify({ version: 0, state: {} })],
-    ['a wrong shape', JSON.stringify({ version: 1, state: { recipes: 'x' } })],
+    ['a wrong shape', JSON.stringify({ version: 2, state: { recipes: 'x' } })],
+    ['a version 1 blob (key format changed)', JSON.stringify({ version: 1, state: createSeedState() })],
     ['a plan pointing at a missing recipe', (() => {
       const state = createSeedState()
       state.plan.nights[1].recipeId = 'ghost'
-      return JSON.stringify({ version: 1, state })
+      return JSON.stringify({ version: 2, state })
     })()],
   ])('reseeds and exposes a resetNotice for %s', (_name, raw) => {
     const storage = fakeStorage(raw)
@@ -280,5 +281,61 @@ describe('isolation and render stability', () => {
     act(() => actions.result.current.setSkipped(5))
     expect(actions.result.current).toBe(before)
     expect(result.current.setSkipped).toBeTypeOf('function')
+  })
+})
+
+describe('snapshotting caller payloads', () => {
+  test('mutating the object right after the call (same tick) cannot change what commits', () => {
+    const { result } = mount(null)
+    const input = structuredClone(newRecipe)
+    let id = ''
+    act(() => {
+      id = result.current.addRecipe(input)
+      input.title = 'Mutated'
+      input.ingredients[0].name = 'mutated'
+      input.cookTonight.push({ id: 'x', text: 'sneaky', timerSeconds: null })
+    })
+    const saved = result.current.getRecipe(id)!
+    expect(saved.title).toBe('Test Tacos')
+    expect(saved.ingredients[0].name).toBe('tortillas')
+    expect(saved.cookTonight).toHaveLength(1)
+  })
+
+  test('same for updateRecipe and updateDraft', () => {
+    const { result } = mount(null)
+    const salmon = structuredClone(result.current.getRecipe('salmon-lemon-herb-orzo')!) as typeof newRecipe & { id: string }
+    const patch = { tags: ['a'] }
+    act(() => {
+      result.current.updateRecipe({ ...salmon, tags: ['x'] })
+      salmon.tags.push('late')
+      result.current.updateDraft('draft-fennel-traybake', patch)
+      patch.tags.push('late')
+    })
+    expect(result.current.getRecipe('salmon-lemon-herb-orzo')?.tags).toEqual(['x'])
+    expect(result.current.getDraft('draft-fennel-traybake')?.tags).toEqual(['a'])
+  })
+})
+
+describe('ill-formed text (lone surrogates)', () => {
+  const lone = 'bad \uD800 text'
+
+  test('addRecipe refuses it with a status instead of throwing later', () => {
+    const { result } = mount(null)
+    let id = 'unset'
+    act(() => { id = result.current.addRecipe({ ...newRecipe, title: lone }) })
+    expect(id).toBe('')
+    expect(result.current.status?.text).toBe('That text contains characters that cannot be saved.')
+    act(() => { id = result.current.addRecipe({ ...newRecipe, ingredients: [{ ...newRecipe.ingredients[0], name: lone }] }) })
+    expect(id).toBe('')
+    expect(result.current.recipes).toHaveLength(8)
+  })
+
+  test('updateRecipe and updateDraft refuse it too', () => {
+    const { result } = mount(null)
+    const salmon = result.current.getRecipe('salmon-lemon-herb-orzo')!
+    act(() => result.current.updateRecipe({ ...salmon, title: lone }))
+    expect(result.current.getRecipe('salmon-lemon-herb-orzo')?.title).toBe(salmon.title)
+    act(() => result.current.updateDraft('draft-fennel-traybake', { title: lone }))
+    expect(result.current.getDraft('draft-fennel-traybake')?.title).toBe('Chicken thigh traybake with fennel')
   })
 })
