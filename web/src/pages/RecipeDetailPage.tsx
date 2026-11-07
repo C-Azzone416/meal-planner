@@ -123,7 +123,7 @@ function RecipeDetail() {
         {recipe.cookTonight.length === 0 ? <p className="rx-empty">No cooking steps yet.</p> : (
           <ol className="rx-steps">{recipe.cookTonight.map((step) => <li key={step.id}>
             <span>{step.text}</span>
-            {step.timerSeconds !== null && <small>Timer {formatTimer(step.timerSeconds)}</small>}
+            {step.timerSeconds !== null && <small>Timer {step.timerSeconds >= 3600 ? formatDuration(Math.round(step.timerSeconds / 60)) : formatTimer(step.timerSeconds)}</small>}
           </li>)}</ol>
         )}
       </section>

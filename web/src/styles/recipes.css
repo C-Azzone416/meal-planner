@@ -105,3 +105,10 @@ button[aria-invalid='true'] { border-color: #8f2c1d; }
 @media (prefers-reduced-motion: reduce) {
   .rx-card, .rx-card * { transition: none !important; animation: none !important; }
 }
+
+/* Keep long content from stretching the page at 320–390px. */
+.page-stack { grid-template-columns: minmax(0, 1fr); }
+.rx-form { grid-template-columns: minmax(0, 1fr); }
+.draft-card header { display: flex; justify-content: space-between; gap: 8px 16px; }
+.rx-rows { grid-template-columns: minmax(0, 1fr); }
+.rx-row { min-width: 0; }
