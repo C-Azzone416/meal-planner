@@ -15,6 +15,7 @@ import {
   AuthPasswordPolicyError,
 } from './auth/service'
 import { AppShell } from './components/AppShell'
+import { PlannerProvider } from './planner/store'
 import {
   CookPage,
   DraftsPage,
@@ -136,7 +137,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppRoutes />
+        <PlannerProvider>
+          <AppRoutes />
+        </PlannerProvider>
       </AuthProvider>
     </BrowserRouter>
   )
