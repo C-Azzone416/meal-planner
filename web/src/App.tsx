@@ -18,6 +18,7 @@ import {
   isNetworkFailure,
 } from './auth/service'
 import { AppShell } from './components/AppShell'
+import { RouteFocus } from './components/RouteFocus'
 import { PageSkeleton } from './components/StateCard'
 import { PlannerProvider } from './planner/store'
 import {
@@ -133,25 +134,29 @@ function SignInRoute() {
 
 export function AppRoutes() {
   return (
-    <Routes>
-      <Route path="/sign-in" element={<SignInRoute />} />
-      <Route element={<ProtectedShell />}>
-        <Route path="/week" element={<WeekPage />} />
-        <Route path="/recipes" element={<RecipesPage />} />
-        <Route path="/recipes/new" element={<RecipeFormPage mode="new" />} />
-        <Route path="/recipes/by-id/:recipeId" element={<RecipeDetailPage />} />
-        <Route path="/recipes/by-id/:recipeId/edit" element={<RecipeFormPage mode="edit" />} />
-        <Route path="/recipes/:recipeId" element={<RecipeDetailPage />} />
-        <Route path="/recipes/:recipeId/edit" element={<RecipeFormPage mode="edit" />} />
-        <Route path="/prep" element={<PrepPage />} />
-        <Route path="/shopping" element={<ShoppingPage />} />
-        <Route path="/drafts" element={<DraftsPage />} />
-        <Route path="/cook" element={<CookPage />} />
-        <Route path="/house-rules" element={<HouseRulesPage />} />
-      </Route>
-      <Route path="/" element={<Navigate to="/week" replace />} />
-      <Route path="*" element={<Navigate to="/week" replace />} />
-    </Routes>
+    <>
+      <Routes>
+        <Route path="/sign-in" element={<SignInRoute />} />
+        <Route element={<ProtectedShell />}>
+          <Route path="/week" element={<WeekPage />} />
+          <Route path="/recipes" element={<RecipesPage />} />
+          <Route path="/recipes/new" element={<RecipeFormPage mode="new" />} />
+          <Route path="/recipes/by-id/:recipeId" element={<RecipeDetailPage />} />
+          <Route path="/recipes/by-id/:recipeId/edit" element={<RecipeFormPage mode="edit" />} />
+          <Route path="/recipes/:recipeId" element={<RecipeDetailPage />} />
+          <Route path="/recipes/:recipeId/edit" element={<RecipeFormPage mode="edit" />} />
+          <Route path="/prep" element={<PrepPage />} />
+          <Route path="/shopping" element={<ShoppingPage />} />
+          <Route path="/drafts" element={<DraftsPage />} />
+          <Route path="/cook" element={<CookPage />} />
+          <Route path="/house-rules" element={<HouseRulesPage />} />
+        </Route>
+        <Route path="/" element={<Navigate to="/week" replace />} />
+        <Route path="*" element={<Navigate to="/week" replace />} />
+      </Routes>
+    {/* Outside the shell, so it also runs when the session ends and the app redirects to sign-in. Placed after the routes so it focuses the new heading. */}
+    <RouteFocus />
+    </>
   )
 }
 

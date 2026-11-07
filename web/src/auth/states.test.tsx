@@ -36,10 +36,17 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+/** Click a button once it is enabled: the form starts disabled while the auth service loads or a request flushes. */
+async function clickWhenEnabled(name: string) {
+  const button = (await screen.findByRole('button', { name })) as HTMLButtonElement
+  await waitFor(() => expect(button.disabled).toBe(false))
+  fireEvent.click(button)
+}
+
 async function requestCode(email: string) {
-  fireEvent.click(await screen.findByRole('button', { name: 'Set or reset password' }))
+  await clickWhenEnabled('Set or reset password')
   fireEvent.change(screen.getByLabelText('Email'), { target: { value: email } })
-  fireEvent.click(screen.getByRole('button', { name: 'Email my password code' }))
+  await clickWhenEnabled('Email my password code')
 }
 
 describe('password reset code request', () => {
@@ -93,7 +100,9 @@ describe('password reset code request', () => {
     const back = screen.getByRole('button', { name: 'Back to sign in' }) as HTMLButtonElement
     await waitFor(() => expect(back.disabled).toBe(false))
     fireEvent.click(back)
-    fireEvent.click(screen.getByRole('button', { name: 'Set or reset password' }))
+    const reset = screen.getByRole('button', { name: 'Set or reset password' }) as HTMLButtonElement
+    await waitFor(() => expect(reset.disabled).toBe(false))
+    fireEvent.click(reset)
     expect(((await screen.findByRole('button', { name: 'Email my password code' })) as HTMLButtonElement).disabled).toBe(true)
     expect(service.sendPasswordResetCode).toHaveBeenCalledTimes(1)
   })
@@ -153,6 +162,93 @@ describe('sign-out and session expiry notices', () => {
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'nope' } })
     fireEvent.click(screen.getByRole('button', { name: 'Open my fridge' }))
     expect((await screen.findByRole('alert')).textContent).toBe('That email and password did not match.')
+  })
+})
+
+describe('returning to the page after sign-in', () => {
+  async function signInFrom(path: string) {
+    const { createMemoryRouter, RouterProvider } = await import('react-router-dom')
+    const service = makeService(null)
+    const router = createMemoryRouter(
+      [{
+        path: '*',
+        element: (
+          <AuthProvider serviceFactory={() => Promise.resolve(service)}>
+            <PlannerProvider storage={null}><AppRoutes /></PlannerProvider>
+          </AuthProvider>
+        ),
+      }],
+      { initialEntries: [path] },
+    )
+    render(<RouterProvider router={router} />)
+    fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'allowed@example.test' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'private-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Open my fridge' }))
+    await waitFor(() => expect(router.state.location.pathname).not.toBe('/sign-in'))
+    return router
+  }
+
+  test('keeps the query string', async () => {
+    const router = await signInFrom('/cook?day=3')
+    expect(router.state.location.pathname).toBe('/cook')
+    expect(router.state.location.search).toBe('?day=3')
+  })
+
+  test('keeps the hash too', async () => {
+    const router = await signInFrom('/recipes?q=soup#results')
+    expect(router.state.location.pathname).toBe('/recipes')
+    expect(router.state.location.search).toBe('?q=soup')
+    expect(router.state.location.hash).toBe('#results')
+  })
+
+  test('falls back to This week when there was no page to return to', async () => {
+    const router = await signInFrom('/sign-in')
+    expect(router.state.location.pathname).toBe('/week')
+  })
+})
+
+describe('reset-code outcome is uniform', () => {
+  const upstream = [
+    ['throttled (429)', Object.assign(new Error('Too many requests'), { status: 429 })],
+    ['not found (404)', Object.assign(new Error('USER_NOT_FOUND'), { status: 404, code: 'USER_NOT_FOUND' })],
+    ['rejected (400)', Object.assign(new Error('Bad request'), { status: 400 })],
+    ['server error (500)', Object.assign(new Error('Internal error'), { status: 500 })],
+    ['unavailable (503)', Object.assign(new Error('Service unavailable'), { status: 503 })],
+    ['an arbitrary failure', new Error('boom')],
+  ] as const
+
+  test.each(upstream.flatMap(([name, failure]) => [
+    [`approved address, ${name}`, 'allowed@example.test', failure] as const,
+    [`unapproved address, ${name}`, 'stranger@nowhere.test', failure] as const,
+  ]))('%s: neutral message and the same 60s cooldown', async (_name, email, failure) => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    const service = makeService(null)
+    vi.mocked(service.sendPasswordResetCode).mockRejectedValue(failure)
+    renderRoute('/sign-in', service)
+    await requestCode(email)
+    expect(await screen.findByText('If that address can sign in, we sent a code.')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByText('You can request another code in 60 seconds.')).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/check the address|couldn.t reach/i)
+  })
+
+  test('success looks identical (same message, same cooldown)', async () => {
+    renderRoute('/sign-in', makeService(null))
+    await requestCode('allowed@example.test')
+    expect(await screen.findByText('If that address can sign in, we sent a code.')).toBeTruthy()
+    expect(screen.getByText('You can request another code in 60 seconds.')).toBeTruthy()
+  })
+
+  test('only a client-side network failure gets its own message, with no cooldown and the form still usable', async () => {
+    const service = makeService(null)
+    vi.mocked(service.sendPasswordResetCode).mockRejectedValue(new TypeError('Failed to fetch'))
+    renderRoute('/sign-in', service)
+    await requestCode('allowed@example.test')
+    expect((await screen.findByRole('alert')).textContent).toBe('We couldn’t reach the server. Try again.')
+    expect(screen.queryByText('If that address can sign in, we sent a code.')).toBeNull()
+    expect(screen.queryByText(/You can request another code/)).toBeNull()
+    expect(((await screen.findByRole('button', { name: 'Email my password code' })) as HTMLButtonElement).disabled).toBe(false)
+    expect(document.body.textContent).not.toMatch(/check the address/i)
   })
 })
 

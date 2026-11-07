@@ -130,15 +130,17 @@ function isInvalidCredentialsError(error: unknown): boolean {
   ))
 }
 
-/** True for failures with no server answer: fetch TypeErrors, status 0, 5xx, or explicit network codes. */
+/**
+ * True only when the request got no answer from the server (fetch threw, browser status 0, explicit network codes).
+ * Any HTTP status, success or error (throttling, 4xx, 5xx), is a server response and is NOT a network failure.
+ */
 export function isNetworkFailure(error: unknown): boolean {
   if (error instanceof TypeError) return true
   if (!error || typeof error !== 'object') return false
   const record = error as Record<string, unknown>
-  const status = typeof record.status === 'number' ? record.status : undefined
-  if (status !== undefined && (status === 0 || status >= 500)) return true
+  if (typeof record.status === 'number') return record.status === 0
   const code = nestedString(error, 'code')
-  if (code && /NETWORK|FETCH|OFFLINE|TIMEOUT|UNAVAILABLE/i.test(code)) return true
+  if (code && /NETWORK|FETCH|OFFLINE|TIMEOUT/i.test(code)) return true
   const message = nestedString(error, 'message')
   return Boolean(message && /failed to fetch|network ?error|load failed|networkerror/i.test(message))
 }

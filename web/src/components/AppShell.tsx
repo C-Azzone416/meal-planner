@@ -2,7 +2,6 @@ import type { ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { OfflineBanner } from './OfflineBanner'
 import { PageErrorBoundary } from './PageErrorBoundary'
-import { RouteFocus } from './RouteFocus'
 import { usePlanner } from '../planner/store'
 
 const links = [
@@ -40,7 +39,6 @@ export function AppShell({ children, onSignOut }: { children: ReactNode; onSignO
       </header>
       <main className="page-stack">
         <PageErrorBoundary resetKey={pathname}>{children}</PageErrorBoundary>
-        <RouteFocus />
       </main>
       <nav className="mobile-nav" aria-label="Main navigation"><MainLinks mobile /></nav>
     </div>

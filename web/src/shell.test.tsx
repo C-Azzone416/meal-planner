@@ -47,7 +47,8 @@ afterEach(() => {
 test('a crashing page shows the error card but keeps the navigation, and leaving the page clears it', async () => {
   vi.spyOn(console, 'error').mockImplementation(() => undefined)
   renderApp('/shopping')
-  expect(await screen.findByRole('heading', { name: 'Something went wrong on this page' })).toBeTruthy()
+  const failure = await screen.findByRole('heading', { level: 1, name: 'Something went wrong on this page' })
+  await waitFor(() => expect(document.activeElement).toBe(failure)) // the fallback has a real, focused h1
   expect(screen.getAllByRole('link', { name: 'Recipes' }).length).toBeGreaterThan(0)
 
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
@@ -158,4 +159,34 @@ test('adding a recipe to the week replaces the stale "Saved." with the new statu
   fireEvent.click(screen.getByRole('button', { name: /^Add to week/ }))
   expect(await screen.findByText('Planned Tuesday: Red lentil coconut soup')).toBeTruthy()
   expect(screen.queryByText('Saved.')).toBeNull()
+})
+
+test('after the session ends, focus lands on the sign-in heading (RouteFocus survives the redirect)', async () => {
+  const { service } = (() => {
+    const svc = {
+      getSession: vi.fn().mockResolvedValue(user),
+      signInWithPassword: vi.fn(),
+      sendPasswordResetCode: vi.fn(),
+      setPassword: vi.fn(),
+      signOut: vi.fn(),
+    }
+    return { service: svc }
+  })()
+  const router = createMemoryRouter(
+    [{
+      path: '*',
+      element: (
+        <AuthProvider serviceFactory={() => Promise.resolve(service)}>
+          <PlannerProvider storage={null}><AppRoutes /></PlannerProvider>
+        </AuthProvider>
+      ),
+    }],
+    { initialEntries: ['/house-rules'] },
+  )
+  render(<RouterProvider router={router} />)
+  await screen.findByRole('heading', { name: 'house rules' })
+  service.getSession.mockResolvedValue(null)
+  act(() => { window.dispatchEvent(new Event('focus')) })
+  const heading = await screen.findByRole('heading', { name: 'what’s for dinner?' })
+  await waitFor(() => expect(document.activeElement).toBe(heading))
 })
