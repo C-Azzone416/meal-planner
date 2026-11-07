@@ -16,6 +16,7 @@ import {
   AuthPasswordPolicyError,
 } from './auth/service'
 import { AppShell } from './components/AppShell'
+import { PageSkeleton } from './components/StateCard'
 import { PlannerProvider } from './planner/store'
 import {
   CookPage,
@@ -35,7 +36,7 @@ function ProtectedShell() {
   const location = useLocation()
 
   if (auth.status === 'loading') {
-    return <main className="auth-state" role="status">Checking your fridge…</main>
+    return <main className="auth-state"><PageSkeleton label="Checking your fridge" cards={2} /></main>
   }
   if (auth.status !== 'signed-in') {
     return <Navigate to="/sign-in" replace state={{ from: location.pathname }} />
@@ -93,7 +94,7 @@ function SignInRoute() {
       navigate(from && from !== '/sign-in' ? from : '/week', { replace: true })
     } catch (cause) {
       setError(cause instanceof AuthCodeVerificationError
-        ? 'That code is invalid or expired. Request a new code and try again.'
+        ? 'That code is invalid or expired. Request a new code.'
         : cause instanceof AuthPasswordPolicyError
           ? 'Use a password between 8 and 128 characters.'
           : 'Your password may have changed, but we could not open a secure session. Try signing in.')

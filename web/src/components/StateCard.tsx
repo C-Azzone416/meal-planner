@@ -23,6 +23,8 @@ export interface StateCardProps {
   /** At most one primary action. */
   action?: StateAction
   tone?: 'neutral' | 'error'
+  /** Heading level: 2 normally; 1 when the card is the whole page (e.g. "Recipe not found"). */
+  level?: 1 | 2
   /** Live-region semantics: errors use 'alert', everything else 'status' (default: none for static empties). */
   live?: 'status' | 'alert'
 }
@@ -31,12 +33,13 @@ export interface StateCardProps {
  * The one component for every non-happy state (empty, no results, error, not available yet).
  * Paper card, icon magnet, heading, one sentence, at most one primary action. See docs/ux-decisions.md §4.
  */
-export function StateCard({ icon = '🐾', heading, children, action, tone = 'neutral', live }: StateCardProps) {
+export function StateCard({ icon = '🐾', heading, children, action, tone = 'neutral', level = 2, live }: StateCardProps) {
+  const Heading = level === 1 ? 'h1' : 'h2'
   const role = live ?? (tone === 'error' ? 'alert' : undefined)
   return (
     <section className={`state-card${tone === 'error' ? ' state-card--error' : ''}`} role={role}>
       <span className="state-card__magnet"><Magnet color={tone === 'error' ? 'rust' : 'green'}>{icon}</Magnet></span>
-      <h2>{heading}</h2>
+      <Heading>{heading}</Heading>
       {children && <p>{children}</p>}
       {action && <StateActionView action={action} />}
     </section>

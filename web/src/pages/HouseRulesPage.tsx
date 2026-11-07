@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
-import { PageErrorBoundary } from '../components/PageErrorBoundary'
 import { PawMagnet } from '../components/Magnet'
 import { usePlanner } from '../planner/store'
 
@@ -13,10 +12,6 @@ function Choice({ options, value, onChange }: { options: string[]; value: string
 }
 
 export function HouseRulesPage() {
-  return <PageErrorBoundary><HouseRulesContent /></PageErrorBoundary>
-}
-
-function HouseRulesContent() {
   const [people, setPeople] = useState(4)
   const [prep, setPrep] = useState('30–45')
   const [minutes, setMinutes] = useState('10–15')

@@ -140,7 +140,7 @@ test('reports an invalid password code without exposing provider details', async
   fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'private-password' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save password & open my fridge' }))
 
-  expect((await screen.findByRole('alert')).textContent).toBe('That code is invalid or expired. Request a new code and try again.')
+  expect((await screen.findByRole('alert')).textContent).toBe('That code is invalid or expired. Request a new code.')
 })
 
 test('reports invalid password credentials without exposing provider details', async () => {

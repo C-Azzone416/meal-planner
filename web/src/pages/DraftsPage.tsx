@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { StateCard } from '../components/StateCard'
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
 import { formatDuration } from '../planner/format'
 import { usePlanner } from '../planner/store'
@@ -54,7 +55,7 @@ export function DraftsPage() {
     <FridgePanel className="content-panel" paw="rust">
       <div ref={listRef} tabIndex={-1} className="rx-drafts" aria-label="Drafts waiting for review">
         {drafts.length === 0 ? (
-          <div className="empty-state"><h2>No drafts waiting</h2><p>When your agent sends a recipe over, it will show up here for review.</p></div>
+          <StateCard icon="✎" heading="No drafts waiting">When your agent sends a recipe over, it will show up here for review.</StateCard>
         ) : drafts.map((draft) => {
           const confirmedCount = DRAFT_GUESS_KEYS.filter((key) => draft.confirmed[key]).length
           const allConfirmed = confirmedCount === DRAFT_GUESS_KEYS.length

@@ -1,6 +1,5 @@
 import { useId, useState } from 'react'
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
-import { PageErrorBoundary } from '../components/PageErrorBoundary'
 import { StateCard } from '../components/StateCard'
 import type { ShoppingRow } from '../planner/derive'
 import { usePlanner } from '../planner/store'
@@ -32,10 +31,6 @@ function Row({ row }: { row: ShoppingRow }) {
 }
 
 export function ShoppingPage() {
-  return <PageErrorBoundary><ShoppingPageContent /></PageErrorBoundary>
-}
-
-function ShoppingPageContent() {
   const { shopping, pantry, dismissNoLongerNeeded, togglePantryLow } = usePlanner()
   const [view, setView] = useState<'list' | 'pantry'>('list')
   const [grouping, setGrouping] = useState<'aisle' | 'meal'>('aisle')

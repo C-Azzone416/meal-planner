@@ -1,16 +1,11 @@
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
 import { PawMagnet } from '../components/Magnet'
-import { PageErrorBoundary } from '../components/PageErrorBoundary'
 import { StateCard } from '../components/StateCard'
 import { usePlanner } from '../planner/store'
 import { DAY_NAMES, DAY_SHORT_NAMES } from '../planner/types'
 import '../styles/shopping-prep.css'
 
 export function PrepPage() {
-  return <PageErrorBoundary><PrepPageContent /></PageErrorBoundary>
-}
-
-function PrepPageContent() {
   const { prep, summary, togglePrepDone, confirmPrepTopUp, dismissNoLongerNeeded } = usePlanner()
   const { tasks, totals, doneNoLongerPlanned } = prep
   const warnings = tasks.filter((task) => task.warning)

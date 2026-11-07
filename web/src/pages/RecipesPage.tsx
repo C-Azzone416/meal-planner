@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
 import { Magnet } from '../components/Magnet'
+import { StateCard } from '../components/StateCard'
 import { formatDuration } from '../planner/format'
 import { usePlanner } from '../planner/store'
 import { DAY_SHORT_NAMES, type DayIndex } from '../planner/types'
@@ -52,17 +53,18 @@ export function RecipesPage() {
     <FridgePanel className="content-panel">
       <h2>All recipes · {visible.length}</h2>
       {recipes.length === 0 ? (
-        <div className="empty-state">
-          <h3>No recipes yet</h3>
-          <p>Add your first recipe, or approve a draft your agent sent over.</p>
-          <Link className="button button--rust rx-button" to="/recipes/new">Add recipe</Link>
-        </div>
+        <StateCard icon="📖" heading="No recipes yet" action={{ label: 'Add recipe', to: '/recipes/new' }}>
+          Add your first recipe, or approve a draft your agent sent over.
+        </StateCard>
       ) : visible.length === 0 ? (
-        <div className="empty-state" role="status">
-          <h3>No recipes match{query.trim() ? ` “${query.trim()}”` : ''}{filter !== 'All' ? ` with ${filter}` : ''}</h3>
-          <p>Try a different word or filter.</p>
-          <button type="button" className="button button--paper rx-button" onClick={clearFilters}>Clear filters</button>
-        </div>
+        <StateCard
+          icon="🔍"
+          live="status"
+          heading={`No recipes match${query.trim() ? ` “${query.trim()}”` : ''}${filter !== 'All' ? ` with ${filter}` : ''}`}
+          action={{ label: 'Clear filters', onClick: clearFilters }}
+        >
+          Try a different word or filter.
+        </StateCard>
       ) : (
         <ul className="recipe-grid rx-list">{visible.map((recipe, index) => {
           const days = plannedDays.get(recipe.id)

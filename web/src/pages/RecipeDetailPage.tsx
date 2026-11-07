@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { FridgePanel, PreviewNotice } from '../components/FridgePanel'
 import { Magnet } from '../components/Magnet'
+import { focusPageHeading } from '../components/RouteFocus'
+import { StateCard } from '../components/StateCard'
 import { formatAmount, formatDuration, formatTimer, joinList } from '../planner/format'
 import { usePlanner } from '../planner/store'
 import { DAY_NAMES } from '../planner/types'
@@ -11,14 +13,13 @@ import { addToWeekNight } from './addToWeek'
 const ATTENTION_LABEL = { low: 'Low attention', medium: 'Medium attention', high: 'High attention' } as const
 
 export function RecipeNotFound() {
-  const headingRef = useRef<HTMLHeadingElement>(null)
-  useEffect(() => headingRef.current?.focus(), [])
+  useEffect(() => {
+    focusPageHeading()
+  }, [])
   return <FridgePanel className="content-panel">
-    <div className="empty-state">
-      <h1 className="rx-state-title" tabIndex={-1} ref={headingRef}>Recipe not found</h1>
-      <p>We couldn’t find that recipe. It may have been renamed or never saved in this browser.</p>
-      <Link className="button button--rust rx-button" to="/recipes">Back to Recipes</Link>
-    </div>
+    <StateCard level={1} icon="🔍" heading="Recipe not found" action={{ label: 'Back to Recipes', to: '/recipes' }}>
+      We couldn’t find that recipe. It may have been renamed or never saved in this browser.
+    </StateCard>
   </FridgePanel>
 }
 
