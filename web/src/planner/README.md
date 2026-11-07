@@ -19,7 +19,7 @@ const { plan, recipes, shopping, prep, summary, fillWeek, undoInfo, undo } = use
 | `plan.ts` | Pure plan operations (fill, surprise, move, skip, pin, servings, undo) + `mulberry32` seedable RNG. |
 | `derive.ts` | Pure derivations: `deriveShopping`, `derivePrep`, `derivePantry`, `deriveNightWarnings`, `planSummary`. |
 | `persist.ts` | localStorage key `mealplanner.preview.v1` (`{version, state}`), validation, reseed on corrupt/old data. |
-| `keys.ts`, `format.ts` | Stable keys (`shoppingKey`, `prepKey`), ids, quantity/duration formatting. |
+| `keys.ts`, `format.ts` | Stable keys (`shoppingKey`, `prepKey`), ids, quantity/duration formatting. `uniqueId` never returns a reserved recipe id (`RESERVED_RECIPE_IDS` = `new`, `edit`, `by-id`: they are words in the `/recipes/...` URLs), so a title "New" becomes `new-2`. A recipe that already has a reserved id opens at `/recipes/by-id/<id>` (see `pages/recipePath.ts`). |
 | `testing.ts` | Test helpers (`emptyWeek`, `cleanSeed`, `run`, `sequence`). |
 
 ## What `usePlanner()` returns

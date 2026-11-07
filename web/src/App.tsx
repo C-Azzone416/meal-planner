@@ -140,6 +140,7 @@ export function AppRoutes() {
         <Route path="/recipes" element={<RecipesPage />} />
         <Route path="/recipes/new" element={<RecipeFormPage mode="new" />} />
         <Route path="/recipes/by-id/:recipeId" element={<RecipeDetailPage />} />
+        <Route path="/recipes/by-id/:recipeId/edit" element={<RecipeFormPage mode="edit" />} />
         <Route path="/recipes/:recipeId" element={<RecipeDetailPage />} />
         <Route path="/recipes/:recipeId/edit" element={<RecipeFormPage mode="edit" />} />
         <Route path="/prep" element={<PrepPage />} />
