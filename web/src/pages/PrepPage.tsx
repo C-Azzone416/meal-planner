@@ -1,11 +1,16 @@
-import { Link } from 'react-router-dom'
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
 import { PawMagnet } from '../components/Magnet'
+import { PageErrorBoundary } from '../components/PageErrorBoundary'
+import { StateCard } from '../components/StateCard'
 import { usePlanner } from '../planner/store'
 import { DAY_NAMES, DAY_SHORT_NAMES } from '../planner/types'
 import '../styles/shopping-prep.css'
 
 export function PrepPage() {
+  return <PageErrorBoundary><PrepPageContent /></PageErrorBoundary>
+}
+
+function PrepPageContent() {
   const { prep, summary, togglePrepDone, confirmPrepTopUp, dismissNoLongerNeeded } = usePlanner()
   const { tasks, totals, doneNoLongerPlanned } = prep
   const warnings = tasks.filter((task) => task.warning)
@@ -34,11 +39,9 @@ export function PrepPage() {
     <PreviewNotice />
     <FridgePanel className="content-panel" paw="green">
       {empty ? (
-        <div className="empty-state sp-empty">
-          <h2>Nothing to prep — plan a dinner first</h2>
-          <p>Prep tasks come from the dinners on This week.</p>
-          <Link className="button button--dark" to="/week">Go to This week</Link>
-        </div>
+        <StateCard icon="🥕" heading="Nothing to prep — plan a dinner first" action={{ label: 'Go to This week', to: '/week' }}>
+          Prep tasks come from the dinners on This week.
+        </StateCard>
       ) : (
         <div className="prep-layout">
           <div>

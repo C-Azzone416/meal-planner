@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { usePlanner } from '../planner/store'
 import { PawMagnet } from './Magnet'
 
 export function FridgePanel({ children, className = '', paw }: { children: ReactNode; className?: string; paw?: 'green' | 'rust' | 'gold' | 'purple' | 'cream' }) {
@@ -16,5 +17,16 @@ export function PaperTitle({ words }: { words: string[] }) {
 }
 
 export function PreviewNotice() {
-  return <p className="preview-notice">Preview data · saved in this browser only</p>
+  const { resetNotice, dismissResetNotice } = usePlanner()
+  return (
+    <>
+      <p className="preview-notice">Preview data · saved in this browser only</p>
+      {resetNotice && (
+        <div className="reset-notice" role="status">
+          <span>{resetNotice}</span>
+          <button type="button" onClick={dismissResetNotice}>Dismiss</button>
+        </div>
+      )}
+    </>
+  )
 }

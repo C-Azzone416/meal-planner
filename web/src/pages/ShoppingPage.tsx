@@ -1,6 +1,7 @@
 import { useId, useState } from 'react'
-import { Link } from 'react-router-dom'
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
+import { PageErrorBoundary } from '../components/PageErrorBoundary'
+import { StateCard } from '../components/StateCard'
 import type { ShoppingRow } from '../planner/derive'
 import { usePlanner } from '../planner/store'
 import { DAY_NAMES } from '../planner/types'
@@ -31,6 +32,10 @@ function Row({ row }: { row: ShoppingRow }) {
 }
 
 export function ShoppingPage() {
+  return <PageErrorBoundary><ShoppingPageContent /></PageErrorBoundary>
+}
+
+function ShoppingPageContent() {
   const { shopping, pantry, dismissNoLongerNeeded, togglePantryLow } = usePlanner()
   const [view, setView] = useState<'list' | 'pantry'>('list')
   const [grouping, setGrouping] = useState<'aisle' | 'meal'>('aisle')
@@ -89,11 +94,9 @@ export function ShoppingPage() {
           </div>
         </section>
       ) : empty ? (
-        <div className="empty-state sp-empty">
-          <h2>Nothing to buy — plan a dinner first</h2>
-          <p>Your list is built from the dinners on This week.</p>
-          <Link className="button button--dark" to="/week">Go to This week</Link>
-        </div>
+        <StateCard icon="🛒" heading="Nothing to buy — plan a dinner first" action={{ label: 'Go to This week', to: '/week' }}>
+          Your list is built from the dinners on This week.
+        </StateCard>
       ) : (
         <>
           {grouping === 'aisle' ? (
