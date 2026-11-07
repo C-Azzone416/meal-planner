@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
 import type { ShoppingRow } from '../planner/derive'
@@ -6,9 +6,9 @@ import { usePlanner } from '../planner/store'
 import { DAY_NAMES } from '../planner/types'
 import '../styles/shopping-prep.css'
 
-function Row({ row, scope }: { row: ShoppingRow; scope: string }) {
+function Row({ row }: { row: ShoppingRow }) {
   const { toggleShoppingChecked, togglePantryLow } = usePlanner()
-  const id = `${scope}-${row.key}`
+  const id = useId()
   const cls = `sp-row${row.checked ? ' sp-row--checked' : ''}${row.status === 'needs-more' ? ' sp-row--needs-more' : ''}`
   return (
     <div className={cls}>
@@ -101,7 +101,7 @@ export function ShoppingPage() {
               {shopping.groups.map((group) => (
                 <section className="sp-group sp-section" key={group.aisle} aria-label={group.aisle}>
                   <h2>{group.aisle}</h2>
-                  {group.rows.map((row) => <Row key={row.key} row={row} scope={`aisle-${group.aisle}`} />)}
+                  {group.rows.map((row) => <Row key={row.key} row={row} />)}
                 </section>
               ))}
             </div>
@@ -111,7 +111,7 @@ export function ShoppingPage() {
                 <section className="sp-group sp-section" key={meal.day} aria-label={`${DAY_NAMES[meal.day]} · ${meal.title}`}>
                   <h2>{DAY_NAMES[meal.day]} · {meal.label}</h2>
                   {rows.length === 0 && <p className="sp-section-note">Nothing to buy for this dinner.</p>}
-                  {rows.map((row) => <Row key={row.key} row={row} scope={`meal-${meal.day}`} />)}
+                  {rows.map((row) => <Row key={row.key} row={row} />)}
                 </section>
               ))}
             </div>

@@ -258,9 +258,13 @@ describe('derivePrep', () => {
     const task = derivePrep(state).tasks.find((t) => t.key === key)
     expect(task).toMatchObject({ status: 'topup', done: true })
     expect(derivePrep(state).totals.done).toBe(1)
-    state = run(state, { type: 'prep/toggle', key })
+    const toggled = run(state, { type: 'prep/toggle', key }) // a top-up task counts as done, so toggling clears it
+    expect(derivePrep(toggled).tasks.find((t) => t.key === key)?.status).toBe('todo')
+    state = run(state, { type: 'prep/topup', key })
     expect(derivePrep(state).tasks.find((t) => t.key === key)).toMatchObject({ status: 'done' })
     expect(state.progress.prepDone[key].doneFactor).toBe(1.5)
+    expect(run(state, { type: 'prep/topup', key })).toBe(state) // nothing left to top up
+    expect(run(cleanSeed(), { type: 'prep/topup', key })).toEqual(cleanSeed()) // not done at all: no-op
   })
 
   test('a decrease does not need a top-up', () => {

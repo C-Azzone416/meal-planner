@@ -19,6 +19,16 @@ function Controls() {
       <button onClick={() => planner.setOpen(3)}>t:clear-wed</button>
       <button onClick={() => planner.moveNight(1, 5)}>t:move-mon-fri</button>
       <button onClick={() => planner.undo()}>t:undo</button>
+      <button
+        onClick={() => {
+          for (const d of [1, 3, 4] as const) planner.setOpen(d)
+          const recipe = planner.recipes.find((r) => r.id === 'gochujang-chicken')!
+          planner.updateRecipe({ ...recipe, prepAhead: [] })
+          planner.assignRecipe(2, 'gochujang-chicken')
+        }}
+      >
+        t:no-prep
+      </button>
       <button onClick={() => { for (const d of [1, 3, 4] as const) planner.setOpen(d) }}>t:clear-all</button>
     </div>
   )
@@ -51,6 +61,16 @@ describe('ShoppingPage', () => {
     const oil = screen.getByRole('checkbox', { name: /olive oil/ })
     expect(within(oil.closest('.sp-row') as HTMLElement).getByText('running low')).toBeTruthy()
     expect(screen.getByText(/to buy · \d+ items/)).toBeTruthy()
+  })
+
+  test('checkbox ids are valid and unique, even when row keys contain | and spaces', () => {
+    renderPage('shopping')
+    const ids = (screen.getAllByRole('checkbox') as HTMLInputElement[]).map((box) => box.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    for (const id of ids) expect(id).not.toMatch(/[|\s]/)
+    click('By meal')
+    const meal = (screen.getAllByRole('checkbox') as HTMLInputElement[]).map((box) => box.id)
+    expect(new Set(meal).size).toBe(meal.length)
   })
 
   test('can group by meal', () => {
@@ -155,16 +175,53 @@ describe('PrepPage', () => {
     expect(screen.queryByRole('region', { name: 'Done, no longer planned' })).toBeNull()
   })
 
-  test('a serving increase marks a done task as needing a top-up but still done', () => {
+  test('a serving increase keeps a done task checked, flags the top-up, and agrees with the count', () => {
+    renderPage('prep')
+    fireEvent.click(screen.getByRole('checkbox', { name: /Blend herb sauce/ }))
+    const doneBefore = document.querySelector('.progress-block p')?.textContent
+    click('t:salmon-6')
+    const box = screen.getByRole('checkbox', { name: /Blend herb sauce/ }) as HTMLInputElement
+    const label = box.closest('label') as HTMLElement
+    expect(within(label).getByText(/Needs a top-up/)).toBeTruthy()
+    expect(label.className).toContain('task-card--done')
+    expect(box.checked).toBe(true) // still done, so the box matches "N of M done"
+    expect(document.querySelector('.progress-block p')?.textContent).toBe(doneBefore)
+    fireEvent.click(screen.getByRole('button', { name: 'Top-up done for Blend herb sauce' }))
+    expect(screen.queryByText(/Needs a top-up/)).toBeNull()
+    expect((screen.getByRole('checkbox', { name: /Blend herb sauce/ }) as HTMLInputElement).checked).toBe(true)
+  })
+
+  test('unticking a task that needs a top-up clears it', () => {
     renderPage('prep')
     fireEvent.click(screen.getByRole('checkbox', { name: /Blend herb sauce/ }))
     click('t:salmon-6')
-    const label = screen.getByRole('checkbox', { name: /Blend herb sauce/ }).closest('label') as HTMLElement
-    expect(within(label).getByText(/Needs a top-up/)).toBeTruthy()
-    expect(label.className).toContain('task-card--done')
-    expect((within(label).getByRole('checkbox') as HTMLInputElement).checked).toBe(false)
-    fireEvent.click(within(label).getByRole('checkbox'))
-    expect(within(label).queryByText(/Needs a top-up/)).toBeNull()
+    fireEvent.click(screen.getByRole('checkbox', { name: /Blend herb sauce/ }))
+    expect((screen.getByRole('checkbox', { name: /Blend herb sauce/ }) as HTMLInputElement).checked).toBe(false)
+    expect(screen.queryByText(/Needs a top-up/)).toBeNull()
+  })
+
+  test('planned dinners without prep-ahead steps do not show the "plan a dinner first" state', () => {
+    render(
+      <MemoryRouter>
+        <PlannerProvider storage={null} random={mulberry32(1)}>
+          <Controls />
+          <PrepPage />
+        </PlannerProvider>
+      </MemoryRouter>,
+    )
+    // Replace the week with one dinner whose recipe has no prep-ahead steps.
+    click('t:no-prep')
+    expect(screen.queryByRole('heading', { name: /plan a dinner first/ })).toBeNull()
+    expect(screen.getByText('None of this week’s dinners have prep-ahead steps.')).toBeTruthy()
+    expect(screen.queryByText('where it goes')).toBeNull()
+  })
+
+  test('the timing warning summary is not a live region and the warning stays inline', () => {
+    renderPage('prep')
+    click('t:move-mon-fri')
+    const note = document.querySelector('.prep-hero .warning-note') as HTMLElement
+    expect(note.getAttribute('role')).toBeNull()
+    expect(within(note).getByText('Marinade keeps 1 day — prep it Thursday instead').className).toBe('sp-warning')
   })
 
   test('shows the empty state when no dinners are planned', () => {

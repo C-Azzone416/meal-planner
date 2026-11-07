@@ -50,6 +50,7 @@ export type PlannerAction =
   | { type: 'plan/assign'; day: DayIndex; recipeId: string; servings?: number }
   | { type: 'shopping/toggle'; key: string }
   | { type: 'prep/toggle'; key: string }
+  | { type: 'prep/topup'; key: string }
   | { type: 'pantry/toggleLow'; name: string }
   | { type: 'dismiss'; kind: 'shopping' | 'prep'; key: string }
   | { type: 'rules/set'; patch: Partial<HouseRules> }
@@ -206,13 +207,22 @@ export function reducer(state: PlannerState, action: PlannerAction): PlannerStat
           ? { ...state, progress: { ...state.progress, prepDone: without(prepDone, action.key) } }
           : state
       }
-      const next = task.status === 'done'
+      const next = task.done
         ? without(prepDone, task.key)
         : {
             ...prepDone,
             [task.key]: { doneFactor: task.factor, text: task.text, minutes: task.minutes, mealTitle: task.meal.title },
           }
       return { ...state, progress: { ...state.progress, prepDone: next } }
+    }
+    case 'prep/topup': {
+      const task = derivePrep(state).tasks.find((candidate) => candidate.key === action.key)
+      if (!task || task.status !== 'topup') return state
+      const record = state.progress.prepDone[task.key]
+      return {
+        ...state,
+        progress: { ...state.progress, prepDone: { ...state.progress.prepDone, [task.key]: { ...record, doneFactor: task.factor } } },
+      }
     }
     case 'pantry/toggleLow': {
       const name = normalizeName(action.name)

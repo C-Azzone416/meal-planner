@@ -21,11 +21,14 @@
 .sp-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 32px}
 .sp-group h2{color:#985034;font-family:"Libre Baskerville",serif;font-size:20px}
 .sp-gone{background:rgba(255,255,255,.55);border:2px dashed #8d9788;border-radius:18px;padding:18px 20px;margin-top:24px}
-.sp-warning{display:block;font-size:14px;font-weight:700;color:#8f2c1d}
-.sp-warning::before{content:"⚠ "}
+.sp-warning,.task-card .sp-warning{display:block;font-size:14px;font-weight:700;color:#8f2c1d}
+.sp-warning::before{content:"⚠ ";display:inline}
 .sp-storage-list{margin:0;padding-left:18px;display:grid;gap:6px}
 .sp-pantry-note{font-size:14px;color:#485047}
 .sp-prep-task{grid-template-columns:auto 1fr auto}
+.sp-prep-item{display:grid;gap:6px;justify-items:start}
+.sp-prep-item .task-card{justify-self:stretch}
+.task-card .sp-badge{display:inline-block}
 .sp-prep-task.task-card--done .sp-name{text-decoration:line-through}
 .sp-hero-status{margin:10px 0 0}
 @media (max-width:900px){.sp-grid{grid-template-columns:1fr}}

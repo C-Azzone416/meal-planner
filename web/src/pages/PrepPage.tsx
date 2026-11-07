@@ -6,10 +6,12 @@ import { DAY_NAMES, DAY_SHORT_NAMES } from '../planner/types'
 import '../styles/shopping-prep.css'
 
 export function PrepPage() {
-  const { prep, togglePrepDone, dismissNoLongerNeeded } = usePlanner()
+  const { prep, summary, togglePrepDone, confirmPrepTopUp, dismissNoLongerNeeded } = usePlanner()
   const { tasks, totals, doneNoLongerPlanned } = prep
   const warnings = tasks.filter((task) => task.warning)
-  const empty = tasks.length === 0 && doneNoLongerPlanned.length === 0
+  const stored = tasks.filter((task) => task.storageNote)
+  // "Nothing to prep" means nothing is planned, not merely that no planned recipe has prep-ahead steps.
+  const empty = summary.planned === 0 && doneNoLongerPlanned.length === 0
   const prepDayName = DAY_NAMES[prep.prepDay].toLowerCase()
 
   return <>
@@ -23,7 +25,7 @@ export function PrepPage() {
         <progress value={totals.done} max={Math.max(totals.tasks, 1)}>{totals.done} of {totals.tasks}</progress>
       </div>
       {warnings.length > 0 && (
-        <div className="warning-note" role="status">
+        <div className="warning-note">
           🐈‍⬛ <strong>Heads up on timing.</strong>
           {warnings.map((task) => <span className="sp-warning" key={task.key}>{task.warning?.message}</span>)}
         </div>
@@ -44,17 +46,24 @@ export function PrepPage() {
             {tasks.length === 0 && <p className="sp-section-note">None of this week’s dinners have prep-ahead steps.</p>}
             <div className="task-list">
               {tasks.map((task) => (
-                <label className={`task-card sp-prep-task${task.done ? ' task-card--done' : ''}`} key={task.key}>
-                  <input type="checkbox" checked={task.status === 'done'} onChange={() => togglePrepDone(task.key)} />
-                  <span>
-                    <strong className="sp-name">{task.text}</strong>
-                    {task.storageNote && <small>{task.storageNote}</small>}
-                    <em>{DAY_SHORT_NAMES[task.day]} · {task.meal.title}</em>
-                    {task.status === 'topup' && <span className="sp-badge">Needs a top-up · more servings since you did this</span>}
-                    {task.warning && <span className="sp-warning">{task.warning.message}</span>}
-                  </span>
-                  <b>{task.minutes}m</b>
-                </label>
+                <div className="sp-prep-item" key={task.key}>
+                  <label className={`task-card sp-prep-task${task.done ? ' task-card--done' : ''}`}>
+                    <input type="checkbox" checked={task.done} onChange={() => togglePrepDone(task.key)} />
+                    <span>
+                      <strong className="sp-name">{task.text}</strong>
+                      {task.storageNote && <small>{task.storageNote}</small>}
+                      <em>{DAY_SHORT_NAMES[task.day]} · {task.meal.title}</em>
+                      {task.status === 'topup' && <span className="sp-badge">Needs a top-up · servings went up since you did this</span>}
+                      {task.warning && <span className="sp-warning">{task.warning.message}</span>}
+                    </span>
+                    <b>{task.minutes}m</b>
+                  </label>
+                  {task.status === 'topup' && (
+                    <button type="button" className="sp-small-button" aria-label={`Top-up done for ${task.text}`} onClick={() => confirmPrepTopUp(task.key)}>
+                      Top-up done
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
             {doneNoLongerPlanned.length > 0 && (
@@ -75,15 +84,17 @@ export function PrepPage() {
               </section>
             )}
           </div>
-          <aside>
-            <div className="sticky-note compact">
-              <PawMagnet />
-              <h2>where it goes</h2>
-              <ul className="sp-storage-list">
-                {tasks.filter((task) => task.storageNote).map((task) => <li key={task.key}>{task.label} — {task.storageNote}</li>)}
-              </ul>
-            </div>
-          </aside>
+          {stored.length > 0 && (
+            <aside>
+              <div className="sticky-note compact">
+                <PawMagnet />
+                <h2>where it goes</h2>
+                <ul className="sp-storage-list">
+                  {stored.map((task) => <li key={task.key}>{task.label} — {task.storageNote}</li>)}
+                </ul>
+              </div>
+            </aside>
+          )}
         </div>
       )}
     </FridgePanel>
