@@ -188,3 +188,18 @@ test('signs out and returns to the sign-in screen', async () => {
   await waitFor(() => expect(service.signOut).toHaveBeenCalled())
   expect(await screen.findByRole('heading', { name: 'what’s for dinner?' })).toBeTruthy()
 })
+
+test('resets preview data only after confirmation', async () => {
+  const confirm = vi.spyOn(window, 'confirm')
+  renderRoute('/house-rules', makeService(user))
+  const button = await screen.findByRole('button', { name: 'Reset preview data' })
+
+  confirm.mockReturnValueOnce(false)
+  fireEvent.click(button)
+  expect(screen.queryByText('Preview data was reset.')).toBeNull()
+
+  confirm.mockReturnValueOnce(true)
+  fireEvent.click(button)
+  expect((await screen.findByText('Preview data was reset.')).getAttribute('role')).toBe('status')
+  confirm.mockRestore()
+})
