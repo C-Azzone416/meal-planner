@@ -6,6 +6,7 @@ import { formatDuration } from '../planner/format'
 import { usePlanner } from '../planner/store'
 import { DRAFT_GUESS_KEYS, type Draft, type DraftGuessKey } from '../planner/types'
 import '../styles/recipes.css'
+import { recipePath } from './recipePath'
 
 const GUESS_LABELS: Record<DraftGuessKey, string> = {
   activeMinutes: 'ACTIVE TIME',
@@ -42,7 +43,7 @@ export function DraftsPage() {
 
   const approve = (draft: Draft) => {
     const id = planner.approveDraft(draft.id)
-    if (id) navigate(`/recipes/${id}`, { state: { saved: true } })
+    if (id) navigate(recipePath(id), { state: { saved: true } })
   }
 
   return <>

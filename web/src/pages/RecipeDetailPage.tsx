@@ -7,6 +7,7 @@ import { usePlanner } from '../planner/store'
 import { DAY_NAMES } from '../planner/types'
 import '../styles/recipes.css'
 import { addToWeekNight } from './addToWeek'
+import { recipeEditPath } from './recipePath'
 
 const ATTENTION_LABEL = { low: 'Low attention', medium: 'Medium attention', high: 'High attention' } as const
 
@@ -75,7 +76,7 @@ function RecipeDetail() {
       {recipe.tags.length > 0 && <div className="tag-list" aria-label="Tags">{recipe.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>}
       {plannedDays.length > 0 && <p className="rust-script">On this week: <Link to="/week">{joinList(plannedDays.map((day) => DAY_NAMES[day]))}</Link></p>}
       <div className="button-row rx-actions">
-        <Link className="button button--paper rx-button" to={`/recipes/${recipe.id}/edit`}>Edit</Link>
+        <Link className="button button--paper rx-button" to={recipeEditPath(recipe.id)}>Edit</Link>
         <button
           type="button"
           className="button button--green rx-button"

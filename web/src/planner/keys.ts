@@ -80,9 +80,12 @@ export function slugify(text: string): string {
   return slug || 'recipe'
 }
 
-/** A slug for `title` that does not collide with `existing`. */
+/** Ids that are also URL words under /recipes (`/recipes/new`, `.../edit`); generated ids never use them. */
+export const RESERVED_RECIPE_IDS: readonly string[] = ['new', 'edit']
+
+/** A slug for `title` that does not collide with `existing` or a reserved word (a title "New" becomes "new-2"). */
 export function uniqueId(title: string, existing: Iterable<string>): string {
-  const taken = new Set(existing)
+  const taken = new Set([...existing, ...RESERVED_RECIPE_IDS])
   const base = slugify(title)
   if (!taken.has(base)) return base
   for (let n = 2; ; n += 1) {

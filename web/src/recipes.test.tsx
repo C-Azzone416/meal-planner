@@ -5,6 +5,8 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { AppRoutes } from './App'
 import { AuthProvider } from './auth/AuthProvider'
 import type { AuthService, AuthUser } from './auth/service'
+import { STORAGE_KEY, type StorageLike, toPersisted } from './planner/persist'
+import { createSeedState } from './planner/seed'
 import { PlannerProvider } from './planner/store'
 
 const user: AuthUser = { id: 'user-test', email: 'allowed@example.test', emailVerified: true }
@@ -20,13 +22,18 @@ function makeService(): AuthService {
 }
 
 /** The recipe form uses useBlocker, which needs a data router (as the real App does). */
-function renderApp(path: string, service = makeService()) {
+function memoryStorage(initial?: string): StorageLike & { data: Map<string, string> } {
+  const data = new Map<string, string>(initial === undefined ? [] : [[STORAGE_KEY, initial]])
+  return { data, getItem: (key) => data.get(key) ?? null, setItem: (key, value) => void data.set(key, value), removeItem: (key) => void data.delete(key) }
+}
+
+function renderApp(path: string, service = makeService(), storage: StorageLike | null = null) {
   const router = createMemoryRouter(
     [{
       path: '*',
       element: (
         <AuthProvider serviceFactory={() => Promise.resolve(service)}>
-          <PlannerProvider storage={null}>
+          <PlannerProvider storage={storage}>
             <AppRoutes />
           </PlannerProvider>
         </AuthProvider>
@@ -104,13 +111,13 @@ test('Add to week uses the Plan my week night order, then disables itself with a
     await waitFor(() => expect(button().textContent).toContain(order[index]))
     fireEvent.click(button())
     await waitFor(() => expect(button().disabled).toBe(true))
-    expect(screen.getByText(`Already on ${order[index]}`)).toBeTruthy()
+    expect(await screen.findByText(`Already on ${order[index]}`)).toBeTruthy()
     expect(button().getAttribute('aria-describedby')).toBeTruthy()
   }
   // No open night is left for the next recipe.
   await router.navigate('/recipes/mushroom-leek-risotto')
   await waitFor(() => expect(button().disabled).toBe(true))
-  expect(screen.getByText(/Every night this week is already planned/)).toBeTruthy()
+  expect(await screen.findByText(/Every night this week is already planned/)).toBeTruthy()
 })
 
 test('Add to week is disabled with "Already on Monday" for a recipe that is planned', async () => {
@@ -376,4 +383,87 @@ test('Recipes list: no-results state clears filters and refocuses search', async
   fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
   expect(search.value).toBe('')
   expect(document.activeElement).toBe(search)
+})
+
+test('a recipe titled "New" gets a non-colliding id and opens at its own page', async () => {
+  const { router } = renderApp('/recipes/new')
+  await screen.findByRole('heading', { name: 'add a recipe' })
+  fillValidRecipe('New')
+  fireEvent.click(screen.getByRole('button', { name: 'Save recipe' }))
+  expect(await screen.findByRole('heading', { level: 1, name: 'New' })).toBeTruthy()
+  expect(router.state.location.pathname).toBe('/recipes/new-2')
+})
+
+test('a stored recipe with the reserved id "new" is still reachable from the list, detail and edit', async () => {
+  const seed = createSeedState()
+  seed.recipes = seed.recipes.map((recipe) => (recipe.id === 'red-lentil-coconut-soup' ? { ...recipe, id: 'new' } : recipe))
+  const storage = memoryStorage(JSON.stringify(toPersisted(seed)))
+  const { router } = renderApp('/recipes', makeService(), storage)
+
+  const link = await screen.findByRole('link', { name: 'Red lentil coconut soup' })
+  expect(link.getAttribute('href')).toBe('/recipes/by-id/new')
+  fireEvent.click(link)
+  expect(await screen.findByRole('heading', { level: 1, name: 'Red lentil coconut soup' })).toBeTruthy()
+
+  fireEvent.click(screen.getByRole('link', { name: 'Edit' }))
+  expect(await screen.findByRole('heading', { name: 'edit recipe' })).toBeTruthy()
+  expect(router.state.location.pathname).toBe('/recipes/new/edit')
+  expect((screen.getByLabelText(/^Title/) as HTMLInputElement).value).toBe('Red lentil coconut soup')
+
+  // Saving returns to the reachable detail path.
+  change(/^Servings/, '3')
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  expect(await screen.findByRole('heading', { level: 1, name: 'Red lentil coconut soup' })).toBeTruthy()
+  expect(router.state.location.pathname).toBe('/recipes/by-id/new')
+})
+
+test('rejects numbers that overflow to Infinity, or are absurdly large, as invalid', async () => {
+  renderApp('/recipes/new')
+  await screen.findByRole('heading', { name: 'add a recipe' })
+  fillValidRecipe()
+  const huge = '9'.repeat(400)
+  change(/^Quantity for ingredient 1/, huge)
+  change(/^Active minutes/, huge)
+  change(/^Total minutes/, huge)
+  change(/^Servings/, huge)
+  change(/^Timer \(minutes\) for cook step 1/, huge)
+  fireEvent.click(screen.getByRole('button', { name: '+ Add prep-ahead step' }))
+  change(/^Step for prep-ahead step 1/, 'Chop')
+  change(/^Minutes for prep-ahead step 1/, huge)
+  change(/^Keeps \(days\) for prep-ahead step 1/, huge)
+  fireEvent.click(screen.getByRole('button', { name: 'Save recipe' }))
+
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toContain('7 problems to fix')
+  for (const label of [/^Quantity for ingredient 1/, /^Active minutes/, /^Total minutes/, /^Servings/, /^Timer \(minutes\)/, /^Minutes for prep-ahead/, /^Keeps \(days\)/]) {
+    expect(screen.getByLabelText(label).getAttribute('aria-invalid')).toBe('true')
+  }
+})
+
+test('an unrelated edit leaves a 0.333 quantity and an odd timer exactly as stored', async () => {
+  const seed = createSeedState()
+  seed.recipes = seed.recipes.map((recipe) =>
+    recipe.id === 'red-lentil-coconut-soup'
+      ? {
+          ...recipe,
+          ingredients: recipe.ingredients.map((item, index) => (index === 0 ? { ...item, quantity: 0.333 } : item)),
+          cookTonight: recipe.cookTonight.map((step, index) => (index === 0 ? { ...step, timerSeconds: 100 } : step)),
+        }
+      : recipe,
+  )
+  const storage = memoryStorage(JSON.stringify(toPersisted(seed)))
+  renderApp('/recipes/red-lentil-coconut-soup/edit', makeService(), storage)
+  await screen.findByRole('heading', { name: 'edit recipe' })
+  expect((screen.getByLabelText(/^Quantity for ingredient 1/) as HTMLInputElement).value).toBe('0.33')
+
+  change(/^Title/, 'Red lentil coconut soup, spiced')
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  await screen.findByText('Saved.')
+
+  await waitFor(() => {
+    const saved = JSON.parse(storage.data.get(STORAGE_KEY) ?? '{}').state.recipes.find((recipe: { id: string }) => recipe.id === 'red-lentil-coconut-soup')
+    expect(saved.title).toBe('Red lentil coconut soup, spiced')
+    expect(saved.ingredients[0].quantity).toBe(0.333)
+    expect(saved.cookTonight[0].timerSeconds).toBe(100)
+  })
 })

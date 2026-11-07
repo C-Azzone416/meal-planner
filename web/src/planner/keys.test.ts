@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { normalizeName, normalizeUnit, pantryLowKey, prepKey, shoppingKey } from './keys'
+import { normalizeName, normalizeUnit, pantryLowKey, prepKey, shoppingKey, uniqueId } from './keys'
 
 describe('normalizeName', () => {
   test('keeps letters and numbers of any script instead of collapsing them', () => {
@@ -43,5 +43,15 @@ describe('key encoding is unambiguous', () => {
   test('units fold case and width', () => {
     expect(normalizeUnit('ＬＢ')).toBe('lb')
     expect(normalizeUnit('Tablespoons')).toBe('tbsp')
+  })
+})
+
+describe('uniqueId reserved words', () => {
+  test('never generates ids that collide with /recipes/new or /edit', () => {
+    expect(uniqueId('New', [])).toBe('new-2')
+    expect(uniqueId('new', [])).toBe('new-2')
+    expect(uniqueId('Edit', [])).toBe('edit-2')
+    expect(uniqueId('New', ['new-2'])).toBe('new-3')
+    expect(uniqueId('New recipe', [])).toBe('new-recipe')
   })
 })
