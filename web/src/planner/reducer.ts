@@ -1,6 +1,6 @@
 /** The planner reducer. Pure: random choices arrive as seeds drawn by the store. */
 import { deriveShopping, derivePrep } from './derive'
-import { normalizeName, uniqueId } from './keys'
+import { containsIllFormed, normalizeName, uniqueId } from './keys'
 import {
   assignRecipe,
   cancelProposal,
@@ -72,6 +72,7 @@ export function hasValidServings(recipe: { defaultServings: number }): boolean {
 }
 
 const BAD_SERVINGS = 'Servings must be a number greater than zero.'
+const BAD_TEXT = 'That text contains characters that cannot be saved.'
 
 export function canApproveDraft(draft: Draft): boolean {
   return DRAFT_GUESS_KEYS.every((key) => draft.confirmed[key])
@@ -112,12 +113,14 @@ function isPlanned(state: PlannerState, recipeId: string): boolean {
 export function reducer(state: PlannerState, action: PlannerAction): PlannerState {
   switch (action.type) {
     case 'recipe/add': {
+      if (containsIllFormed(action.recipe)) return withStatus(state, 'warning', BAD_TEXT)
       if (!hasValidServings(action.recipe)) return withStatus(state, 'warning', BAD_SERVINGS)
       const id = uniqueId(action.recipe.id, state.recipes.map((recipe) => recipe.id))
       return { ...state, recipes: [...state.recipes, { ...clone(action.recipe), id }] }
     }
     case 'recipe/update': {
       if (!state.recipes.some((recipe) => recipe.id === action.recipe.id)) return state
+      if (containsIllFormed(action.recipe)) return withStatus(state, 'warning', BAD_TEXT)
       if (!hasValidServings(action.recipe)) return withStatus(state, 'warning', BAD_SERVINGS)
       const incoming = clone(action.recipe)
       const next = {
@@ -137,6 +140,7 @@ export function reducer(state: PlannerState, action: PlannerAction): PlannerStat
         ),
       }
     case 'draft/update':
+      if (containsIllFormed(action.patch)) return withStatus(state, 'warning', BAD_TEXT)
       if (action.patch.defaultServings !== undefined && !hasValidServings({ defaultServings: action.patch.defaultServings })) {
         return withStatus(state, 'warning', BAD_SERVINGS)
       }

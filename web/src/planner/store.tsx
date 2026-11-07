@@ -176,8 +176,11 @@ export function PlannerProvider({ children, storage, random = Math.random }: Pla
     // Apply each action to `latest` immediately (the reducer is pure) so that actions returning ids
     // see the effect of earlier calls made in the same tick; then hand it to React.
     const send = (action: PlannerAction) => {
-      latest.current = reducer(latest.current, action)
-      dispatch(action)
+      // Snapshot first: whatever the caller does to its object afterwards must not change what commits,
+      // neither in the immediate reducer call nor when React replays the action.
+      const snapshot = structuredClone(action)
+      latest.current = reducer(latest.current, snapshot)
+      dispatch(snapshot)
     }
     return {
       addRecipe(recipe) {

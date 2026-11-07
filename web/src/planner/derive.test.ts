@@ -426,3 +426,18 @@ describe('running-low pantry rows have their own identity', () => {
     expect(after.find((r) => r.source === 'recipe')?.checked).toBe(false)
   })
 })
+
+describe('derivations never throw on ill-formed text', () => {
+  test('even if bad text got into the state by some other route', () => {
+    const state = cleanSeed()
+    const recipes = state.recipes.map((r) =>
+      r.id === 'gochujang-chicken'
+        ? { ...r, id: r.id, ingredients: r.ingredients.map((i) => ({ ...i, name: `${i.name}\uD800` })), prepAhead: r.prepAhead.map((p) => ({ ...p, id: `${p.id}\uDC00` })) }
+        : r,
+    )
+    const bad = { ...state, recipes, pantryLow: ['x\uD800'] }
+    expect(() => deriveShopping(bad)).not.toThrow()
+    expect(() => derivePrep(bad)).not.toThrow()
+    expect(() => derivePantry(bad)).not.toThrow()
+  })
+})
