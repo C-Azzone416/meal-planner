@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import {
-  BrowserRouter,
+  createBrowserRouter,
   Navigate,
   Outlet,
   Route,
+  RouterProvider,
   Routes,
   useLocation,
   useNavigate,
@@ -15,11 +16,14 @@ import {
   AuthPasswordPolicyError,
 } from './auth/service'
 import { AppShell } from './components/AppShell'
+import { PlannerProvider } from './planner/store'
 import {
   CookPage,
   DraftsPage,
   HouseRulesPage,
   PrepPage,
+  RecipeDetailPage,
+  RecipeFormPage,
   RecipesPage,
   ShoppingPage,
   SignInPage,
@@ -120,6 +124,11 @@ export function AppRoutes() {
       <Route element={<ProtectedShell />}>
         <Route path="/week" element={<WeekPage />} />
         <Route path="/recipes" element={<RecipesPage />} />
+        <Route path="/recipes/new" element={<RecipeFormPage mode="new" />} />
+        <Route path="/recipes/by-id/:recipeId" element={<RecipeDetailPage />} />
+        <Route path="/recipes/by-id/:recipeId/edit" element={<RecipeFormPage mode="edit" />} />
+        <Route path="/recipes/:recipeId" element={<RecipeDetailPage />} />
+        <Route path="/recipes/:recipeId/edit" element={<RecipeFormPage mode="edit" />} />
         <Route path="/prep" element={<PrepPage />} />
         <Route path="/shopping" element={<ShoppingPage />} />
         <Route path="/drafts" element={<DraftsPage />} />
@@ -132,12 +141,26 @@ export function AppRoutes() {
   )
 }
 
-export default function App() {
+function AppProviders() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
+    <AuthProvider>
+      <PlannerProvider>
         <AppRoutes />
-      </AuthProvider>
-    </BrowserRouter>
+      </PlannerProvider>
+    </AuthProvider>
   )
+}
+
+// One router for the life of the page. Creating it inside a component (even in a state initializer) runs twice
+// under StrictMode and would register two popstate listeners.
+let browserRouter: ReturnType<typeof createBrowserRouter> | undefined
+function getBrowserRouter() {
+  // A data router is required for useBlocker (unsaved-changes prompt on the recipe form).
+  // One splat route keeps <AppRoutes> as the single place routes are declared.
+  browserRouter ??= createBrowserRouter([{ path: '*', element: <AppProviders /> }])
+  return browserRouter
+}
+
+export default function App() {
+  return <RouterProvider router={getBrowserRouter()} />
 }
