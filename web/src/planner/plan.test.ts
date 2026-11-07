@@ -245,7 +245,7 @@ describe('moving, skipping, pinning, servings', () => {
     const skipped = run(state, { type: 'plan/skip', day: 2 })
     const next = run(skipped, { type: 'plan/move', from: 1, to: 2 })
     expect(next.plan.nights[1].status).toBe('planned')
-    expect(next.status?.kind).toBe('warning')
+    expect(next.status).toMatchObject({ kind: 'warning', text: 'Tuesday is skipped — make it open first.' })
   })
 
   test('skipping a planned night removes the meal (undoable); setOpen clears it', () => {
