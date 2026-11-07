@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
 import { Magnet, PawMagnet } from '../components/Magnet'
@@ -10,29 +10,33 @@ import '../styles/week.css'
 
 const mealColors = ['rust', 'green', 'gold'] as const
 const undoDurationMs = 10_000
+// The provider keeps each undo entry stable across routes, even when sequence numbers are reused.
+const undoDeadlines = new WeakMap<object, number>()
 
 function UndoToast({ onUndo }: { onUndo: () => void }) {
   const { undoInfo, dismissUndo } = usePlanner()
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
-  const countdown = useRef<{ seq: number; remainingMs: number } | null>(null)
-  const seq = undoInfo?.seq
+  useLayoutEffect(() => {
+    if (!undoInfo) return
 
-  useEffect(() => {
-    if (seq === undefined) return
-    if (countdown.current?.seq !== seq) {
-      countdown.current = { seq, remainingMs: undoDurationMs }
+    const now = Date.now()
+    const expiresAt = undoDeadlines.get(undoInfo) ?? now + undoDurationMs
+    undoDeadlines.set(undoInfo, expiresAt)
+    const remainingMs = expiresAt - now
+    if (remainingMs <= 0) {
+      dismissUndo()
+      return
     }
-    if (hovered || focused) return
+    if (hovered || focused) {
+      return () => {
+        undoDeadlines.set(undoInfo, Date.now() + remainingMs)
+      }
+    }
 
-    const windowRemaining = countdown.current
-    const startedAt = Date.now()
-    const timer = window.setTimeout(dismissUndo, windowRemaining.remainingMs)
-    return () => {
-      window.clearTimeout(timer)
-      windowRemaining.remainingMs = Math.max(0, windowRemaining.remainingMs - (Date.now() - startedAt))
-    }
-  }, [dismissUndo, focused, hovered, seq])
+    const timer = window.setTimeout(dismissUndo, remainingMs)
+    return () => window.clearTimeout(timer)
+  }, [dismissUndo, focused, hovered, undoInfo])
 
   return (
     <div

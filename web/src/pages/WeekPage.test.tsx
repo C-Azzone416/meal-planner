@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import type { ReactNode } from 'react'
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
-import { PlannerProvider } from '../planner/store'
+import { PlannerProvider, usePlanner } from '../planner/store'
 import '../styles/app.css'
 import { CookPage } from './CookPage'
 import { WeekPage } from './WeekPage'
@@ -11,10 +12,11 @@ const chicken = 'Sheet-pan gochujang chicken & broccoli'
 const chili = 'Slow-cooker bean & sweet potato chili'
 const salmon = 'Seared salmon, lemon-herb orzo'
 
-function renderPlanner(path = '/week') {
+function renderPlanner(path = '/week', extraNavigation?: ReactNode) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <PlannerProvider storage={null} random={() => 0.25}>
+        {extraNavigation}
         <Routes>
           <Route path="/week" element={<WeekPage />} />
           <Route path="/cook" element={<CookPage />} />
@@ -22,6 +24,11 @@ function renderPlanner(path = '/week') {
       </PlannerProvider>
     </MemoryRouter>,
   )
+}
+
+function MoveThursdayDinner() {
+  const { moveNight } = usePlanner()
+  return <button type="button" onClick={() => moveNight(4, 3)}>Swap Thursday and Wednesday</button>
 }
 
 function click(name: string) {
@@ -202,6 +209,25 @@ test('keeps Undo before the night controls and pauses its countdown for hover an
   expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
 })
 
+test.each([9999, 10_000])('honors the original Undo deadline when returning to Week at %i ms', (elapsedMs) => {
+  vi.useFakeTimers()
+  renderPlanner()
+  click('Thursday')
+  click('Increase servings')
+  act(() => vi.advanceTimersByTime(2000))
+  fireEvent.click(screen.getByRole('link', { name: 'Cook tonight →', description: 'Thursday' }))
+
+  act(() => vi.advanceTimersByTime(elapsedMs - 2000))
+  fireEvent.click(screen.getByRole('link', { name: '‹ This week' }))
+
+  if (elapsedMs === 9999) {
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy()
+    act(() => vi.advanceTimersByTime(1))
+  }
+  expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+  expect(night('Thursday').textContent).toContain('Serves 5')
+})
+
 test('opens Cook for the requested night with scaled ingredients and display timers', () => {
   renderPlanner()
   click('Thursday')
@@ -225,6 +251,46 @@ test('rounds scaled cans to whole amounts and displays long timers in hours', ()
 
   expect(screen.getByText('3 cans')).toBeTruthy()
   expect(screen.getByText('Timer 6:00:00')).toBeTruthy()
+})
+
+test('checks and advances Cook steps and preserves separate checklists when switching nights', () => {
+  renderPlanner('/cook?day=4', (
+    <>
+      <Link to="/cook?day=3">View Wednesday</Link>
+      <Link to="/cook?day=4">View Thursday</Link>
+      <MoveThursdayDinner />
+    </>
+  ))
+  const prepName = /Halve the tomatoes and zest a lemon/
+  const orzoName = /Add the orzo to the boiling water/
+  const checkbox = (name: RegExp) => screen.getByRole<HTMLInputElement>('checkbox', { name })
+
+  expect(checkbox(prepName).checked).toBe(false)
+  click('Done — next step')
+  expect(checkbox(prepName).checked).toBe(true)
+
+  fireEvent.click(checkbox(orzoName))
+  expect(checkbox(orzoName).checked).toBe(true)
+  expect(screen.getByRole('status').textContent).toContain('Pat the salmon dry and season it')
+  click('Done — next step')
+  expect(screen.getByRole('status').textContent).toContain('Sear salmon skin-side down')
+
+  fireEvent.click(screen.getByRole('link', { name: 'View Wednesday' }))
+  expect(screen.queryAllByRole('checkbox', { checked: true })).toHaveLength(0)
+  for (const step of screen.getAllByRole('checkbox')) fireEvent.click(step)
+  expect(screen.getByRole('status').textContent).toBe('All steps done')
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Done — next step' }).disabled).toBe(true)
+
+  fireEvent.click(screen.getByRole('link', { name: 'View Thursday' }))
+  expect(checkbox(prepName).checked).toBe(true)
+  expect(checkbox(orzoName).checked).toBe(true)
+  fireEvent.click(checkbox(orzoName))
+  expect(checkbox(orzoName).checked).toBe(false)
+  expect(screen.getByRole('status').textContent).toContain('Add the orzo')
+
+  click('Swap Thursday and Wednesday')
+  fireEvent.click(screen.getByRole('link', { name: 'View Wednesday' }))
+  expect(checkbox(prepName).checked).toBe(false)
 })
 
 test('shows the cook empty state for an explicitly requested open night', () => {
