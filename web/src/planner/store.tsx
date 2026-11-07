@@ -86,8 +86,10 @@ export interface PlannerActions {
   // — Progress —
   /** `key` is `ShoppingRow.key`. Also un-checks a "no longer needed" row. */
   toggleShoppingChecked(key: string): void
-  /** `key` is `PrepTask.key`. Marking a "top-up" task done confirms the top-up. */
+  /** `key` is `PrepTask.key`. A top-up task counts as done, so toggling it clears it like any done task. */
   togglePrepDone(key: string): void
+  /** Confirm a 'topup' prep task is topped up (keeps it done and records the new serving factor). */
+  confirmPrepTopUp(key: string): void
   /** `name` is `PantryItem.key` or any spelling of the ingredient name. */
   togglePantryLow(name: string): void
   /** Remove a struck-through "No longer needed" shopping row, or a "Done, no longer planned" prep task. */
@@ -202,6 +204,7 @@ export function PlannerProvider({ children, storage, random = Math.random }: Pla
 
       toggleShoppingChecked: (key) => send({ type: 'shopping/toggle', key }),
       togglePrepDone: (key) => send({ type: 'prep/toggle', key }),
+      confirmPrepTopUp: (key) => send({ type: 'prep/topup', key }),
       togglePantryLow: (name) => send({ type: 'pantry/toggleLow', name }),
       dismissNoLongerNeeded: (kind, key) => send({ type: 'dismiss', kind, key }),
 
