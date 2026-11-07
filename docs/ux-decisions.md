@@ -41,6 +41,8 @@ The owner may revise any of this; each section is small enough to change on its 
 - **Surprise me = replace one selected night.** It needs a selected night. On a planned, unpinned night it proposes one random alternative in place ("Try: Red lentil coconut soup — Keep it / Try another / Cancel"); nothing changes until **Keep it**. On an open night it proposes a dinner for that night (same buttons). On a pinned or skipped night the button is disabled with the reason. With no night selected, the button is disabled with "Pick a night first".
 - **Replacing is always explicit** (Keep it). After any change to the plan (fill, keep, move, skip, unpin, servings) an **Undo** status appears for 10 seconds / until the next change: "Swapped Thursday to Red lentil coconut soup. Undo". One level of undo is enough for launch.
 - **Move/swap nights:** a planned night can be moved to another night; if the target is planned, the two swap. Pinned nights can be moved by the user (pins only block automation).
+- **Pins travel with the meal:** moving or swapping a pinned dinner carries its pin to the new night. A planned night cannot be moved onto a **skipped** night; the refusal says why ("Saturday is skipped — make it open first.").
+- **Extra nights for Plan my week:** after Mon/Wed/Thu, remaining open nights are used earliest-first, with the prep day (Sunday by default) last.
 - **Servings** per planned night, 1–12, default from the recipe.
 - Approved destructive copy: Surprise me never overwrites without "Keep it". There is no "replace whole week" action at launch.
 

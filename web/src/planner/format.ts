@@ -13,7 +13,7 @@ export function formatQuantity(quantity: number): string {
   return String(Math.round(quantity * 100) / 100)
 }
 
-const PLURAL_UNITS = new Set(['can', 'head', 'bunch', 'pint', 'bag', 'jar', 'tub', 'small tub', 'clove', 'pkg', 'package', 'bulb'])
+const PLURAL_UNITS = new Set(['cup', 'quart', 'can', 'head', 'bunch', 'pint', 'bag', 'jar', 'tub', 'small tub', 'clove', 'pkg', 'package', 'bulb'])
 
 function pluralizeUnit(unit: string, quantity: number): string {
   if (quantity <= 1 || !PLURAL_UNITS.has(unit.toLowerCase())) return unit

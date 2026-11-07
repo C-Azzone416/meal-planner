@@ -161,7 +161,7 @@ export function proposeSurprise(state: PlannerState, day: DayIndex, rng: Rng): P
   const night = state.plan.nights[day]
   const name = dayName(day)
   if (night.status === 'skipped') {
-    return withStatus(state, 'warning', `${name} is marked skipped. Open it to let Surprise me plan a dinner.`)
+    return withStatus(state, 'warning', `${name} is skipped — make it open first to let Surprise me plan a dinner.`)
   }
   if (night.pinned) {
     return withStatus(state, 'warning', `${name} is pinned. Unpin it to let Surprise me swap it.`)
@@ -209,7 +209,7 @@ export function assignRecipe(state: PlannerState, day: DayIndex, recipeId: strin
   const night = state.plan.nights[day]
   const name = dayName(day)
   if (!recipe) return withStatus(state, 'warning', 'That recipe could not be found.')
-  if (night.status === 'skipped') return withStatus(state, 'warning', `${name} is marked skipped. Open it first.`)
+  if (night.status === 'skipped') return withStatus(state, 'warning', `${name} is skipped — make it open first.`)
   if (night.pinned) return withStatus(state, 'warning', `${name} is pinned. Unpin it first.`)
   const message = night.status === 'planned' ? `Swapped ${name} to ${recipe.title}` : `Planned ${name}: ${recipe.title}`
   const count = servings === undefined ? recipe.defaultServings : clampServings(servings)
@@ -225,7 +225,7 @@ export function moveNight(state: PlannerState, from: DayIndex, to: DayIndex): Pl
     return withStatus(state, 'warning', `${dayName(from)} has no dinner to move.`)
   }
   if (target.status === 'skipped') {
-    return withStatus(state, 'warning', `${dayName(to)} is marked skipped. Open it first.`)
+    return withStatus(state, 'warning', `${dayName(to)} is skipped — make it open first.`)
   }
   let nights = replaceNight(state.plan.nights, { ...source, day: to })
   nights = replaceNight(nights, target.status === 'planned' ? { ...target, day: from } : OPEN(from))
