@@ -9,7 +9,7 @@ bash scripts/install-hooks.sh
 npm ci --prefix web
 ```
 
-The hook is opt-in because this repository has Go at the root rather than a root package install step. For each ref being pushed it checks the commits that push adds, not the worktree: the paths and blob sizes in the pushed tip and in every commit of the pushed range (no root or nested `node_modules`, `dist`, `coverage`, `.env*`, database files, or blobs over 1 MiB), and, when gitleaks (8.19 or newer) is installed, a redacted secret scan of only the pushed range, merge commits included. A failure to list or read objects fails the push. It then reuses the CI path classifier and runs only the affected Go or web checks. Documentation-only pushes do not take the heavy-work lock or run component tests.
+The hook is opt-in because this repository has Go at the root rather than a root package install step. For each ref being pushed it checks the commits that push adds, not the worktree: the paths and blob sizes in the pushed tip and in every commit of the pushed range (no root or nested `node_modules`, `dist`, `coverage`, `.env*`, database files, or blobs over 1 MiB), and, when gitleaks (8.19 or newer) is installed, a redacted secret scan of only the pushed range, merge commits included. With no known base (a new branch without `origin/develop`, or a remote tip this clone has not fetched) it checks every outgoing commit (`git rev-list <sha> --not --remotes`), never just the tip. Gitlink (submodule) entries get the same path policy. A failure to list or read objects fails the push. It then reuses the CI path classifier and runs only the affected Go or web checks. Documentation-only pushes do not take the heavy-work lock or run component tests.
 
 ## Fast loop
 
@@ -26,16 +26,19 @@ Before a coherent push, the hook selects the same component boundaries as CI. In
 
 The affected local checks wrap Go tests/builds and web tests/builds with `scripts/with-heavy-lock.sh`. Packed Smart uses the same `$TMPDIR/caroline-development-heavy.lock` in the user's private macOS temporary directory, so the Mac runs only one resource-heavy job at a time while editing, Git operations, formatting, linting, typechecking, and documentation work remain free.
 
-The wrapper takes a `flock` on a descriptor it then passes to the command, and replaces itself with the command (`exec`). The lock is therefore held for exactly as long as the command, or any process the command started that still has that descriptor open, is alive:
+The lock is held until the whole workload is gone, not only its main process:
 
-- Killing the command (SIGTERM, SIGKILL, a crash) releases the lock immediately. There is no separate outer process whose death could release the lock while the work keeps running.
-- A background process the command leaves behind keeps the lock until it exits. That is deliberate: the Mac is still busy.
-- Nothing runs after the command, so there is no "released" message or cleanup step. The `.owner` file next to the lock is informational only (repo name, pid, start time), is written atomically, and may be stale after a crash. Waiters read it best-effort, only name an owner whose pid is alive, and never fail because of it.
-- A waiter retries in one-second slices. If it is killed while waiting it leaves nothing running that could take or keep the lock, but waiters are not served in strict arrival order.
+- The wrapper takes a `flock` on fd 9 and keeps it for its whole life. The command inherits fd 9 too, so killing the wrapper (SIGKILL, crash) does not release the lock while the command, or any child that kept fd 9, is still running.
+- The command runs in its own process group. Some runtimes do not pass fd 9 on: Node's `child_process.spawn` does not, so after `npm`/`vitest`/`vite` is killed its spawned children can keep running without the descriptor. The wrapper therefore stays as the parent, waits for the command, and then keeps the lock until the process group is empty ("waiting for processes the command left running").
+- SIGINT, SIGTERM and SIGHUP sent to the wrapper (Ctrl-C included) are forwarded to the whole group, and the wrapper waits for it. A command that ignores SIGTERM keeps the lock until it exits.
+- A terminal stdin is replaced by `/dev/null` for the command (a background process group cannot read the terminal).
+- Honest residual risks: if the wrapper **and** every process holding fd 9 are SIGKILLed, leftover processes that no longer hold fd 9 can outlive the lock; processes that leave the group on purpose (`setsid`, `detached: true`, daemons) are not tracked.
+- The `.owner` file next to the lock is informational only (repo name, pid, start time). It is written atomically, removed on a normal exit, may be stale after a crash, and waiters read it best-effort and only name an owner whose pid is alive.
+- A waiter retries in one-second slices; if it is killed while waiting it leaves nothing behind that could take the lock, but waiters are not served in strict arrival order.
 - Nested wrappers see `CAROLINE_HEAVY_LOCK_HELD` and run the command directly. CI and Vercel skip the lock.
-- The lock needs macOS `/usr/bin/lockf`; its presence does not by itself mean the file is locked.
+- The lock needs macOS `/usr/bin/lockf`; the lock file existing does not by itself mean it is locked.
 
-`scripts/with-heavy-lock.test.sh` checks serialization, nesting, exit status, and that after SIGKILL or SIGTERM a waiting job never starts while any process of the first job is alive:
+`scripts/with-heavy-lock.test.sh` checks serialization, nesting, exit status, and that a waiting job never starts while any process of the first job's process group is alive: after SIGKILL of the command or of the wrapper, after SIGTERM/SIGINT, and for a child that does not hold fd 9 (also reproduced with real Node `child_process.spawn`):
 
 ```sh
 bash scripts/with-heavy-lock.test.sh
@@ -45,7 +48,7 @@ The other local script tests are `check-repo-hygiene.test.sh`, `pre-push.test.sh
 
 ## CI scans
 
-CI runs the secret scan and repository hygiene as their own jobs, `secrets` and `hygiene`, rather than as steps of `affected`, so a scan failure never hides the component results. `CI / required` fails unless both succeed. The secret scan uses a pinned, checksum-verified gitleaks CLI over the whole event range (`base..head` for a pull request, `before..sha` for a push, full history if there is no usable base), with merge commits expanded (`-m`) so changes that only appear in a merge are scanned, and with redacted output. It writes nothing back to the pull request. Hygiene checks the checked-out commit's tree and every file the event adds.
+CI runs the secret scan and repository hygiene as their own jobs, `secrets` and `hygiene`, rather than as steps of `affected`, so a scan failure never hides the component results. `CI / required` fails unless both succeed. The secret scan uses a pinned, checksum-verified gitleaks CLI over the whole event range (`base..head` for a pull request, `before..sha` for a push, full history if there is no usable base), with merge commits expanded (`-m`) so changes that only appear in a merge are scanned, and with redacted output. It writes nothing back to the pull request. Hygiene checks the checked-out commit's tree and every file the event adds; with no usable base it checks every commit reachable from `HEAD`.
 
 ## Merge evidence
 

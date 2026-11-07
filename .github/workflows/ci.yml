@@ -22,7 +22,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      pull-requests: read
     outputs:
       docs: ${{ steps.classify.outputs.docs }}
       web: ${{ steps.classify.outputs.web }}
@@ -188,8 +187,8 @@ jobs:
             base="$PUSH_BEFORE_SHA"
           fi
           if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
-            echo "No usable base commit: checking the checked-out tree only"
-            bash scripts/check-repo-hygiene.sh HEAD
+            echo "No usable base commit: checking every commit reachable from HEAD"
+            bash scripts/check-repo-hygiene.sh HEAD --history
           else
             bash scripts/check-repo-hygiene.sh HEAD "$base"
           fi

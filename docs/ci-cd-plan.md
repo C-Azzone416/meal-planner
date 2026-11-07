@@ -195,7 +195,7 @@ Only `CI / required` is configured as a ruleset requirement. It runs uncondition
 3. accept an intentional skip only when the classifier did not select that job;
 4. require `preview` success (deploy and smoke steps) when `hosted_preview` is selected (it is never selected for a pull request, so `preview` is then skipped and accepted);
 5. fail on cancellation, failure, missing output, unknown result, or an unexpectedly skipped selected job (and fail if `affected` itself did not succeed, or if a job ran although it was not selected);
-6. require the always-on `secrets` (gitleaks over the whole event range, merges included) and `hygiene` (paths and sizes of the checked-out tree and every file the event adds) jobs to succeed. They are separate jobs, not steps of `affected`, so a scan failure never skips the component jobs; and
+6. require the always-on `secrets` (gitleaks over the whole event range, merges included) and `hygiene` (paths and sizes of the checked-out tree and every file the event adds, or the full reachable history when there is no usable base) jobs to succeed. They are separate jobs, not steps of `affected`, so a scan failure never skips the component jobs; and
 7. publish a human-readable selection/result summary.
 
 Job display names must be unique across workflows. Renaming the stable job is a repository-settings migration: add the new check, prove it reports, then remove the old requirement.

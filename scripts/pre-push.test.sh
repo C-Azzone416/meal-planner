@@ -62,6 +62,35 @@ run_hook "clean tip with nothing new in the range"     0 "" "$removed" "$removed
 # A deletion push is not checked.
 run_hook "branch deletion"                             0 "" "$zero" "$docs"
 
+# No usable base (no origin/develop, or the remote's old tip is unknown locally): every outgoing commit is
+# checked, so a .env added and removed earlier in the history is still caught.
+nobase="$tmp/nobase"
+git init -q -b main "$nobase"
+git -C "$nobase" config user.email test@example.test
+git -C "$nobase" config user.name test
+git -C "$nobase" config commit.gpgsign false
+mkdir -p "$nobase/scripts" "$nobase/.github/scripts"
+for f in pre-push.sh check-changed.sh check-repo-hygiene.sh secret-scan.sh with-heavy-lock.sh; do cp "$here/scripts/$f" "$nobase/scripts/"; done
+cp "$here/.github/scripts/classify.sh" "$nobase/.github/scripts/"
+git init -q --bare "$tmp/nobase-remote.git"
+git -C "$nobase" remote add origin "$tmp/nobase-remote.git"
+echo base > "$nobase/README.md"
+git -C "$nobase" add -A && git -C "$nobase" commit -q -m base
+echo SECRET=1 > "$nobase/.env"
+git -C "$nobase" add -A -f && git -C "$nobase" commit -q -m "add .env"
+git -C "$nobase" rm -q -f .env
+git -C "$nobase" commit -q -m "remove .env"
+echo docs > "$nobase/NOTES.md"
+git -C "$nobase" add -A && git -C "$nobase" commit -q -m "clean tip"
+nobase_tip="$(git -C "$nobase" rev-parse HEAD)"
+rc=0
+(cd "$nobase" && echo "refs/heads/feat $nobase_tip refs/heads/feat $zero" | bash scripts/pre-push.sh) > "$tmp/out" 2>&1 || rc=$?
+if [[ $rc -ne 0 ]] && grep -Fq "forbidden file" "$tmp/out"; then echo "ok   new branch, no origin/develop: old .env in history is caught"; else echo "FAIL no-base new branch: rc=$rc"; cat "$tmp/out"; failures=$((failures + 1)); fi
+rc=0
+unknown_remote=1111111111111111111111111111111111111111
+(cd "$nobase" && echo "refs/heads/feat $nobase_tip refs/heads/feat $unknown_remote" | bash scripts/pre-push.sh) > "$tmp/out" 2>&1 || rc=$?
+if [[ $rc -ne 0 ]] && grep -Fq "forbidden file" "$tmp/out"; then echo "ok   remote tip unknown locally: old .env in history is caught"; else echo "FAIL unknown remote sha: rc=$rc"; cat "$tmp/out"; failures=$((failures + 1)); fi
+
 # Secret scanning covers only the pushed range, and includes merges.
 if command -v gitleaks > /dev/null 2>&1; then
   prefix=gh

@@ -1,14 +1,21 @@
 #!/bin/sh
 # Serialize resource-heavy local work across Caroline's repositories (macOS).
 #
-# Lifetime guarantee: the lock is a flock(2) lock on an open file description (fd 9). The command
-# is exec'd with that descriptor inherited, so the lock is held for as long as the command, or any
-# process it started that still has fd 9 open, is alive. Killing this wrapper (SIGKILL, SIGTERM) is
-# killing the command itself because they are the same process; there is no outer lock holder whose
-# death could release the lock while the command keeps running. A crash releases the lock because the
-# kernel closes the descriptor.
+# The lock is held until the WHOLE workload is gone, not just its main process:
 #
-# A background process that the command leaves behind keeps the lock until it exits.
+#  * The wrapper takes a flock(2) lock on fd 9 and keeps it for its whole life. The command inherits fd 9
+#    too, so if the wrapper is SIGKILLed the lock stays held while the command or any child that kept fd 9
+#    is alive.
+#  * The command runs in its own process group. Some runtimes (Node's child_process.spawn, for one) do not
+#    pass fd 9 on to the processes they start, so after the command dies its children may run on without the
+#    descriptor. The wrapper therefore stays as the parent, waits for the command, then keeps the lock until
+#    the process group is empty.
+#  * SIGINT, SIGTERM and SIGHUP sent to the wrapper are forwarded to the whole group; the wrapper then waits
+#    for the group as above.
+#
+# Residual risks (also in docs/development-workflow.md): if the wrapper and every holder of fd 9 are SIGKILLed,
+# processes that no longer hold fd 9 can outlive the lock; processes that leave the group (setsid, detached
+# spawns, daemons) are not tracked; a command that ignores SIGTERM keeps the lock until it exits.
 set -eu
 
 if [ "$#" -eq 0 ]; then
@@ -55,16 +62,70 @@ while :; do
   fi
 done
 
-# Informational only. Written to a temporary file and renamed so a reader never sees a partial file.
-# Not removed on exit (this process becomes the command); readers check that the pid is still alive.
+token="$$-$(date +%s)"
+# Informational only. Written to a temporary file and renamed so a reader never sees a partial file;
+# readers check that the pid is still alive.
 {
-  echo "token=$$-$(date +%s)"
+  echo "token=$token"
   echo "pid=$$"
   echo "repo=$label"
   echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } 2>/dev/null > "$owner_file.$$" && mv -f "$owner_file.$$" "$owner_file" 2>/dev/null || rm -f "$owner_file.$$" 2>/dev/null || true
 
+cleanup_owner() {
+  if [ "$(sed -n '1p' "$owner_file" 2>/dev/null || true)" = "token=$token" ]; then
+    rm -f "$owner_file" 2>/dev/null || true
+  fi
+}
+
 echo "heavy-lock: acquired for $label" >&2
 CAROLINE_HEAVY_LOCK_HELD="$$"
 export CAROLINE_HEAVY_LOCK_HELD
-exec "$@"
+
+# Job control gives the command its own process group (pgid == its pid). A background process group cannot
+# read the terminal, so a terminal stdin is replaced by /dev/null.
+set -m
+if [ -t 0 ]; then
+  "$@" < /dev/null &
+else
+  "$@" &
+fi
+child=$!
+
+group="$(ps -o pgid= -p "$child" 2>/dev/null | tr -d ' ' || true)"
+if [ "$group" = "$child" ]; then
+  tracked=true
+else
+  tracked=false
+  echo "heavy-lock: could not put the command in its own process group; holding the lock only while the command itself runs" >&2
+fi
+
+forward() {
+  if [ "$tracked" = true ]; then
+    kill -s "$1" -- "-$child" 2>/dev/null || true
+  else
+    kill -s "$1" "$child" 2>/dev/null || true
+  fi
+}
+trap 'forward INT' INT
+trap 'forward TERM' TERM
+trap 'forward HUP' HUP
+
+# `wait` returns early when a trapped signal arrives; keep waiting until the command has really exited.
+status=0
+while :; do
+  { wait "$child"; } 2> /dev/null && status=0 || status=$?
+  kill -0 "$child" 2>/dev/null || break
+done
+
+# The command is gone. Keep the lock until nothing is left in its process group.
+if [ "$tracked" = true ] && kill -0 -- "-$child" 2>/dev/null; then
+  echo "heavy-lock: waiting for processes the command left running" >&2
+  while kill -0 -- "-$child" 2>/dev/null; do
+    sleep 0.2
+  done
+fi
+
+cleanup_owner
+echo "heavy-lock: released for $label (status $status)" >&2
+exit "$status"

@@ -14,13 +14,14 @@ scans_failed=false
 warned_gitleaks=false
 zero=0000000000000000000000000000000000000000
 
-# scan TIP BASE: hygiene and secret scan for the commits TIP adds on top of BASE (BASE may be empty).
+# scan TIP BASE: hygiene and secret scan for the commits TIP adds on top of BASE. With no BASE, every outgoing
+# commit (reachable from TIP, on no remote yet) is checked, never just the tip.
 scan() {
   local tip="$1" base="$2"
   if [[ -n "$base" ]]; then
     bash scripts/check-repo-hygiene.sh "$tip" "$base" || scans_failed=true
   else
-    bash scripts/check-repo-hygiene.sh "$tip" || scans_failed=true
+    bash scripts/check-repo-hygiene.sh "$tip" --outgoing || scans_failed=true
   fi
   if command -v gitleaks > /dev/null 2>&1; then
     if [[ -n "$base" ]]; then

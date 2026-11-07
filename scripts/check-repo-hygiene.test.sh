@@ -69,6 +69,38 @@ expect "range catches intermediate big"  1 "exceeds 1 MiB" "$removed" "$allowed"
 expect "range catches intermediate dir"  1 "node_modules/pkg/i.js" "$removed" "$allowed"
 expect "range after the bad commits ok"  0 "" "$removed" "$removed"
 
+# Submodule/gitlink entries get the path policy too (they have no blob to size).
+git -C "$repo" reset -q --hard "$allowed"
+git -C "$repo" update-index --add --cacheinfo "160000,$base,node_modules"
+git -C "$repo" commit -q -m "gitlink at node_modules" # not `commit`: git add -A would drop the entry (no directory on disk)
+gitlink_bad="$(git -C "$repo" rev-parse HEAD)"
+expect "gitlink at root node_modules (tip)"   1 "forbidden file" "$gitlink_bad"
+expect "gitlink at root node_modules (range)" 1 "forbidden file" "$gitlink_bad" "$allowed"
+git -C "$repo" reset -q --hard "$allowed"
+git -C "$repo" update-index --add --cacheinfo "160000,$base,vendor/lib"
+git -C "$repo" commit -q -m "gitlink at vendor/lib"
+gitlink_ok="$(git -C "$repo" rev-parse HEAD)"
+expect "an ordinary gitlink is fine"          0 "" "$gitlink_ok" "$allowed"
+
+# With no known base: --history checks every commit reachable from the tip, --outgoing every commit no remote has.
+git -C "$repo" reset -q --hard "$allowed"
+echo SECRET=1 > "$repo/.env"
+commit "add .env" > /dev/null
+git -C "$repo" rm -q -f .env
+env_removed="$(commit "remove .env")"
+echo more > "$repo/more.md"
+tip_clean="$(commit "later clean commit")"
+expect "tip tree alone misses an old .env"    0 "" "$tip_clean"
+expect "--history finds an old .env"          1 ".env" "$tip_clean" --history
+expect "--outgoing finds an old .env"         1 ".env" "$tip_clean" --outgoing
+git init -q --bare "$tmp/remote.git"
+git -C "$repo" remote add origin "$tmp/remote.git"
+git -C "$repo" push -q origin "$env_removed:refs/heads/seen"
+git -C "$repo" fetch -q origin
+expect "--outgoing skips what a remote has"   0 "" "$tip_clean" --outgoing
+expect "--history still checks everything"    1 ".env" "$tip_clean" --history
+expect "unknown option fails"                 64 "unknown option" "$tip_clean" --nope
+
 # Failures to enumerate must fail, not pass silently.
 broken="$tmp/broken"
 git init -q -b main "$broken"
