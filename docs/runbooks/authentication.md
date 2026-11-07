@@ -60,7 +60,7 @@ Verify the following for the intended environment under an approved, controlled 
 - Confirm the account exists before requesting a first-password code. Prove that the email-code password flow works for that administratively provisioned account while public signup remains disabled.
 - Compare the provider user ID before and after password setup and subsequent sign-in. It must remain the same, with no duplicate account row.
 - Inspect `emailVerified` in the provider user and the issued token. Verify inbox control through the approved provider flow and confirm the application accepts only a verified identity. Do not assume password reset sets this flag or manually mark an unverified account as verified to pass the gate.
-- Audit users again after password setup and negative tests. An unexpected or duplicate user, unverified identity, failed first-password flow, or unsupported provisioning path blocks activation.
+- Audit users again after password setup and negative tests. An unexpected or duplicate user, unverified identity, failed first-password flow, or unsupported provisioning path blocks operational readiness.
 
 These are acceptance criteria, not completed checks. Missing provider setup, approved account provisioning, or activation approval keeps Production disabled. If an acceptance check fails during controlled activation, stop, resolve the blocker, and keep or return Production auth to the disabled state with the appropriate approval. Do not call login ready.
 
