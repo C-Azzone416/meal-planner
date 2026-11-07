@@ -91,20 +91,35 @@ test('shows an in-page not-found for an unknown recipe, on detail and edit', asy
   expect(await screen.findByRole('heading', { name: 'Recipe not found' })).toBeTruthy()
 })
 
-test('Add to week plans the first open night and is disabled with a reason when none is open', async () => {
-  renderApp('/recipes/red-lentil-coconut-soup')
+test('Add to week uses the Plan my week night order, then disables itself with a reason', async () => {
+  const { router } = renderApp('/recipes/red-lentil-coconut-soup')
   await screen.findByRole('heading', { level: 1 })
   const button = () => screen.getByRole('button', { name: /^Add to week/ }) as HTMLButtonElement
   // Seed plan has Mon/Wed/Thu planned; Sunday is the prep day, so it goes last.
-  // Order of the four open nights: Tue, Fri, Sat, then Sun.
+  // Order of the four open nights: Tue, Fri, Sat, then Sun. One recipe per night per week.
+  const unplanned = ['red-lentil-coconut-soup', 'gnocchi-peppers', 'pork-kimchi-fried-rice', 'tortilla-soup']
   const order = ['Tuesday', 'Friday', 'Saturday', 'Sunday']
-  for (const day of order) {
-    expect(button().textContent).toContain(day)
+  for (const [index, id] of unplanned.entries()) {
+    await router.navigate(`/recipes/${id}`)
+    await waitFor(() => expect(button().textContent).toContain(order[index]))
     fireEvent.click(button())
+    await waitFor(() => expect(button().disabled).toBe(true))
+    expect(screen.getByText(`Already on ${order[index]}`)).toBeTruthy()
+    expect(button().getAttribute('aria-describedby')).toBeTruthy()
   }
+  // No open night is left for the next recipe.
+  await router.navigate('/recipes/mushroom-leek-risotto')
   await waitFor(() => expect(button().disabled).toBe(true))
   expect(screen.getByText(/Every night this week is already planned/)).toBeTruthy()
-  expect(button().getAttribute('aria-describedby')).toBeTruthy()
+})
+
+test('Add to week is disabled with "Already on Monday" for a recipe that is planned', async () => {
+  renderApp('/recipes/gochujang-chicken')
+  await screen.findByRole('heading', { level: 1 })
+  const button = screen.getByRole('button', { name: 'Add to week' }) as HTMLButtonElement
+  expect(button.disabled).toBe(true)
+  expect(screen.getByText('Already on Monday')).toBeTruthy()
+  expect(document.getElementById(button.getAttribute('aria-describedby') ?? '')?.textContent).toBe('Already on Monday')
 })
 
 test('adds a recipe and lands on its detail page with a Saved status', async () => {
@@ -168,6 +183,40 @@ test('shows inline errors, an alert summary, and focuses the first invalid field
   fillValidRecipe('Fixed it')
   change(/^Servings/, '2')
   expect(screen.queryByRole('alert')).toBeNull()
+})
+
+test('moves focus to the first invalid field on every failed submit, not just the first', async () => {
+  renderApp('/recipes/new')
+  await screen.findByRole('heading', { name: 'add a recipe' })
+  const save = screen.getByRole('button', { name: 'Save recipe' })
+
+  fireEvent.click(save)
+  await screen.findByRole('alert')
+  expect(document.activeElement).toBe(screen.getByLabelText(/^Title/))
+
+  // Second failed submit: the title is fixed, so the first invalid field is now Active minutes.
+  save.focus()
+  change(/^Title/, 'Garlic noodles')
+  fireEvent.click(save)
+  expect(document.activeElement).toBe(screen.getByLabelText(/^Active minutes/))
+
+  // Third: minutes fixed, the next first-invalid field is the ingredient name.
+  save.focus()
+  change(/^Active minutes/, '10')
+  change(/^Total minutes/, '20')
+  fireEvent.click(save)
+  expect(document.activeElement).toBe(screen.getByLabelText(/^Name for ingredient 1/))
+
+  // Fourth: ingredient fixed, only the cook step is left.
+  save.focus()
+  change(/^Name for ingredient 1/, 'spaghetti')
+  fireEvent.click(save)
+  expect(document.activeElement).toBe(screen.getByLabelText(/^Step for cook step 1/))
+})
+
+test('the title input stops at 120 characters, matching validation', async () => {
+  renderApp('/recipes/new')
+  expect((await screen.findByLabelText(/^Title/)).getAttribute('maxlength')).toBe('120')
 })
 
 test('focuses a later invalid field when the title is fine', async () => {

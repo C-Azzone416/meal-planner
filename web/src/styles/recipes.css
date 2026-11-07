@@ -112,3 +112,12 @@ button[aria-invalid='true'] { border-color: #8f2c1d; }
 .draft-card header { display: flex; justify-content: space-between; gap: 8px 16px; }
 .rx-rows { grid-template-columns: minmax(0, 1fr); }
 .rx-row { min-width: 0; }
+
+/* Touch targets: at least 44px tall/wide, including inline links and the pantry checkbox. */
+.rx-card-link { display: inline-flex; align-items: center; min-height: 44px; }
+.rx-hero .rust-script a { display: inline-flex; align-items: center; min-height: 44px; padding-inline: 4px; }
+.rx-check { min-height: 44px; min-width: 44px; padding-block: 8px; cursor: pointer; }
+.rx-check input { width: 28px; height: 28px; margin: 0; }
+@media (max-width: 900px) {
+  .rx-check input { width: 44px; height: 44px; }
+}

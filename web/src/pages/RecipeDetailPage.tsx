@@ -53,6 +53,11 @@ function RecipeDetail() {
   const openDay = addToWeekNight(planner.plan, planner.houseRules.prepDay)
   const status = planner.status && (saved || planner.status.seq > statusSeqAtMount) ? planner.status : null
   const reasonId = 'add-to-week-reason'
+  const alreadyPlanned = plannedDays.length > 0
+  const addDisabled = alreadyPlanned || openDay === undefined
+  const addReason = alreadyPlanned
+    ? `Already on ${joinList(plannedDays.map((day) => DAY_NAMES[day]))}`
+    : 'Every night this week is already planned, skipped or pinned. Open a night on This week first.'
 
   return <>
     <FridgePanel className="hero-panel rx-hero">
@@ -74,12 +79,12 @@ function RecipeDetail() {
         <button
           type="button"
           className="button button--green rx-button"
-          disabled={openDay === undefined}
-          aria-describedby={openDay === undefined ? reasonId : undefined}
-          onClick={() => openDay !== undefined && planner.assignRecipe(openDay, recipe.id)}
-        >{openDay !== undefined ? `Add to week · ${DAY_NAMES[openDay]}` : 'Add to week'}</button>
+          disabled={addDisabled}
+          aria-describedby={addDisabled ? reasonId : undefined}
+          onClick={() => !addDisabled && openDay !== undefined && planner.assignRecipe(openDay, recipe.id)}
+        >{!addDisabled && openDay !== undefined ? `Add to week · ${DAY_NAMES[openDay]}` : 'Add to week'}</button>
       </div>
-      {openDay === undefined && <p id={reasonId} className="rx-reason">Every night this week is already planned, skipped or pinned. Open a night on This week first.</p>}
+      {addDisabled && <p id={reasonId} className="rx-reason">{addReason}</p>}
       <div role="status" className="rx-status">
         {saved && <span className="rx-saved">Saved.</span>}
         {status && <span>{status.text}</span>}
