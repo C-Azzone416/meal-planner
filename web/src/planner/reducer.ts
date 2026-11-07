@@ -94,6 +94,11 @@ function draftToRecipe(draft: Draft, id: string): Recipe {
   }
 }
 
+/** The store never keeps a reference to an object the caller can still mutate. */
+function clone<T>(value: T): T {
+  return structuredClone(value)
+}
+
 function without<T>(record: Record<string, T>, key: string): Record<string, T> {
   const { [key]: removed, ...rest } = record
   void removed
@@ -109,14 +114,15 @@ export function reducer(state: PlannerState, action: PlannerAction): PlannerStat
     case 'recipe/add': {
       if (!hasValidServings(action.recipe)) return withStatus(state, 'warning', BAD_SERVINGS)
       const id = uniqueId(action.recipe.id, state.recipes.map((recipe) => recipe.id))
-      return { ...state, recipes: [...state.recipes, { ...action.recipe, id }] }
+      return { ...state, recipes: [...state.recipes, { ...clone(action.recipe), id }] }
     }
     case 'recipe/update': {
       if (!state.recipes.some((recipe) => recipe.id === action.recipe.id)) return state
       if (!hasValidServings(action.recipe)) return withStatus(state, 'warning', BAD_SERVINGS)
+      const incoming = clone(action.recipe)
       const next = {
         ...state,
-        recipes: state.recipes.map((recipe) => (recipe.id === action.recipe.id ? action.recipe : recipe)),
+        recipes: state.recipes.map((recipe) => (recipe.id === incoming.id ? incoming : recipe)),
       }
       return isPlanned(state, action.recipe.id)
         ? withStatus(next, 'info', 'This week’s shopping and prep were updated.')
@@ -142,7 +148,7 @@ export function reducer(state: PlannerState, action: PlannerAction): PlannerStat
           for (const field of Object.keys(action.patch) as (keyof DraftPatch)[]) {
             for (const guess of FIELD_GUESSES[field] ?? []) confirmed[guess] = false
           }
-          return { ...draft, ...action.patch, confirmed, revision: draft.revision + 1 }
+          return { ...draft, ...clone(action.patch), confirmed, revision: draft.revision + 1 }
         }),
       }
     case 'draft/approve': {

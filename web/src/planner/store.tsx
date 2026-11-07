@@ -15,7 +15,7 @@ import {
   useState,
 } from 'react'
 import {
-  deriveNightWarnings,
+  nightWarningsFromPrep,
   derivePantry,
   derivePrep,
   deriveShopping,
@@ -104,35 +104,43 @@ export interface PlannerActions {
   resetPreviewData(): void
 }
 
-export interface PlannerApi extends PlannerActions {
-  recipes: Recipe[]
-  drafts: Draft[]
-  plan: PlannerState['plan']
-  houseRules: HouseRules
-  progress: PlannerState['progress']
+/**
+ * Everything a page can read. Treat it as read-only: it is the store's own state, shared by all consumers,
+ * so change it only through the actions.
+ */
+export interface PlannerData {
+  readonly recipes: readonly Recipe[]
+  readonly drafts: readonly Draft[]
+  readonly plan: Readonly<PlannerState['plan']>
+  readonly houseRules: Readonly<HouseRules>
+  readonly progress: Readonly<PlannerState['progress']>
   /** Pending Surprise me suggestion, if any. */
-  proposal: SurpriseProposal | null
+  readonly proposal: SurpriseProposal | null
   /** Present after a plan-changing action until the next change/undo. `seq` changes on every new change. */
-  undoInfo: { message: string; seq: number } | null
+  readonly undoInfo: { readonly message: string; readonly seq: number } | null
   /** Latest refusal/info/success message from an action (render with role="status"). */
-  status: StatusMessage | null
+  readonly status: StatusMessage | null
   /** Set when stored data was unreadable and the preview was reseeded. */
-  resetNotice: string | null
+  readonly resetNotice: string | null
 
-  shopping: ShoppingList
-  prep: PrepPlan
-  pantry: PantryItem[]
-  summary: PlanSummary
+  readonly shopping: ShoppingList
+  readonly prep: PrepPlan
+  readonly pantry: readonly PantryItem[]
+  readonly summary: PlanSummary
   /** Prep-timing warnings per night, e.g. "Marinade keeps 1 day — prep it Wednesday instead". */
-  nightWarnings: Record<DayIndex, string[]>
+  readonly nightWarnings: Readonly<Record<DayIndex, readonly string[]>>
 
-  getRecipe(id: string | undefined): Recipe | undefined
-  getDraft(id: string | undefined): Draft | undefined
+  getRecipe(id: string | undefined): Readonly<Recipe> | undefined
+  getDraft(id: string | undefined): Readonly<Draft> | undefined
   /** Whole raw state, for tests and advanced use. Prefer the fields above. */
-  state: PlannerState
+  readonly state: Readonly<PlannerState>
 }
 
-const PlannerContext = createContext<PlannerApi | null>(null)
+export type PlannerApi = PlannerData & PlannerActions
+
+const PlannerDataContext = createContext<PlannerData | null>(null)
+const PlannerActionsContext = createContext<PlannerActions | null>(null)
+const ApiContext = createContext<PlannerApi | null>(null)
 
 export interface PlannerProviderProps {
   children: ReactNode
@@ -216,22 +224,34 @@ export function PlannerProvider({ children, storage, random = Math.random }: Pla
     }
   }, [])
 
-  const shopping = useMemo(() => deriveShopping(state), [state])
-  const prep = useMemo(() => derivePrep(state), [state])
-  const pantry = useMemo(() => derivePantry(state), [state])
-  const summary = useMemo(() => planSummary(state), [state])
-  const nightWarnings = useMemo(() => deriveNightWarnings(state), [state])
+  // Each derivation is memoised against only the slices it reads, so e.g. ticking a shopping item does not redo prep.
+  const { shoppingChecked, prepDone } = progress
+  const { targetDinners, prepDay } = houseRules
+  const shopping = useMemo(
+    () => deriveShopping({ recipes, plan, pantryLow, progress: { shoppingChecked } }),
+    [recipes, plan, pantryLow, shoppingChecked],
+  )
+  const prep = useMemo(
+    () => derivePrep({ recipes, plan, houseRules: { prepDay }, progress: { prepDone } }),
+    [recipes, plan, prepDay, prepDone],
+  )
+  const pantry = useMemo(() => derivePantry({ recipes, plan, pantryLow }), [recipes, plan, pantryLow])
+  const summary = useMemo(() => planSummary({ plan, houseRules: { targetDinners } }), [plan, targetDinners])
+  const nightWarnings = useMemo(() => nightWarningsFromPrep(prep), [prep])
 
-  const value = useMemo<PlannerApi>(
+  const undoInfo = useMemo(
+    () => (state.undo ? { message: state.undo.message, seq: state.undo.seq } : null),
+    [state.undo],
+  )
+  const data = useMemo<PlannerData>(
     () => ({
-      ...actions,
-      recipes: state.recipes,
-      drafts: state.drafts,
-      plan: state.plan,
-      houseRules: state.houseRules,
-      progress: state.progress,
+      recipes,
+      drafts,
+      plan,
+      houseRules,
+      progress,
       proposal: state.proposal,
-      undoInfo: state.undo ? { message: state.undo.message, seq: state.undo.seq } : null,
+      undoInfo,
       status: state.status,
       resetNotice,
       shopping,
@@ -239,18 +259,40 @@ export function PlannerProvider({ children, storage, random = Math.random }: Pla
       pantry,
       summary,
       nightWarnings,
-      getRecipe: (id) => state.recipes.find((recipe) => recipe.id === id),
-      getDraft: (id) => state.drafts.find((draft) => draft.id === id),
+      getRecipe: (id) => recipes.find((recipe) => recipe.id === id),
+      getDraft: (id) => drafts.find((draft) => draft.id === id),
       state,
     }),
-    [actions, state, resetNotice, shopping, prep, pantry, summary, nightWarnings],
+    [recipes, drafts, plan, houseRules, progress, state, undoInfo, resetNotice, shopping, prep, pantry, summary, nightWarnings],
   )
+  const api = useMemo<PlannerApi>(() => ({ ...actions, ...data }), [actions, data])
 
-  return <PlannerContext.Provider value={value}>{children}</PlannerContext.Provider>
+  return (
+    <PlannerActionsContext.Provider value={actions}>
+      <PlannerDataContext.Provider value={data}>
+        <ApiContext.Provider value={api}>{children}</ApiContext.Provider>
+      </PlannerDataContext.Provider>
+    </PlannerActionsContext.Provider>
+  )
 }
 
+/** Everything: data + actions. Re-renders when any planner data changes. */
 export function usePlanner(): PlannerApi {
-  const context = useContext(PlannerContext)
+  const context = useContext(ApiContext)
   if (!context) throw new Error('usePlanner must be used inside <PlannerProvider>')
+  return context
+}
+
+/** Actions only. The object is stable for the life of the provider, so consumers never re-render because of data changes. */
+export function usePlannerActions(): PlannerActions {
+  const context = useContext(PlannerActionsContext)
+  if (!context) throw new Error('usePlannerActions must be used inside <PlannerProvider>')
+  return context
+}
+
+/** Data only (no actions). */
+export function usePlannerData(): PlannerData {
+  const context = useContext(PlannerDataContext)
+  if (!context) throw new Error('usePlannerData must be used inside <PlannerProvider>')
   return context
 }

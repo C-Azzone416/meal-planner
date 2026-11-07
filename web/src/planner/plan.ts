@@ -16,6 +16,7 @@ import {
   type Recipe,
   type Rng,
   type StatusKind,
+  type WeekPlan,
 } from './types'
 
 /** Small, fast, seedable PRNG so reducers stay pure: the store draws one seed per action. */
@@ -60,6 +61,11 @@ function dayName(day: DayIndex): string {
   return DAY_NAMES[day]
 }
 
+/** The night (other than `except`) a recipe is already planned on, if any. A recipe may be on only one night per week. */
+export function dayWithRecipe(state: PlannerState, recipeId: string, except?: DayIndex): DayIndex | undefined {
+  return state.plan.nights.find((night) => night.status === 'planned' && night.recipeId === recipeId && night.day !== except)?.day
+}
+
 function plannedRecipeIds(state: PlannerState): Set<string> {
   const ids = new Set<string>()
   for (const night of state.plan.nights) {
@@ -82,10 +88,22 @@ interface CommitOptions {
 /** Apply new nights as one undoable plan change. */
 function commit(state: PlannerState, nights: Night[], message: string, options: CommitOptions = {}): PlannerState {
   const seq = state.seq + 1
-  const coalesce = options.coalesceKey !== undefined && state.undo?.coalesceKey === options.coalesceKey
+  // Repeated tweaks of the same thing share one undo step, but only while nothing else has happened since:
+  // if progress changed in between (a ticked item, a finished prep task), the snapshot must be taken afresh.
+  const coalesce =
+    options.coalesceKey !== undefined &&
+    state.undo?.coalesceKey === options.coalesceKey &&
+    state.undo.progressAfter === state.progress
   const undo = coalesce && state.undo
     ? { ...state.undo, seq, message }
-    : { seq, message, plan: state.plan, progress: state.progress, coalesceKey: options.coalesceKey }
+    : {
+        seq,
+        message,
+        plan: state.plan,
+        progress: state.progress,
+        coalesceKey: options.coalesceKey,
+        progressAfter: options.coalesceKey === undefined ? undefined : state.progress,
+      }
   return {
     ...state,
     seq,
@@ -107,6 +125,19 @@ function planned(day: DayIndex, recipe: Recipe, servings = recipe.defaultServing
 const OPEN = (day: DayIndex): Night => ({ day, status: 'open', pinned: false })
 
 /**
+ * The order in which open nights get dinners (Plan my week, Add to week): Mon/Wed/Thu first when open, then the
+ * remaining open nights earliest-first with the prep day last. Only `open` nights are returned.
+ */
+export function fillOrder(plan: Pick<WeekPlan, 'nights'>, prepDay: DayIndex): DayIndex[] {
+  const open = plan.nights.filter((night) => night.status === 'open').map((night) => night.day)
+  const preferred = DEFAULT_PLAN_DAYS.filter((day) => open.includes(day))
+  const rest = open
+    .filter((day) => !(DEFAULT_PLAN_DAYS as readonly DayIndex[]).includes(day))
+    .sort((a, b) => Number(a === prepDay) - Number(b === prepDay) || a - b)
+  return [...preferred, ...rest]
+}
+
+/**
  * Plan my week = fill only. Fills open nights (never planned, never skipped, never
  * pinned-planned) up to the dinner target with random saved recipes not already in the week.
  * Preferred nights are Mon/Wed/Thu; then the earliest open nights, prep day last.
@@ -120,15 +151,10 @@ export function fillWeek(state: PlannerState, rng: Rng): PlannerState {
     return withStatus(state, 'info', `Your week already has ${targetDinners} dinners. Use Surprise me on a night to swap one.`)
   }
 
-  const openDays = nights.filter((night) => night.status === 'open').map((night) => night.day)
-  if (openDays.length === 0) {
+  const slots = fillOrder(state.plan, prepDay)
+  if (slots.length === 0) {
     return withStatus(state, 'warning', 'There are no open nights to fill. Open a night first.')
   }
-  const preferred = DEFAULT_PLAN_DAYS.filter((day) => openDays.includes(day))
-  const rest = openDays
-    .filter((day) => !preferred.includes(day as (typeof DEFAULT_PLAN_DAYS)[number]))
-    .sort((a, b) => Number(a === prepDay) - Number(b === prepDay) || a - b)
-  const slots = [...preferred, ...rest]
 
   const used = plannedRecipeIds(state)
   const pool = shuffle(state.recipes.filter((recipe) => !used.has(recipe.id)), rng)
@@ -199,6 +225,10 @@ export function keepProposal(state: PlannerState): PlannerState {
     return withStatus({ ...state, proposal: null }, 'warning', 'That suggestion is no longer available.')
   }
   const name = dayName(proposal.day)
+  const elsewhere = dayWithRecipe(state, recipe.id, proposal.day)
+  if (elsewhere !== undefined) {
+    return withStatus({ ...state, proposal: null }, 'warning', `${recipe.title} is already on ${dayName(elsewhere)}`)
+  }
   const message = night.status === 'planned' ? `Swapped ${name} to ${recipe.title}` : `Planned ${name}: ${recipe.title}`
   return commit(state, replaceNight(state.plan.nights, planned(proposal.day, recipe)), message)
 }
@@ -211,6 +241,9 @@ export function assignRecipe(state: PlannerState, day: DayIndex, recipeId: strin
   if (!recipe) return withStatus(state, 'warning', 'That recipe could not be found.')
   if (night.status === 'skipped') return withStatus(state, 'warning', `${name} is skipped — make it open first.`)
   if (night.pinned) return withStatus(state, 'warning', `${name} is pinned. Unpin it first.`)
+  if (night.status === 'planned' && night.recipeId === recipeId) return state // already there
+  const elsewhere = dayWithRecipe(state, recipe.id, day)
+  if (elsewhere !== undefined) return withStatus(state, 'warning', `${recipe.title} is already on ${dayName(elsewhere)}`)
   const message = night.status === 'planned' ? `Swapped ${name} to ${recipe.title}` : `Planned ${name}: ${recipe.title}`
   const count = servings === undefined ? recipe.defaultServings : clampServings(servings)
   return commit(state, replaceNight(state.plan.nights, planned(day, recipe, count)), message)
