@@ -9,6 +9,8 @@ export interface IngredientRow {
   unit: string
   aisle: Aisle
   isPantry: boolean
+  /** The stored quantity, kept so an untouched field round-trips exactly (the input shows 2 decimals). */
+  originalQuantity?: number | null
 }
 export interface PrepAheadRow {
   id: string
@@ -27,6 +29,8 @@ export interface CookRow {
   id: string
   text: string
   timerMinutes: string
+  /** The stored timer, kept so an untouched field round-trips exactly (the input shows minutes to 2 decimals). */
+  originalTimerSeconds?: number | null
 }
 
 export interface RecipeFormValues {
@@ -103,6 +107,7 @@ export function formFromRecipe(recipe: Recipe): RecipeFormValues {
       unit: item.unit,
       aisle: item.aisle,
       isPantry: item.isPantry,
+      originalQuantity: item.quantity,
     })),
     prepAhead: recipe.prepAhead.map((step) => ({
       id: step.id,
@@ -117,6 +122,7 @@ export function formFromRecipe(recipe: Recipe): RecipeFormValues {
       id: step.id,
       text: step.text,
       timerMinutes: step.timerSeconds === null ? '' : num(step.timerSeconds / 60),
+      originalTimerSeconds: step.timerSeconds,
     })),
   }
 }
@@ -226,7 +232,7 @@ export function toRecipeFields(values: RecipeFormValues): NewRecipe {
     ingredients: values.ingredients.filter(rowIsTouched.ingredients).map((row) => ({
       id: row.id,
       name: row.name.trim(),
-      quantity: blank(row.quantity) ? null : Number(row.quantity.trim()),
+      quantity: blank(row.quantity) ? null : row.originalQuantity != null && row.quantity.trim() === num(row.originalQuantity) ? row.originalQuantity : Number(row.quantity.trim()),
       unit: row.unit.trim(),
       aisle: row.aisle,
       isPantry: row.isPantry,
@@ -247,7 +253,11 @@ export function toRecipeFields(values: RecipeFormValues): NewRecipe {
     cookTonight: values.cookTonight.filter(rowIsTouched.cookTonight).map((row) => ({
       id: row.id,
       text: row.text.trim(),
-      timerSeconds: blank(row.timerMinutes) ? null : Math.round(Number(row.timerMinutes.trim()) * 60),
+      timerSeconds: blank(row.timerMinutes)
+        ? null
+        : row.originalTimerSeconds != null && row.timerMinutes.trim() === num(row.originalTimerSeconds / 60)
+          ? row.originalTimerSeconds
+          : Math.round(Number(row.timerMinutes.trim()) * 60),
     })),
   }
 }

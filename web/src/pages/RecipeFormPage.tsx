@@ -166,7 +166,8 @@ function RecipeForm({ recipe }: { recipe?: Recipe }) {
     setSubmitted(true)
     const found = validate(values)
     if (found.length > 0) {
-      pendingFocus.current = found[0].field
+      // Focus now: on a repeat failed submit nothing re-renders, so a deferred focus request would never run.
+      document.getElementById(found[0].field)?.focus()
       return
     }
     const fields = toRecipeFields(values)
@@ -209,7 +210,7 @@ function RecipeForm({ recipe }: { recipe?: Recipe }) {
         <fieldset className="rx-section">
           <legend>Basics</legend>
           <div className="rx-grid">
-            <TextField id="f-title" label="Title" required className="rx-wide" value={values.title} onChange={(value) => setField('title', value)} error={error('f-title')} maxLength={200} />
+            <TextField id="f-title" label="Title" required className="rx-wide" value={values.title} onChange={(value) => setField('title', value)} error={error('f-title')} maxLength={120} />
             <TextField id="f-icon" label="Icon" hint="One emoji for the recipe card." value={values.icon} onChange={(value) => setField('icon', value)} maxLength={8} />
             <TextField id="f-activeMinutes" label="Active minutes" required inputMode="numeric" hint="Hands-on time, 0–600." value={values.activeMinutes} onChange={(value) => setField('activeMinutes', value)} error={error('f-activeMinutes')} />
             <TextField id="f-totalMinutes" label="Total minutes" required inputMode="numeric" hint="Start to table, including waiting." value={values.totalMinutes} onChange={(value) => setField('totalMinutes', value)} error={error('f-totalMinutes')} />
