@@ -59,8 +59,8 @@ test('a crashing page shows the error card but keeps the navigation, and leaving
 })
 
 test('moves focus to the page heading after navigating, but not on first load', async () => {
-  renderApp('/week')
-  await screen.findByRole('heading', { name: 'this week’s dinners' })
+  renderApp('/house-rules')
+  await screen.findByRole('heading', { name: 'house rules' })
   expect(document.activeElement).toBe(document.body)
 
   fireEvent.click(screen.getAllByRole('link', { name: 'Recipes' })[0])
@@ -97,4 +97,20 @@ test('empty recipes use the shared card with an Add recipe action; no-results cl
   expect(document.activeElement).toBe(search)
   expect((search as HTMLInputElement).value).toBe('')
   expect(screen.queryByText(/No recipes match/)).toBeNull()
+})
+
+test('cook view shows unfinished feedback as disabled with a visible reason, not hidden or fake', async () => {
+  renderApp('/cook')
+  const button = (await screen.findByRole('button', { name: 'How did it go?' })) as HTMLButtonElement
+  expect(button.disabled).toBe(true)
+  expect(screen.getByText('Feedback after cooking — coming soon').id).toBe(button.getAttribute('aria-describedby'))
+})
+
+test('week and cook show the shared empty cards when nothing is planned', async () => {
+  const router = renderApp('/week')
+  await screen.findByRole('heading', { name: 'this week’s dinners' })
+  // An open night (Tuesday) has no dinner to cook.
+  await act(async () => { await router.navigate('/cook?day=2') })
+  expect(await screen.findByRole('heading', { name: 'Nothing to cook tonight' })).toBeTruthy()
+  expect(screen.getByRole('link', { name: 'This week →' }).getAttribute('href')).toBe('/week')
 })

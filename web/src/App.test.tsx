@@ -59,7 +59,8 @@ test('renders protected sample views and working navigation', async () => {
 
 test('opens the cook view from the planned Thursday meal', async () => {
   renderRoute('/week', makeService(user))
-  fireEvent.click(await screen.findByRole('link', { name: 'Cook tonight →' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Thursday' }))
+  fireEvent.click(screen.getByRole('link', { name: 'Cook tonight →', description: 'Thursday' }))
   expect(await screen.findByRole('heading', { name: 'Seared salmon, lemon-herb orzo' })).toBeTruthy()
 })
 
@@ -77,7 +78,7 @@ test.each([
   ['/prep', 'sunday prep'],
   ['/shopping', 'shopping list'],
   ['/drafts', 'drafts to review'],
-  ['/cook', 'Seared salmon, lemon-herb orzo'],
+  ['/cook?day=4', 'Seared salmon, lemon-herb orzo'],
   ['/house-rules', 'house rules'],
 ])('renders the protected direct route %s', async (path, heading) => {
   renderRoute(path, makeService(user))

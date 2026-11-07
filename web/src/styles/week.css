@@ -1,0 +1,298 @@
+.planner-view {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+  overflow-wrap: anywhere;
+}
+
+.planner-view :is(a, button, select):focus-visible,
+.planner-view h1:focus-visible {
+  outline: 3px solid #24234d;
+  outline-offset: 3px;
+}
+
+.planner-view :is(button, select, .button, .week-recipe-link) {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.planner-view .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.week-toolbar-actions,
+.week-night-controls,
+.week-move {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.week-surprise-reason {
+  margin: 8px 0 0;
+  font-weight: 700;
+}
+
+.week-nights {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+  margin: 20px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.week-night {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
+  gap: 6px;
+}
+
+.week-night-select {
+  flex: 1;
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 8px;
+  width: 100%;
+  min-height: 88px;
+  padding: 8px;
+  border: 2px solid #758170;
+  border-radius: 12px;
+  background: var(--cream);
+  color: var(--ink);
+}
+
+.week-night-select[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: white;
+  box-shadow: inset 0 -4px 0 var(--green);
+}
+
+.week-night-select .magnet {
+  font-size: 16px;
+}
+
+.week-night-info {
+  display: grid;
+  gap: 3px;
+  font-size: 0.875rem;
+}
+
+.week-night-info strong {
+  text-transform: capitalize;
+}
+
+.week-pin {
+  align-self: center;
+  padding-inline: 8px;
+  border: 2px solid #758170;
+  border-radius: 999px;
+  background: white;
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 800;
+}
+
+.week-pin[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--gold);
+}
+
+.week-night-warnings {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 8px 8px 22px;
+  border: 1px dashed #7b602a;
+  border-radius: 8px;
+  background: #fff5ce;
+  font-size: 0.875rem;
+}
+
+.week-night-detail {
+  margin-top: 18px;
+}
+
+.week-recipe-link {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 800;
+}
+
+.week-night-controls {
+  margin-top: 10px;
+}
+
+.week-servings {
+  gap: 8px;
+  margin: 0;
+  overflow: visible;
+  text-align: center;
+}
+
+.week-servings button {
+  padding: 0 8px;
+  border-radius: 10px;
+  color: var(--ink);
+}
+
+.week-servings button:disabled {
+  opacity: 0.5;
+}
+
+.week-move {
+  align-items: end;
+  margin-top: 18px;
+}
+
+.week-move label {
+  display: grid;
+  gap: 5px;
+  max-width: 100%;
+  font-weight: 800;
+}
+
+.week-move p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.week-move select {
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  background: white;
+  color: var(--ink);
+  font: inherit;
+}
+
+.week-proposal p {
+  margin-top: 0;
+}
+
+.week-planner .meal-card-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+  row-gap: 36px;
+}
+
+.planner-view .meal-action,
+.planner-view .sticky-note .button {
+  display: flex;
+}
+
+.planner-view .state-card {
+  align-self: start;
+}
+
+.cook-hero .state-card {
+  margin-top: 32px;
+}
+
+.week-undo {
+  position: fixed;
+  z-index: 30;
+  inset-inline-end: 20px;
+  inset-block-end: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: max-content;
+  max-width: calc(100% - 40px);
+  padding: 12px;
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  box-shadow: 3px 4px 0 var(--ink);
+  font-weight: 800;
+}
+
+.planner-view .cook-topline {
+  flex-flow: row wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px 20px;
+  margin-bottom: 6px;
+}
+
+.cook-content .fridge-handle {
+  display: none;
+}
+
+.cook-phases h2:first-child {
+  margin-top: 0;
+}
+
+.cook-phases section + section {
+  margin-top: 24px;
+}
+
+.cook-steps {
+  display: block;
+  margin: 0;
+  padding-inline-start: 26px;
+}
+
+.cook-steps .task-card {
+  display: list-item;
+  min-height: 0;
+  margin-bottom: 10px;
+}
+
+.cook-steps .task-card :is(span, em) {
+  display: table;
+  margin-top: 6px;
+}
+
+.cook-ingredients {
+  margin-bottom: 0;
+}
+
+.cook-ingredients div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-block: 10px;
+  border-bottom: 1px solid #d7d7d1;
+}
+
+.cook-ingredients dd {
+  margin: 0;
+  font-weight: 800;
+  text-align: end;
+}
+
+@media (max-width: 900px) {
+  .week-nights {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .week-undo {
+    inset-block-end: 76px;
+  }
+}
+
+@media (max-width: 520px) {
+  .week-nights {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .week-night-detail {
+    padding: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .planner-view,
+  .planner-view * {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

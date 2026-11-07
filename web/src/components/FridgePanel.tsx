@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { ReactNode, Ref } from 'react'
 import { usePlanner } from '../planner/store'
 import { PawMagnet } from './Magnet'
 
@@ -12,8 +12,8 @@ export function FridgePanel({ children, className = '', paw }: { children: React
   )
 }
 
-export function PaperTitle({ words }: { words: string[] }) {
-  return <h1 className="paper-title" aria-label={words.join(' ')}>{words.map((word) => <span key={word}>{word}</span>)}</h1>
+export function PaperTitle({ words, headingRef }: { words: string[]; headingRef?: Ref<HTMLHeadingElement> }) {
+  return <h1 className="paper-title" aria-label={words.join(' ')} ref={headingRef} tabIndex={headingRef ? -1 : undefined}>{words.map((word) => <span key={word}>{word}</span>)}</h1>
 }
 
 export function PreviewNotice() {
