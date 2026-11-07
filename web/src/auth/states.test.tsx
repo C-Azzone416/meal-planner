@@ -76,7 +76,8 @@ describe('password reset code request', () => {
     await requestCode('allowed@example.test')
     await screen.findByText('If that address can sign in, we sent a code.')
     act(() => { vi.advanceTimersByTime(60_000) })
-    const resend = screen.getByRole('button', { name: 'Email me a new password code' })
+    const resend = screen.getByRole('button', { name: 'Email me a new password code' }) as HTMLButtonElement
+    await waitFor(() => expect(resend.disabled).toBe(false))
     await act(async () => { fireEvent.click(resend) })
     expect(service.sendPasswordResetCode).toHaveBeenCalledTimes(2)
     expect((screen.getByRole('button', { name: 'Email me a new password code' }) as HTMLButtonElement).disabled).toBe(true)
@@ -88,9 +89,11 @@ describe('password reset code request', () => {
     renderRoute('/sign-in', service)
     await requestCode('allowed@example.test')
     await screen.findByText('If that address can sign in, we sent a code.')
-    fireEvent.click(screen.getByRole('button', { name: 'Back to sign in' }))
+    // The route's pending flag may still be flushing, which keeps the buttons disabled for a tick.
+    const back = screen.getByRole('button', { name: 'Back to sign in' }) as HTMLButtonElement
+    await waitFor(() => expect(back.disabled).toBe(false))
+    fireEvent.click(back)
     fireEvent.click(screen.getByRole('button', { name: 'Set or reset password' }))
-    // findBy: the route's pending flag may still be flushing, which briefly relabels the button 'Sending…'.
     expect(((await screen.findByRole('button', { name: 'Email my password code' })) as HTMLButtonElement).disabled).toBe(true)
     expect(service.sendPasswordResetCode).toHaveBeenCalledTimes(1)
   })
