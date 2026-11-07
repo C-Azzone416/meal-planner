@@ -9,7 +9,7 @@ export function normalizeName(name: string): string {
     .normalize('NFKC')
     .toLocaleLowerCase('en-US')
     .replace(/\([^)]*\)/g, ' ')
-    .replace(/[^\p{L}\p{M}\p{N}\s&-]/gu, ' ')
+    .replace(/[^\p{L}\p{M}\p{N}\p{Extended_Pictographic}\s&-]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim()
   return base
@@ -49,9 +49,28 @@ export function normalizeUnit(unit: string): string {
   return UNIT_ALIASES[base] ?? singularize(base)
 }
 
+/** A lone UTF-16 surrogate (half of an emoji, say). `encodeURIComponent` throws on these. With the `u` flag this matches only unpaired ones. */
+const LONE_SURROGATE = /[\uD800-\uDFFF]/u
+
+/** True if the string has no lone surrogates (equivalent of `String.prototype.isWellFormed`). */
+export function isWellFormed(value: string): boolean {
+  return !LONE_SURROGATE.test(value)
+}
+
+/** True if any string or object key anywhere inside `value` is not well-formed. */
+export function containsIllFormed(value: unknown): boolean {
+  if (typeof value === 'string') return !isWellFormed(value)
+  if (Array.isArray(value)) return value.some(containsIllFormed)
+  if (value && typeof value === 'object') {
+    return Object.entries(value).some(([key, inner]) => !isWellFormed(key) || containsIllFormed(inner))
+  }
+  return false
+}
+
 /** Encode one key part so the separator can never appear inside it (("a:b","c") ≠ ("a","b:c")). */
 function part(value: string): string {
-  return encodeURIComponent(value)
+  // Total: a lone surrogate becomes U+FFFD instead of making encodeURIComponent throw.
+  return encodeURIComponent(value.replace(/[\uD800-\uDFFF]/gu, '\uFFFD'))
 }
 
 /** Shopping item key = normalised ingredient name + unit, each part encoded. Always contains exactly one '|'. */

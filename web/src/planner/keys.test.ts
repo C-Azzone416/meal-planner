@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { normalizeName, normalizeUnit, pantryLowKey, prepKey, shoppingKey } from './keys'
+import { containsIllFormed, isWellFormed, normalizeName, normalizeUnit, pantryLowKey, prepKey, shoppingKey } from './keys'
 
 describe('normalizeName', () => {
   test('keeps letters and numbers of any script instead of collapsing them', () => {
@@ -43,5 +43,25 @@ describe('key encoding is unambiguous', () => {
   test('units fold case and width', () => {
     expect(normalizeUnit('ＬＢ')).toBe('lb')
     expect(normalizeUnit('Tablespoons')).toBe('tbsp')
+  })
+})
+
+describe('key encoding is total', () => {
+  const lone = 'a\uD800b'
+  test('lone surrogates never make key builders throw', () => {
+    expect(() => shoppingKey(lone, lone)).not.toThrow()
+    expect(() => pantryLowKey(lone)).not.toThrow()
+    expect(() => prepKey(lone, '\uDC00')).not.toThrow()
+    expect(() => normalizeName(lone)).not.toThrow()
+  })
+  test('well-formed pairs encode normally and stay distinct', () => {
+    expect(shoppingKey('🍕', '')).not.toBe(shoppingKey('🍔', ''))
+  })
+  test('detects ill-formed text, including nested values and object keys', () => {
+    expect(isWellFormed('ok 🍕')).toBe(true)
+    expect(isWellFormed(lone)).toBe(false)
+    expect(containsIllFormed({ a: [{ b: lone }] })).toBe(true)
+    expect(containsIllFormed({ [lone]: 1 })).toBe(true)
+    expect(containsIllFormed({ a: ['fine', 3, null] })).toBe(false)
   })
 })

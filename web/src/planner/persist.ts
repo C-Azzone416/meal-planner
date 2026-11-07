@@ -2,11 +2,13 @@
  * localStorage persistence for the preview store (docs/ux-decisions.md §0).
  * One versioned key; anything unreadable is discarded and reseeded, never thrown.
  */
+import { isWellFormed } from './keys'
 import { createSeedState } from './seed'
 import { AISLES, DRAFT_GUESS_KEYS, type PlannerState } from './types'
 
 export const STORAGE_KEY = 'mealplanner.preview.v1'
-export const STORAGE_VERSION = 1
+/** Bumped to 2 when key encoding changed (old progress keys would silently orphan). The storage key name is unchanged. */
+export const STORAGE_VERSION = 2
 export const RESET_NOTICE = 'We reset the preview data because it could not be read.'
 
 /** The subset of Storage the store needs; lets tests inject an in-memory fake. */
@@ -68,7 +70,7 @@ export function saveState(storage: StorageLike | null, state: PersistedState): v
 type Json = Record<string, unknown>
 
 const isRecord = (value: unknown): value is Json => typeof value === 'object' && value !== null && !Array.isArray(value)
-const isString = (value: unknown): value is string => typeof value === 'string'
+const isString = (value: unknown): value is string => typeof value === 'string' && isWellFormed(value)
 const isNum = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
 const isArrayOf = <T,>(value: unknown, guard: (item: unknown) => item is T): value is T[] => Array.isArray(value) && value.every(guard)
 const isStringArray = (value: unknown): value is string[] => isArrayOf(value, isString)
@@ -151,7 +153,7 @@ function isPlan(value: unknown, recipeIds: Set<string>): boolean {
 }
 
 function isRecordOf(value: unknown, guard: (item: Json) => boolean): boolean {
-  return isRecord(value) && Object.values(value).every((item) => isRecord(item) && guard(item))
+  return isRecord(value) && Object.entries(value).every(([key, item]) => isWellFormed(key) && isRecord(item) && guard(item))
 }
 
 /** Strictly validate a stored blob; returns the persisted subset or null. */

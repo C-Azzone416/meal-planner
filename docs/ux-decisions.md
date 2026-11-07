@@ -6,7 +6,7 @@ The owner may revise any of this; each section is small enough to change on its 
 ## 0. Data boundary for this phase
 
 - There is no recipe, plan, shopping or prep API yet (`contracts/openapi.yaml` only has `/api/health`). The web app therefore runs on a **client-side planner store** seeded with the sample data.
-- The store persists to `localStorage` under one versioned key (`mealplanner.preview.v1`), scoped to the browser. A corrupt or old-version value is discarded and reseeded, never thrown.
+- The store persists to `localStorage` under one key (`mealplanner.preview.v1`), scoped to the browser. The stored value carries a `version` field, currently **2** (the key name stays the same; version 2 changed how shopping/prep progress keys are encoded). A corrupt, ill-formed or old-version value, such as a version 1 blob, is discarded and reseeded with a visible notice, never thrown. There is no migration for preview data.
 - Every screen keeps an honest notice: "Preview data · saved in this browser only". House rules gets a **Reset preview data** action (confirm first).
 - The store is the single seam the future API will replace: pages read and write through hooks/actions, never through `sampleData.ts` directly.
 - Nothing personal is sent anywhere. No new network calls.
