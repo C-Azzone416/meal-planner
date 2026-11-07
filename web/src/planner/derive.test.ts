@@ -8,7 +8,7 @@ import {
   roundQuantity,
 } from './derive'
 import { formatAmount, formatQuantity } from './format'
-import { normalizeName, prepKey, shoppingKey } from './keys'
+import { normalizeName, pantryLowKey, prepKey, shoppingKey } from './keys'
 import { createSeedState } from './seed'
 import { cleanSeed, run } from './testing'
 
@@ -84,7 +84,7 @@ describe('deriveShopping', () => {
     const state = run(cleanSeed(), { type: 'pantry/toggleLow', name: 'Olive Oil' })
     const oil = deriveShopping(state).rows.find((r) => r.name === 'olive oil')
     expect(oil).toMatchObject({ aisle: 'Pantry aisle', source: 'pantry-low', amount: 'running low', mealsLabel: 'chicken + salmon' })
-    const key = shoppingKey('olive oil', '')
+    const key = pantryLowKey('olive oil')
     const checkedLow = run(state, { type: 'shopping/toggle', key })
     expect(checkedLow.progress.shoppingChecked[key]).toBeDefined()
     expect(run(checkedLow, { type: 'pantry/toggleLow', name: 'olive oil' }).progress.shoppingChecked[key]).toBeUndefined()

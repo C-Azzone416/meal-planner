@@ -1,6 +1,6 @@
 /** The planner reducer. Pure: random choices arrive as seeds drawn by the store. */
 import { deriveShopping, derivePrep } from './derive'
-import { normalizeName, shoppingKey, uniqueId } from './keys'
+import { normalizeName, pantryLowKey, uniqueId } from './keys'
 import {
   assignRecipe,
   cancelProposal,
@@ -237,7 +237,7 @@ export function reducer(state: PlannerState, action: PlannerAction): PlannerStat
       return {
         ...state,
         pantryLow: state.pantryLow.filter((existing) => existing !== name),
-        progress: { ...state.progress, shoppingChecked: without(state.progress.shoppingChecked, shoppingKey(name, '')) },
+        progress: { ...state.progress, shoppingChecked: without(state.progress.shoppingChecked, pantryLowKey(name)) },
       }
     }
     case 'dismiss': {
