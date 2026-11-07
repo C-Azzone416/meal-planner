@@ -28,7 +28,7 @@ import {
 import { uniqueId } from './keys'
 import { defaultStorage, loadState, saveState, type StorageLike } from './persist'
 import { seedFrom } from './plan'
-import { type DraftPatch, canApproveDraft, reducer } from './reducer'
+import { type DraftPatch, type PlannerAction, reducer } from './reducer'
 import {
   type DayIndex,
   type Draft,
@@ -45,7 +45,11 @@ import {
 /** Every way a page can change planner data. All are synchronous and safe to call from event handlers. */
 export interface PlannerActions {
   // — Recipes —
-  /** Save a person-authored recipe directly (not a draft). Returns the new recipe's stable id. */
+  /**
+   * Save a person-authored recipe directly (not a draft). Returns the new recipe's stable id, which is already
+   * unique even across several calls in the same tick. Returns '' (and sets `status`) only if the recipe was
+   * rejected because `defaultServings` is not a positive number.
+   */
   addRecipe(recipe: NewRecipe): string
   /** Replace a saved recipe by id. If it is on this week's plan, `status` says shopping/prep were updated. */
   updateRecipe(recipe: Recipe): void
@@ -160,52 +164,57 @@ export function PlannerProvider({ children, storage, random = Math.random }: Pla
     randomRef.current = random
   }, [random])
 
-  const actions = useMemo<PlannerActions>(
-    () => ({
+  const actions = useMemo<PlannerActions>(() => {
+    // Apply each action to `latest` immediately (the reducer is pure) so that actions returning ids
+    // see the effect of earlier calls made in the same tick; then hand it to React.
+    const send = (action: PlannerAction) => {
+      latest.current = reducer(latest.current, action)
+      dispatch(action)
+    }
+    return {
       addRecipe(recipe) {
         const id = uniqueId(recipe.title, latest.current.recipes.map((existing) => existing.id))
-        dispatch({ type: 'recipe/add', recipe: { ...recipe, id } })
-        return id
+        send({ type: 'recipe/add', recipe: { ...recipe, id } })
+        return latest.current.recipes.some((existing) => existing.id === id) ? id : ''
       },
-      updateRecipe: (recipe) => dispatch({ type: 'recipe/update', recipe }),
+      updateRecipe: (recipe) => send({ type: 'recipe/update', recipe }),
       approveDraft(draftId) {
         const draft = latest.current.drafts.find((candidate) => candidate.id === draftId)
         const id = draft ? uniqueId(draft.title, latest.current.recipes.map((recipe) => recipe.id)) : null
-        dispatch({ type: 'draft/approve', id: draftId, recipeId: id ?? '' })
-        return draft && canApproveDraft(draft) ? id : null
+        send({ type: 'draft/approve', id: draftId, recipeId: id ?? '' })
+        return id !== null && latest.current.recipes.some((recipe) => recipe.id === id) ? id : null
       },
-      discardDraft: (id) => dispatch({ type: 'draft/discard', id }),
-      setDraftConfirmed: (id, key, value) => dispatch({ type: 'draft/confirm', id, key, value }),
-      updateDraft: (id, patch) => dispatch({ type: 'draft/update', id, patch }),
+      discardDraft: (id) => send({ type: 'draft/discard', id }),
+      setDraftConfirmed: (id, key, value) => send({ type: 'draft/confirm', id, key, value }),
+      updateDraft: (id, patch) => send({ type: 'draft/update', id, patch }),
 
-      fillWeek: (rng) => dispatch({ type: 'plan/fill', seed: seedFrom(rng ?? randomRef.current) }),
-      proposeSurprise: (day, rng) => dispatch({ type: 'plan/propose', day, seed: seedFrom(rng ?? randomRef.current) }),
-      keepProposal: () => dispatch({ type: 'plan/keep' }),
-      cancelProposal: () => dispatch({ type: 'plan/cancel' }),
-      moveNight: (from, to) => dispatch({ type: 'plan/move', from, to }),
-      setSkipped: (day) => dispatch({ type: 'plan/skip', day }),
-      setOpen: (day) => dispatch({ type: 'plan/open', day }),
-      togglePin: (day) => dispatch({ type: 'plan/pin', day }),
-      setServings: (day, servings) => dispatch({ type: 'plan/servings', day, servings }),
-      assignRecipe: (day, recipeId, servings) => dispatch({ type: 'plan/assign', day, recipeId, servings }),
-      setHouseRules: (patch) => dispatch({ type: 'rules/set', patch }),
+      fillWeek: (rng) => send({ type: 'plan/fill', seed: seedFrom(rng ?? randomRef.current) }),
+      proposeSurprise: (day, rng) => send({ type: 'plan/propose', day, seed: seedFrom(rng ?? randomRef.current) }),
+      keepProposal: () => send({ type: 'plan/keep' }),
+      cancelProposal: () => send({ type: 'plan/cancel' }),
+      moveNight: (from, to) => send({ type: 'plan/move', from, to }),
+      setSkipped: (day) => send({ type: 'plan/skip', day }),
+      setOpen: (day) => send({ type: 'plan/open', day }),
+      togglePin: (day) => send({ type: 'plan/pin', day }),
+      setServings: (day, servings) => send({ type: 'plan/servings', day, servings }),
+      assignRecipe: (day, recipeId, servings) => send({ type: 'plan/assign', day, recipeId, servings }),
+      setHouseRules: (patch) => send({ type: 'rules/set', patch }),
 
-      toggleShoppingChecked: (key) => dispatch({ type: 'shopping/toggle', key }),
-      togglePrepDone: (key) => dispatch({ type: 'prep/toggle', key }),
-      togglePantryLow: (name) => dispatch({ type: 'pantry/toggleLow', name }),
-      dismissNoLongerNeeded: (kind, key) => dispatch({ type: 'dismiss', kind, key }),
+      toggleShoppingChecked: (key) => send({ type: 'shopping/toggle', key }),
+      togglePrepDone: (key) => send({ type: 'prep/toggle', key }),
+      togglePantryLow: (name) => send({ type: 'pantry/toggleLow', name }),
+      dismissNoLongerNeeded: (kind, key) => send({ type: 'dismiss', kind, key }),
 
-      undo: () => dispatch({ type: 'undo' }),
-      dismissUndo: () => dispatch({ type: 'undo/dismiss' }),
-      clearStatus: () => dispatch({ type: 'status/clear' }),
+      undo: () => send({ type: 'undo' }),
+      dismissUndo: () => send({ type: 'undo/dismiss' }),
+      clearStatus: () => send({ type: 'status/clear' }),
       dismissResetNotice: () => setResetNotice(null),
       resetPreviewData() {
-        dispatch({ type: 'reset' })
+        send({ type: 'reset' })
         setResetNotice(null)
       },
-    }),
-    [],
-  )
+    }
+  }, [])
 
   const shopping = useMemo(() => deriveShopping(state), [state])
   const prep = useMemo(() => derivePrep(state), [state])

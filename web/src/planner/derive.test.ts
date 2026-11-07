@@ -339,3 +339,73 @@ function createSeedForPrep() {
   // The shipped seed has the two chili prep tasks already done.
   return { ...cleanSeed(), progress: { shoppingChecked: {}, prepDone: createSeedState().progress.prepDone } }
 }
+
+describe('unit aliases and rounding (QA fixes)', () => {
+  test('roundQuantity is case- and alias-insensitive', () => {
+    expect(roundQuantity(1.1, 'Cups')).toBe(1.25)
+    expect(roundQuantity(1.1, 'CUP')).toBe(1.25)
+    expect(roundQuantity(2.1, 'Pounds')).toBe(2.25)
+    expect(roundQuantity(0.6, 'Bunch')).toBe(1)
+    expect(roundQuantity(1.1, 'tablespoons')).toBe(1.25)
+  })
+
+  test.each([
+    [['lb', 'lbs', 'Pound', 'pounds', 'LB.']],
+    [['oz', 'ounce', 'Ounces']],
+    [['tbsp', 'tablespoon', 'Tablespoons', 'tbs']],
+    [['tsp', 'teaspoon', 'teaspoons']],
+    [['cup', 'cups', 'Cup']],
+    [['clove', 'cloves']],
+    [['can', 'cans', 'Can']],
+  ])('units %j share one shopping key', (units) => {
+    const keys = new Set(units.map((unit) => shoppingKey('thing', unit)))
+    expect(keys.size).toBe(1)
+  })
+
+  test('different alias spellings merge into one consolidated row', () => {
+    const state = cleanSeed()
+    const recipes = state.recipes.map((r) => {
+      if (r.id === 'gochujang-chicken') return { ...r, ingredients: [...r.ingredients, { id: 'x', name: 'Flour', quantity: 1.5, unit: 'cups', aisle: 'Pantry aisle' as const, isPantry: false }] }
+      if (r.id === 'salmon-lemon-herb-orzo') return { ...r, ingredients: [...r.ingredients, { id: 'x', name: 'flour', quantity: 1, unit: 'Cup', aisle: 'Pantry aisle' as const, isPantry: false }] }
+      return r
+    })
+    const flour = deriveShopping({ ...state, recipes }).rows.filter((r) => r.name.toLowerCase() === 'flour')
+    expect(flour).toHaveLength(1)
+    expect(flour[0].quantity).toBe(2.5)
+    expect(flour[0].mealsLabel).toBe('chicken + salmon')
+  })
+})
+
+describe('invalid defaultServings never produce Infinity (QA fix)', () => {
+  test.each([0, -2, Number.NaN, Number.POSITIVE_INFINITY])('defaultServings %s does not scale', (bad) => {
+    const state = cleanSeed()
+    const recipes = state.recipes.map((r) => (r.id === 'salmon-lemon-herb-orzo' ? { ...r, defaultServings: bad } : r))
+    const bad_ = { ...state, recipes }
+    for (const r of deriveShopping(bad_).rows) {
+      expect(r.quantity === null || Number.isFinite(r.quantity)).toBe(true)
+      expect(r.amount).not.toMatch(/Infinity|NaN/)
+    }
+    expect(row(bad_, 'salmon fillets', 'lb').quantity).toBe(2)
+    for (const t of derivePrep(bad_).tasks) expect(Number.isFinite(t.factor)).toBe(true)
+  })
+
+  test('the reducer refuses to save or edit a recipe with invalid servings', () => {
+    const state = cleanSeed()
+    const salmon = state.recipes.find((r) => r.id === 'salmon-lemon-herb-orzo')!
+    const updated = run(state, { type: 'recipe/update', recipe: { ...salmon, defaultServings: 0 } })
+    expect(updated.recipes).toBe(state.recipes)
+    expect(updated.status?.kind).toBe('warning')
+    const added = run(state, { type: 'recipe/add', recipe: { ...salmon, id: 'new', defaultServings: Number.NaN } })
+    expect(added.recipes).toBe(state.recipes)
+    const draft = run(state, { type: 'draft/update', id: 'draft-fennel-traybake', patch: { defaultServings: -1 } })
+    expect(draft.drafts).toBe(state.drafts)
+  })
+
+  test('approving a draft with invalid servings is refused', () => {
+    let state = cleanSeed()
+    state = { ...state, drafts: state.drafts.map((d) => ({ ...d, defaultServings: 0, confirmed: { activeMinutes: true, totalMinutes: true, attention: true, prepAhead: true, storage: true } })) }
+    const next = run(state, { type: 'draft/approve', id: 'draft-fennel-traybake', recipeId: 'x' })
+    expect(next.recipes).toBe(state.recipes)
+    expect(next.drafts).toBe(state.drafts)
+  })
+})

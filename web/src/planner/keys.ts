@@ -23,9 +23,26 @@ function singularize(word: string): string {
   return word
 }
 
+const UNIT_ALIASES: Record<string, string> = {
+  lb: 'lb', lbs: 'lb', pound: 'lb', pounds: 'lb',
+  oz: 'oz', ounce: 'oz', ounces: 'oz',
+  tbsp: 'tbsp', tbs: 'tbsp', tablespoon: 'tbsp', tablespoons: 'tbsp',
+  tsp: 'tsp', teaspoon: 'tsp', teaspoons: 'tsp',
+  cup: 'cup', cups: 'cup',
+  clove: 'clove', cloves: 'clove',
+  can: 'can', cans: 'can',
+  g: 'g', gram: 'g', grams: 'g',
+  kg: 'kg', kilogram: 'kg', kilograms: 'kg',
+  ml: 'ml', milliliter: 'ml', milliliters: 'ml',
+  l: 'l', liter: 'l', liters: 'l',
+  qt: 'quart', quart: 'quart', quarts: 'quart',
+  gal: 'gallon', gallon: 'gallon', gallons: 'gallon',
+}
+
+/** Canonical unit: case-insensitive, alias-merged ("Cups", "lbs", "tablespoons" → cup, lb, tbsp), singularised otherwise. */
 export function normalizeUnit(unit: string): string {
-  const base = unit.toLowerCase().trim().replace(/\s+/g, ' ')
-  return singularize(base)
+  const base = unit.toLowerCase().trim().replace(/\.$/, '').replace(/\s+/g, ' ')
+  return UNIT_ALIASES[base] ?? singularize(base)
 }
 
 /** Shopping item key = normalised ingredient name + unit. */

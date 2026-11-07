@@ -2,7 +2,7 @@
  * Pure derivations from PlannerState (docs/ux-decisions.md §3).
  */
 import { formatAmount, formatQuantity } from './format'
-import { normalizeName, prepKey, shoppingKey } from './keys'
+import { normalizeName, normalizeUnit, prepKey, shoppingKey } from './keys'
 import { AISLES, type Aisle, DAY_NAMES, type DayIndex, type PlannerState, type Recipe } from './types'
 
 /** A planned meal that needs an ingredient (used for "chili + chicken" labels). */
@@ -144,7 +144,7 @@ export interface PlanSummary {
 const EPSILON = 1e-9
 
 /** Units measured in fractions: round up to quarter steps. */
-const QUARTER_UNITS = new Set(['cup', 'lb', 'pound', 'oz', 'ounce', 'tbsp', 'tsp', 'quart', 'gallon', 'g', 'kg', 'ml', 'l'])
+const QUARTER_UNITS = new Set(['cup', 'lb', 'oz', 'tbsp', 'tsp', 'quart', 'gallon', 'g', 'kg', 'ml', 'l'])
 /** Units sold in halves. */
 const HALF_UNITS = new Set(['bunch'])
 
@@ -153,7 +153,7 @@ const HALF_UNITS = new Set(['bunch'])
  * ½ for bunches, whole numbers for counts. Always rounds up so nobody under-buys.
  */
 export function roundQuantity(quantity: number, unit: string): number {
-  const u = unit.toLowerCase().trim()
+  const u = normalizeUnit(unit)
   const step = QUARTER_UNITS.has(u) ? 0.25 : HALF_UNITS.has(u) ? 0.5 : 1
   const rounded = Math.ceil(quantity / step - EPSILON) * step
   return Math.max(rounded, step)
@@ -166,11 +166,13 @@ function mealsOf(state: PlannerState): { meal: MealRef; recipe: Recipe; servings
     const recipe = state.recipes.find((candidate) => candidate.id === night.recipeId)
     if (!recipe || night.recipeId === undefined) continue
     const servings = night.servings ?? recipe.defaultServings
+    // A corrupt default (0, negative, NaN) must never produce Infinity/NaN quantities: don't scale.
+    const validDefault = Number.isFinite(recipe.defaultServings) && recipe.defaultServings > 0
     meals.push({
       meal: { day: night.day, recipeId: recipe.id, title: recipe.title, label: recipe.shortName ?? recipe.title },
       recipe,
       servings,
-      factor: servings / recipe.defaultServings,
+      factor: validDefault && Number.isFinite(servings) ? servings / recipe.defaultServings : 1,
     })
   }
   return meals
