@@ -6,6 +6,7 @@ import { formatAmount, formatDuration, formatTimer, joinList } from '../planner/
 import { usePlanner } from '../planner/store'
 import { DAY_NAMES } from '../planner/types'
 import '../styles/recipes.css'
+import { addToWeekNight } from './addToWeek'
 
 const ATTENTION_LABEL = { low: 'Low attention', medium: 'Medium attention', high: 'High attention' } as const
 
@@ -49,7 +50,7 @@ function RecipeDetail() {
   if (!recipe) return null
 
   const plannedDays = planner.plan.nights.filter((night) => night.status === 'planned' && night.recipeId === recipe.id).map((night) => night.day)
-  const openNight = planner.plan.nights.find((night) => night.status === 'open' && !night.pinned)
+  const openDay = addToWeekNight(planner.plan, planner.houseRules.prepDay)
   const status = planner.status && (saved || planner.status.seq > statusSeqAtMount) ? planner.status : null
   const reasonId = 'add-to-week-reason'
 
@@ -73,12 +74,12 @@ function RecipeDetail() {
         <button
           type="button"
           className="button button--green rx-button"
-          disabled={!openNight}
-          aria-describedby={openNight ? undefined : reasonId}
-          onClick={() => openNight && planner.assignRecipe(openNight.day, recipe.id)}
-        >{openNight ? `Add to week · ${DAY_NAMES[openNight.day]}` : 'Add to week'}</button>
+          disabled={openDay === undefined}
+          aria-describedby={openDay === undefined ? reasonId : undefined}
+          onClick={() => openDay !== undefined && planner.assignRecipe(openDay, recipe.id)}
+        >{openDay !== undefined ? `Add to week · ${DAY_NAMES[openDay]}` : 'Add to week'}</button>
       </div>
-      {!openNight && <p id={reasonId} className="rx-reason">Every night this week is already planned, skipped or pinned. Open a night on This week first.</p>}
+      {openDay === undefined && <p id={reasonId} className="rx-reason">Every night this week is already planned, skipped or pinned. Open a night on This week first.</p>}
       <div role="status" className="rx-status">
         {saved && <span className="rx-saved">Saved.</span>}
         {status && <span>{status.text}</span>}

@@ -95,9 +95,13 @@ test('Add to week plans the first open night and is disabled with a reason when 
   renderApp('/recipes/red-lentil-coconut-soup')
   await screen.findByRole('heading', { level: 1 })
   const button = () => screen.getByRole('button', { name: /^Add to week/ }) as HTMLButtonElement
-  expect(button().textContent).toContain('Sunday')
-  // Seed plan has Mon/Wed/Thu planned: four open nights.
-  for (let i = 0; i < 4; i += 1) fireEvent.click(button())
+  // Seed plan has Mon/Wed/Thu planned; Sunday is the prep day, so it goes last.
+  // Order of the four open nights: Tue, Fri, Sat, then Sun.
+  const order = ['Tuesday', 'Friday', 'Saturday', 'Sunday']
+  for (const day of order) {
+    expect(button().textContent).toContain(day)
+    fireEvent.click(button())
+  }
   await waitFor(() => expect(button().disabled).toBe(true))
   expect(screen.getByText(/Every night this week is already planned/)).toBeTruthy()
   expect(button().getAttribute('aria-describedby')).toBeTruthy()
