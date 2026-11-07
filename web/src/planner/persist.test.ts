@@ -41,3 +41,29 @@ describe('parsePersisted range checks', () => {
     expect(parsePersisted(raw)).not.toBeNull()
   })
 })
+
+describe('hydration only trusts validated fields', () => {
+  test('a stored blob cannot smuggle in transient state', async () => {
+    const { loadState, STORAGE_KEY } = await import('./persist')
+    const state = createSeedState()
+    const blob = JSON.parse(serialize(state))
+    blob.state.undo = { seq: 99, message: 'hi', plan: {}, progress: null }
+    blob.state.proposal = { day: 'x' }
+    blob.state.status = { text: 5 }
+    blob.state.seq = 'NaN'
+    blob.state.extra = true
+    const storage = { getItem: (k: string) => (k === STORAGE_KEY ? JSON.stringify(blob) : null), setItem: () => undefined, removeItem: () => undefined }
+    const loaded = loadState(storage)
+    expect(loaded.resetNotice).toBeNull()
+    expect(loaded.state.undo).toBeNull()
+    expect(loaded.state.proposal).toBeNull()
+    expect(loaded.state.status).toBeNull()
+    expect(loaded.state.seq).toBe(0)
+    expect(loaded.state).not.toHaveProperty('extra')
+    expect(loaded.state.recipes).toHaveLength(8)
+  })
+
+  test('rejects a recipe planned on two nights', () => {
+    expect(parsePersisted(stored((s) => { s.plan.nights[3].recipeId = s.plan.nights[1].recipeId }))).toBeNull()
+  })
+})
