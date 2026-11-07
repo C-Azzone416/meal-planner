@@ -417,3 +417,20 @@ describe('invalid defaultServings never produce Infinity (QA fix)', () => {
     expect(next.drafts).toBe(state.drafts)
   })
 })
+
+describe('running-low pantry rows have their own identity', () => {
+  test('a regular row for the same word does not suppress the running-low row', () => {
+    // Tortilla soup needs 2 limes (a regular row); the person also marks lime as running low.
+    let state = run(cleanSeed(), { type: 'plan/assign', day: 2, recipeId: 'tortilla-soup' })
+    state = run(state, { type: 'pantry/toggleLow', name: 'limes' })
+    const rows = deriveShopping(state).rows.filter((r) => r.name.toLowerCase().startsWith('lime'))
+    expect(rows.map((r) => r.source).sort()).toEqual(['pantry-low', 'recipe'])
+    expect(new Set(rows.map((r) => r.key)).size).toBe(2)
+    // Progress on each is independent.
+    const low = rows.find((r) => r.source === 'pantry-low')!
+    state = run(state, { type: 'shopping/toggle', key: low.key })
+    const after = deriveShopping(state).rows.filter((r) => r.name.toLowerCase().startsWith('lime'))
+    expect(after.find((r) => r.source === 'pantry-low')?.checked).toBe(true)
+    expect(after.find((r) => r.source === 'recipe')?.checked).toBe(false)
+  })
+})
