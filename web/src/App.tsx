@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import {
-  BrowserRouter,
+  createBrowserRouter,
   Navigate,
   Outlet,
   Route,
+  RouterProvider,
   Routes,
   useLocation,
   useNavigate,
@@ -21,6 +22,8 @@ import {
   DraftsPage,
   HouseRulesPage,
   PrepPage,
+  RecipeDetailPage,
+  RecipeFormPage,
   RecipesPage,
   ShoppingPage,
   SignInPage,
@@ -121,6 +124,9 @@ export function AppRoutes() {
       <Route element={<ProtectedShell />}>
         <Route path="/week" element={<WeekPage />} />
         <Route path="/recipes" element={<RecipesPage />} />
+        <Route path="/recipes/new" element={<RecipeFormPage mode="new" />} />
+        <Route path="/recipes/:recipeId" element={<RecipeDetailPage />} />
+        <Route path="/recipes/:recipeId/edit" element={<RecipeFormPage mode="edit" />} />
         <Route path="/prep" element={<PrepPage />} />
         <Route path="/shopping" element={<ShoppingPage />} />
         <Route path="/drafts" element={<DraftsPage />} />
@@ -133,14 +139,19 @@ export function AppRoutes() {
   )
 }
 
-export default function App() {
+function AppProviders() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <PlannerProvider>
-          <AppRoutes />
-        </PlannerProvider>
-      </AuthProvider>
-    </BrowserRouter>
+    <AuthProvider>
+      <PlannerProvider>
+        <AppRoutes />
+      </PlannerProvider>
+    </AuthProvider>
   )
+}
+
+export default function App() {
+  // A data router is required for useBlocker (unsaved-changes prompt on the recipe form).
+  // One splat route keeps <AppRoutes> as the single place routes are declared.
+  const [router] = useState(() => createBrowserRouter([{ path: '*', element: <AppProviders /> }]))
+  return <RouterProvider router={router} />
 }
