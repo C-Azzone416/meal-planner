@@ -434,3 +434,31 @@ describe('running-low pantry rows have their own identity', () => {
     expect(after.find((r) => r.source === 'recipe')?.checked).toBe(false)
   })
 })
+
+describe('judge fixes (#48)', () => {
+  test('running-low items no meal needs are exposed as unassigned', () => {
+    const cleared = run(cleanSeed(), { type: 'plan/open', day: 1 }, { type: 'plan/open', day: 3 }, { type: 'plan/open', day: 4 }, { type: 'pantry/toggleLow', name: 'olive oil' })
+    const list = deriveShopping(cleared)
+    expect(list.counts.toBuy).toBe(1)
+    expect(list.byMeal).toEqual([])
+    expect(list.unassigned.map((r) => r.name)).toEqual(['olive oil'])
+    // While a dinner uses it, it is attached to that meal instead.
+    expect(deriveShopping(run(cleanSeed(), { type: 'pantry/toggleLow', name: 'olive oil' })).unassigned).toEqual([])
+  })
+
+  test('clearing the running-low flag never touches a regular row\'s progress (olive oil as a counted ingredient)', () => {
+    const state = cleanSeed()
+    const recipes = state.recipes.map((r) =>
+      r.id === 'gochujang-chicken'
+        ? { ...r, ingredients: [...r.ingredients.filter((i) => i.id !== 'oil'), { id: 'oil2', name: 'olive oil', quantity: 1, unit: '', aisle: 'Pantry aisle' as const, isPantry: false }] }
+        : r,
+    )
+    let next = { ...state, recipes }
+    const regularKey = shoppingKey('olive oil', '')
+    next = run(next, { type: 'shopping/toggle', key: regularKey }, { type: 'pantry/toggleLow', name: 'olive oil' })
+    next = run(next, { type: 'pantry/toggleLow', name: 'olive oil' }) // clear the flag
+    const regular = deriveShopping(next).rows.find((r) => r.key === regularKey)
+    expect(regular).toMatchObject({ source: 'recipe', checked: true })
+    expect(deriveShopping(next).rows.some((r) => r.source === 'pantry-low')).toBe(false)
+  })
+})

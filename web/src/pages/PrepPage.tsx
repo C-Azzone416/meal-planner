@@ -22,7 +22,7 @@ export function PrepPage() {
       </div>
       <div className="progress-block">
         <p><strong className="big-number">{totals.minutes}</strong> min planned · {totals.done} of {totals.tasks} done · {totals.minutesLeft} min left</p>
-        <progress value={totals.done} max={Math.max(totals.tasks, 1)}>{totals.done} of {totals.tasks}</progress>
+        <progress aria-label="Prep tasks done" value={totals.done} max={Math.max(totals.tasks, 1)}>{totals.done} of {totals.tasks}</progress>
       </div>
       {warnings.length > 0 && (
         <div className="warning-note">

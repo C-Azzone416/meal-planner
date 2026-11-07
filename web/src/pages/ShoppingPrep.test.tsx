@@ -232,3 +232,31 @@ describe('PrepPage', () => {
     expect(screen.getByRole('heading', { name: 'Nothing to prep — plan a dinner first' })).toBeTruthy()
   })
 })
+
+describe('judge fixes (#48)', () => {
+  test('By meal still lists running-low pantry items that no dinner needs', () => {
+    renderPage('shopping')
+    click('t:clear-all')
+    expect(screen.getByText(/1 to buy/)).toBeTruthy()
+    click('By meal')
+    const section = screen.getByRole('region', { name: 'Pantry top-ups' })
+    expect(within(section).getByRole('checkbox', { name: /olive oil/ })).toBeTruthy()
+    click('By aisle')
+    expect(screen.getByRole('region', { name: 'Pantry aisle' })).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Pantry top-ups' })).toBeNull()
+  })
+
+  test('shopping checkboxes are described by their amount', () => {
+    renderPage('shopping')
+    const box = screen.getByRole('checkbox', { name: /salmon fillets/ })
+    const described = document.getElementById(box.getAttribute('aria-describedby') as string)
+    expect(described?.textContent).toBe('2 lb')
+  })
+
+  test('the prep progress bar has an accessible name and value', () => {
+    renderPage('prep')
+    const bar = screen.getByRole('progressbar', { name: 'Prep tasks done' }) as HTMLProgressElement
+    expect(bar.value).toBe(2)
+    expect(bar.max).toBe(7)
+  })
+})
