@@ -200,6 +200,8 @@ export interface UndoEntry {
   progress: Progress
   /** Used to coalesce repeated servings tweaks on the same night into one undo step. */
   coalesceKey?: string
+  /** `progress` as it was right after the change; if it differs later, coalescing must start a new step. */
+  progressAfter?: Progress
 }
 
 export type StatusKind = 'info' | 'success' | 'warning'

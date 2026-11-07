@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { fillWeek, mulberry32, proposeSurprise, shuffle } from './plan'
+import { fillOrder, fillWeek, mulberry32, proposeSurprise, shuffle } from './plan'
 import { reducer } from './reducer'
 import { createSeedState } from './seed'
 import { cleanSeed, emptyWeek, plannedDays, recipeOn, run } from './testing'
@@ -315,5 +315,87 @@ describe('undo', () => {
   test('refused actions do not consume the undo slot', () => {
     const state = run(createSeedState(), { type: 'plan/skip', day: 1 }, { type: 'plan/pin', day: 2 })
     expect(state.undo?.message).toMatch(/^Skipped Monday/)
+  })
+})
+
+describe('undo coalescing only spans uninterrupted servings tweaks', () => {
+  test('a progress change between two servings tweaks starts a new undo step (judge repro)', () => {
+    const key = 'broccoli|head'
+    let state = cleanSeed()
+    state = run(state, { type: 'plan/servings', day: 4, servings: 5 })
+    state = run(state, { type: 'shopping/toggle', key })
+    expect(state.progress.shoppingChecked[key]).toBeDefined()
+    state = run(state, { type: 'plan/servings', day: 4, servings: 6 })
+    const undone = run(state, { type: 'undo' })
+    expect(undone.plan.nights[4].servings).toBe(5)
+    expect(undone.progress.shoppingChecked[key]).toBeDefined() // the tick is not lost
+  })
+
+  test('tweaks with nothing in between still collapse into one step', () => {
+    let state = cleanSeed()
+    state = run(state, { type: 'plan/servings', day: 4, servings: 5 }, { type: 'plan/servings', day: 4, servings: 6 })
+    expect(run(state, { type: 'undo' }).plan.nights[4].servings).toBe(4)
+  })
+
+  test('a different night or a different plan change does not coalesce', () => {
+    let state = cleanSeed()
+    state = run(state, { type: 'plan/servings', day: 4, servings: 5 }, { type: 'plan/servings', day: 3, servings: 6 })
+    expect(run(state, { type: 'undo' }).plan.nights[4].servings).toBe(5)
+  })
+})
+
+describe('a recipe is on at most one night per week', () => {
+  test('assignRecipe refuses a recipe already on another night', () => {
+    const state = createSeedState()
+    const next = run(state, { type: 'plan/assign', day: 2, recipeId: 'gochujang-chicken' })
+    expect(next.plan).toBe(state.plan)
+    expect(next.status).toMatchObject({ kind: 'warning', text: 'Sheet-pan gochujang chicken & broccoli is already on Monday' })
+  })
+
+  test('assigning the recipe a night already has is a quiet no-op', () => {
+    const state = createSeedState()
+    const next = run(state, { type: 'plan/assign', day: 1, recipeId: 'gochujang-chicken' })
+    expect(next).toBe(state)
+  })
+
+  test('keepProposal refuses (and clears the proposal) if the recipe has since been planned elsewhere', () => {
+    const proposed = proposeSurprise(createSeedState(), 2, rng())
+    const recipeId = proposed.proposal?.recipeId as string
+    const title = proposed.recipes.find((r) => r.id === recipeId)?.title
+    // Another night takes that recipe before "Keep it".
+    const raced = withNight(proposed, { day: 5, status: 'planned', recipeId, servings: 4, pinned: false })
+    const next = reducer(raced, { type: 'plan/keep' })
+    expect(next.plan).toBe(raced.plan)
+    expect(next.proposal).toBeNull()
+    expect(next.status?.text).toBe(`${title} is already on Friday`)
+  })
+
+  test('fill and surprise never pick a recipe already in the week', () => {
+    for (let seed = 0; seed < 60; seed += 1) {
+      const filled = fillWeek(run(createSeedState(), { type: 'plan/open', day: 3 }), mulberry32(seed))
+      const ids = plannedDays(filled).map((d) => recipeOn(filled, d))
+      expect(new Set(ids).size).toBe(ids.length)
+
+      const proposed = proposeSurprise(createSeedState(), 2, mulberry32(seed))
+      expect(['gochujang-chicken', 'bean-sweet-potato-chili', 'salmon-lemon-herb-orzo']).not.toContain(proposed.proposal?.recipeId)
+    }
+  })
+})
+
+describe('fillOrder', () => {
+  test('defaults first, then earliest open nights, prep day last; only open nights', () => {
+    expect(fillOrder(emptyWeek().plan, 0)).toEqual([1, 3, 4, 2, 5, 6, 0])
+    let state = emptyWeek()
+    state = withNight(state, { day: 3, status: 'planned', recipeId: 'tortilla-soup', servings: 4, pinned: false })
+    state = withNight(state, { day: 1, status: 'skipped', pinned: false })
+    expect(fillOrder(state.plan, 0)).toEqual([4, 2, 5, 6, 0])
+  })
+  test('a different prep day moves to the end instead', () => {
+    expect(fillOrder(emptyWeek().plan, 2)).toEqual([1, 3, 4, 0, 5, 6, 2])
+  })
+  test('fillWeek follows it', () => {
+    let state = emptyWeek()
+    for (const day of [1, 3, 4] as const) state = withNight(state, { day, status: 'skipped', pinned: false })
+    expect(plannedDays(fillWeek(state, rng()))).toEqual(fillOrder(state.plan, 0).slice(0, 3).sort((a, b) => a - b))
   })
 })

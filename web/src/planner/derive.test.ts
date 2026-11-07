@@ -8,7 +8,7 @@ import {
   roundQuantity,
 } from './derive'
 import { formatAmount, formatQuantity } from './format'
-import { normalizeName, prepKey, shoppingKey } from './keys'
+import { normalizeName, pantryLowKey, prepKey, shoppingKey } from './keys'
 import { createSeedState } from './seed'
 import { cleanSeed, run } from './testing'
 
@@ -84,7 +84,7 @@ describe('deriveShopping', () => {
     const state = run(cleanSeed(), { type: 'pantry/toggleLow', name: 'Olive Oil' })
     const oil = deriveShopping(state).rows.find((r) => r.name === 'olive oil')
     expect(oil).toMatchObject({ aisle: 'Pantry aisle', source: 'pantry-low', amount: 'running low', mealsLabel: 'chicken + salmon' })
-    const key = shoppingKey('olive oil', '')
+    const key = pantryLowKey('olive oil')
     const checkedLow = run(state, { type: 'shopping/toggle', key })
     expect(checkedLow.progress.shoppingChecked[key]).toBeDefined()
     expect(run(checkedLow, { type: 'pantry/toggleLow', name: 'olive oil' }).progress.shoppingChecked[key]).toBeUndefined()
@@ -415,5 +415,22 @@ describe('invalid defaultServings never produce Infinity (QA fix)', () => {
     const next = run(state, { type: 'draft/approve', id: 'draft-fennel-traybake', recipeId: 'x' })
     expect(next.recipes).toBe(state.recipes)
     expect(next.drafts).toBe(state.drafts)
+  })
+})
+
+describe('running-low pantry rows have their own identity', () => {
+  test('a regular row for the same word does not suppress the running-low row', () => {
+    // Tortilla soup needs 2 limes (a regular row); the person also marks lime as running low.
+    let state = run(cleanSeed(), { type: 'plan/assign', day: 2, recipeId: 'tortilla-soup' })
+    state = run(state, { type: 'pantry/toggleLow', name: 'limes' })
+    const rows = deriveShopping(state).rows.filter((r) => r.name.toLowerCase().startsWith('lime'))
+    expect(rows.map((r) => r.source).sort()).toEqual(['pantry-low', 'recipe'])
+    expect(new Set(rows.map((r) => r.key)).size).toBe(2)
+    // Progress on each is independent.
+    const low = rows.find((r) => r.source === 'pantry-low')!
+    state = run(state, { type: 'shopping/toggle', key: low.key })
+    const after = deriveShopping(state).rows.filter((r) => r.name.toLowerCase().startsWith('lime'))
+    expect(after.find((r) => r.source === 'pantry-low')?.checked).toBe(true)
+    expect(after.find((r) => r.source === 'recipe')?.checked).toBe(false)
   })
 })
