@@ -9,18 +9,19 @@ import '../styles/shopping-prep.css'
 function Row({ row }: { row: ShoppingRow }) {
   const { toggleShoppingChecked, togglePantryLow } = usePlanner()
   const id = useId()
+  const amountId = useId()
   const cls = `sp-row${row.checked ? ' sp-row--checked' : ''}${row.status === 'needs-more' ? ' sp-row--needs-more' : ''}`
   return (
     <div className={cls}>
       <label className="sp-check" htmlFor={id}>
-        <input id={id} type="checkbox" checked={row.checked} onChange={() => toggleShoppingChecked(row.key)} />
+        <input id={id} type="checkbox" checked={row.checked} aria-describedby={row.amount ? amountId : undefined} onChange={() => toggleShoppingChecked(row.key)} />
         <span className="sp-text">
           <span className="sp-name">{row.name}</span>
           {row.mealsLabel && <span className="sp-meals">{row.mealsLabel}</span>}
           {row.note && <span className="sp-note">{row.note}</span>}
         </span>
       </label>
-      <strong className="sp-amount">{row.amount}</strong>
+      <strong className="sp-amount" id={amountId}>{row.amount}</strong>
       {row.source === 'pantry-low' && (
         <button type="button" className="sp-small-button" aria-label={`${row.name} restocked`} onClick={() => togglePantryLow(row.name)}>
           Restocked
@@ -112,6 +113,13 @@ export function ShoppingPage() {
                   {rows.map((row) => <Row key={row.key} row={row} />)}
                 </section>
               ))}
+              {shopping.unassigned.length > 0 && (
+                <section className="sp-group sp-section" aria-label="Pantry top-ups">
+                  <h2>Pantry top-ups</h2>
+                  <p className="sp-section-note">Running low, and not needed by a dinner this week.</p>
+                  {shopping.unassigned.map((row) => <Row key={row.key} row={row} />)}
+                </section>
+              )}
             </div>
           )}
           {noLongerNeeded.length > 0 && (

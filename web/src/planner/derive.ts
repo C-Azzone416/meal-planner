@@ -72,6 +72,8 @@ export interface ShoppingList {
   groups: ShoppingGroup[]
   /** Grouped by planned meal (an ingredient shared by two meals appears under both). */
   byMeal: MealShopping[]
+  /** Rows no planned meal needs (running-low pantry items); show them as "Pantry top-ups" in the by-meal view. */
+  unassigned: ShoppingRow[]
   /** Checked rows that are no longer required; still shown (struck through) until dismissed. */
   noLongerNeeded: NoLongerNeededRow[]
   counts: { total: number; toBuy: number; checked: number }
@@ -318,7 +320,8 @@ export function deriveShopping(state: ShoppingInput): ShoppingList {
     .sort((a, b) => a.name.localeCompare(b.name))
 
   const checked = rows.filter((row) => row.checked).length
-  return { rows, groups, byMeal, noLongerNeeded, counts: { total: rows.length, toBuy: rows.length - checked, checked } }
+  const unassigned = rows.filter((row) => row.meals.length === 0)
+  return { rows, groups, byMeal, unassigned, noLongerNeeded, counts: { total: rows.length, toBuy: rows.length - checked, checked } }
 }
 
 function pantryDisplayName(state: PlanInput, pantryKey: string): string | undefined {
