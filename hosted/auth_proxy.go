@@ -135,7 +135,8 @@ func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConf
 			http.Error(w, "authentication proxy is not configured", http.StatusServiceUnavailable)
 			return
 		}
-		if !authProxyEmailAllowed(body, config.AllowedEmail) {
+		validatedBody, allowed := authProxyEmailPayload(body, config.AllowedEmail)
+		if !allowed {
 			if authProxySilentEmailRoutes[path] {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
@@ -151,6 +152,7 @@ func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConf
 			http.Error(w, "authentication request is not allowed", http.StatusForbidden)
 			return
 		}
+		body = validatedBody
 	}
 
 	upstream, err := url.Parse(baseURL + "/" + path)
@@ -233,14 +235,57 @@ func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConf
 	_, _ = w.Write(responseBody)
 }
 
-func authProxyEmailAllowed(body []byte, allowedEmail string) bool {
-	var payload struct {
-		Email string `json:"email"`
+// authProxyEmailPayload requires one unambiguous lowercase email field and
+// forwards the identity actually checked by the allowlist. A struct unmarshal
+// would accept case-insensitive keys, unlike the upstream JavaScript parser.
+func authProxyEmailPayload(body []byte, allowedEmail string) ([]byte, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil, false
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return false
+	payload := make(map[string]json.RawMessage)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, false
+		}
+		key, ok := token.(string)
+		if !ok {
+			return nil, false
+		}
+		// Reject duplicates before map decoding can discard an earlier value.
+		if _, duplicate := payload[key]; duplicate {
+			return nil, false
+		}
+		if strings.EqualFold(key, "email") && key != "email" {
+			return nil, false
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, false
+		}
+		payload[key] = value
 	}
-	return strings.EqualFold(strings.TrimSpace(payload.Email), strings.TrimSpace(allowedEmail))
+	if token, err = decoder.Token(); err != nil || token != json.Delim('}') {
+		return nil, false
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return nil, false
+	}
+	var email string
+	if err := json.Unmarshal(payload["email"], &email); err != nil {
+		return nil, false
+	}
+	allowedEmail = strings.TrimSpace(allowedEmail)
+	if allowedEmail == "" || !strings.EqualFold(strings.TrimSpace(email), allowedEmail) {
+		return nil, false
+	}
+	// Preserve other SDK fields without numeric conversion, while giving the
+	// provider the configured identity rather than differently normalized input.
+	payload["email"], _ = json.Marshal(allowedEmail)
+	canonical, err := json.Marshal(payload)
+	return canonical, err == nil
 }
 
 func authProxyUpstreamQuery(rawQuery string) string {
