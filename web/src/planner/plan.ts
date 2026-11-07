@@ -101,7 +101,7 @@ function replaceNight(nights: Night[], night: Night): Night[] {
 }
 
 function planned(day: DayIndex, recipe: Recipe, servings = recipe.defaultServings, pinned = false): Night {
-  return { day, status: 'planned', recipeId: recipe.id, servings, pinned }
+  return { day, status: 'planned', recipeId: recipe.id, servings: clampServings(servings), pinned }
 }
 
 const OPEN = (day: DayIndex): Night => ({ day, status: 'open', pinned: false })

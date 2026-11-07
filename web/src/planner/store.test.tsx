@@ -184,3 +184,50 @@ describe('PlannerProvider', () => {
     expect(result.current.houseRules).toEqual({ targetDinners: 7, prepDay: 3 })
   })
 })
+
+describe('same-tick id assignment', () => {
+  test('two addRecipe calls in one tick return the ids the store actually holds', () => {
+    const { result } = mount(null)
+    const ids: string[] = []
+    act(() => {
+      ids.push(result.current.addRecipe(newRecipe))
+      ids.push(result.current.addRecipe(newRecipe))
+      ids.push(result.current.addRecipe(newRecipe))
+    })
+    expect(ids).toEqual(['test-tacos', 'test-tacos-2', 'test-tacos-3'])
+    for (const id of ids) expect(result.current.getRecipe(id)?.title).toBe('Test Tacos')
+  })
+
+  test('approving two drafts in one tick returns distinct, real ids', () => {
+    const { result } = mount(null)
+    for (const draft of result.current.drafts) {
+      for (const key of ['activeMinutes', 'totalMinutes', 'attention', 'prepAhead', 'storage'] as const) {
+        act(() => result.current.setDraftConfirmed(draft.id, key, true))
+      }
+    }
+    const ids: (string | null)[] = []
+    act(() => {
+      ids.push(result.current.approveDraft('draft-black-bean-chili'))
+      ids.push(result.current.approveDraft('draft-fennel-traybake'))
+    })
+    expect(new Set(ids).size).toBe(2)
+    for (const id of ids) expect(result.current.getRecipe(id as string)).toBeDefined()
+  })
+
+  test('a title colliding with an existing recipe gets a suffix that matches the store', () => {
+    const { result } = mount(null)
+    let id = ''
+    act(() => { id = result.current.addRecipe({ ...newRecipe, title: 'Red lentil coconut soup' }) })
+    expect(id).toBe('red-lentil-coconut-soup-2')
+    expect(result.current.getRecipe(id)).toBeDefined()
+  })
+
+  test('addRecipe with invalid servings is rejected with a status and an empty id', () => {
+    const { result } = mount(null)
+    let id = 'unset'
+    act(() => { id = result.current.addRecipe({ ...newRecipe, defaultServings: 0 }) })
+    expect(id).toBe('')
+    expect(result.current.recipes).toHaveLength(8)
+    expect(result.current.status?.kind).toBe('warning')
+  })
+})
