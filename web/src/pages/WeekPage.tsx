@@ -9,6 +9,50 @@ import { DAY_NAMES, DAY_SHORT_NAMES, type DayIndex, type Night } from '../planne
 import '../styles/week.css'
 
 const mealColors = ['rust', 'green', 'gold'] as const
+const undoDurationMs = 10_000
+
+function UndoToast({ onUndo }: { onUndo: () => void }) {
+  const { undoInfo, dismissUndo } = usePlanner()
+  const [hovered, setHovered] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const countdown = useRef<{ seq: number; remainingMs: number } | null>(null)
+  const seq = undoInfo?.seq
+
+  useEffect(() => {
+    if (seq === undefined) return
+    if (countdown.current?.seq !== seq) {
+      countdown.current = { seq, remainingMs: undoDurationMs }
+    }
+    if (hovered || focused) return
+
+    const windowRemaining = countdown.current
+    const startedAt = Date.now()
+    const timer = window.setTimeout(dismissUndo, windowRemaining.remainingMs)
+    return () => {
+      window.clearTimeout(timer)
+      windowRemaining.remainingMs = Math.max(0, windowRemaining.remainingMs - (Date.now() - startedAt))
+    }
+  }, [dismissUndo, focused, hovered, seq])
+
+  return (
+    <div
+      className={undoInfo ? 'week-undo paper-card' : 'sr-only'}
+      onMouseEnter={() => { if (undoInfo) setHovered(true) }}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false)
+      }}
+    >
+      <span role="status">{undoInfo?.message}</span>
+      {undoInfo && <button type="button" className="button button--dark" onClick={() => {
+        setHovered(false)
+        setFocused(false)
+        onUndo()
+      }}>Undo</button>}
+    </div>
+  )
+}
 
 function PinButton({ night, onToggle, compact = false }: {
   night: Night
@@ -95,7 +139,7 @@ function NightDetail({ night }: { night: Night }) {
 export function WeekPage() {
   const {
     plan, prep, summary, nightWarnings, getRecipe, fillWeek, proposeSurprise, keepProposal,
-    cancelProposal, togglePin, status, proposal, undoInfo, undo, dismissUndo,
+    cancelProposal, togglePin, status, proposal, undo,
   } = usePlanner()
   const [selectedDay, setSelectedDay] = useState<DayIndex | null>(null)
   const heading = useRef<HTMLHeadingElement>(null)
@@ -112,13 +156,6 @@ export function WeekPage() {
   useEffect(() => {
     heading.current?.focus()
   }, [])
-
-  const undoSeq = undoInfo?.seq
-  useEffect(() => {
-    if (undoSeq === undefined) return
-    const timer = window.setTimeout(dismissUndo, 10_000)
-    return () => window.clearTimeout(timer)
-  }, [dismissUndo, undoSeq])
 
   const fillButton = (
     <button type="button" className="button button--rust" onClick={() => {
@@ -149,6 +186,10 @@ export function WeekPage() {
         <p className={status ? 'inline-note' : 'sr-only'} role="status">
           {status && <span key={status.seq}>{status.text}</span>}
         </p>
+        <UndoToast onUndo={() => {
+          heading.current?.focus()
+          undo()
+        }} />
         <ul className="week-nights" aria-label="Week at a glance">
           {plan.nights.map((item) => {
             const recipe = getRecipe(item.recipeId)
@@ -243,13 +284,6 @@ export function WeekPage() {
           ) : <p>No prep-ahead tasks this week.</p>}
           <Link className="button button--paper" to="/prep">See prep plan →</Link>
         </aside>
-      </div>
-      <div className={undoInfo ? 'week-undo paper-card' : 'sr-only'}>
-        <span role="status">{undoInfo?.message}</span>
-        {undoInfo && <button type="button" className="button button--dark" onClick={() => {
-          undo()
-          heading.current?.focus()
-        }}>Undo</button>}
       </div>
     </div>
   )

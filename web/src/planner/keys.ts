@@ -1,11 +1,15 @@
 /** Stable keys and ids. Progress records are keyed by these so recalculation never loses them. */
 
-/** Lowercase, trim, drop parentheticals, collapse spaces and singularise so "Onions" and "onion" match. */
+/**
+ * Canonical ingredient name: NFKC-folded, locale-independent lowercase, punctuation dropped (letters, marks and
+ * numbers in any script are kept), spaces collapsed, Latin plurals singularised. "Onions" ≡ "onion"; "玉ねぎ" ≠ "にんじん".
+ */
 export function normalizeName(name: string): string {
   const base = name
-    .toLowerCase()
+    .normalize('NFKC')
+    .toLocaleLowerCase('en-US')
     .replace(/\([^)]*\)/g, ' ')
-    .replace(/[^a-z0-9\s&-]/g, ' ')
+    .replace(/[^\p{L}\p{M}\p{N}\s&-]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim()
   return base
@@ -23,19 +27,46 @@ function singularize(word: string): string {
   return word
 }
 
+const UNIT_ALIASES: Record<string, string> = {
+  lb: 'lb', lbs: 'lb', pound: 'lb', pounds: 'lb',
+  oz: 'oz', ounce: 'oz', ounces: 'oz',
+  tbsp: 'tbsp', tbs: 'tbsp', tablespoon: 'tbsp', tablespoons: 'tbsp',
+  tsp: 'tsp', teaspoon: 'tsp', teaspoons: 'tsp',
+  cup: 'cup', cups: 'cup',
+  clove: 'clove', cloves: 'clove',
+  can: 'can', cans: 'can',
+  g: 'g', gram: 'g', grams: 'g',
+  kg: 'kg', kilogram: 'kg', kilograms: 'kg',
+  ml: 'ml', milliliter: 'ml', milliliters: 'ml',
+  l: 'l', liter: 'l', liters: 'l',
+  qt: 'quart', quart: 'quart', quarts: 'quart',
+  gal: 'gallon', gallon: 'gallon', gallons: 'gallon',
+}
+
+/** Canonical unit: case-insensitive, alias-merged ("Cups", "lbs", "tablespoons" → cup, lb, tbsp), singularised otherwise. */
 export function normalizeUnit(unit: string): string {
-  const base = unit.toLowerCase().trim().replace(/\s+/g, ' ')
-  return singularize(base)
+  const base = unit.normalize('NFKC').toLocaleLowerCase('en-US').trim().replace(/\.$/, '').replace(/\s+/g, ' ')
+  return UNIT_ALIASES[base] ?? singularize(base)
 }
 
-/** Shopping item key = normalised ingredient name + unit. */
+/** Encode one key part so the separator can never appear inside it (("a:b","c") ≠ ("a","b:c")). */
+function part(value: string): string {
+  return encodeURIComponent(value)
+}
+
+/** Shopping item key = normalised ingredient name + unit, each part encoded. Always contains exactly one '|'. */
 export function shoppingKey(name: string, unit: string): string {
-  return `${normalizeName(name)}|${normalizeUnit(unit)}`
+  return `${part(normalizeName(name))}|${part(normalizeUnit(unit))}`
 }
 
-/** Prep task key = recipe id + prep-ahead step id. */
+/** Key of the "running low" row for a pantry staple. Distinct from any recipe row (it has no '|'). */
+export function pantryLowKey(name: string): string {
+  return `pantry:${part(normalizeName(name))}`
+}
+
+/** Prep task key = recipe id + prep-ahead step id, each part encoded. */
 export function prepKey(recipeId: string, stepId: string): string {
-  return `${recipeId}:${stepId}`
+  return `${part(recipeId)}:${part(stepId)}`
 }
 
 export function slugify(text: string): string {

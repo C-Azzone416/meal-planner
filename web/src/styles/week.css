@@ -214,6 +214,14 @@
   font-weight: 800;
 }
 
+.week-undo .button {
+  white-space: nowrap;
+}
+
+.cook-recipe-title {
+  margin: 12px 5px 0;
+}
+
 .planner-view .cook-topline {
   flex-flow: row wrap;
   align-items: center;

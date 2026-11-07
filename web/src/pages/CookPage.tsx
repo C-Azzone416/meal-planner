@@ -2,10 +2,17 @@ import { useEffect, useRef } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { FridgePanel, PreviewNotice } from '../components/FridgePanel'
 import { StateCard } from '../components/StateCard'
+import { roundQuantity } from '../planner/derive'
 import { formatAmount, formatDuration, formatTimer } from '../planner/format'
 import { usePlanner } from '../planner/store'
 import { DAY_NAMES } from '../planner/types'
 import '../styles/week.css'
+
+function formatCookTimer(seconds: number): string {
+  const hours = Math.floor(seconds / 3600)
+  if (hours === 0) return formatTimer(seconds)
+  return `${hours}:${formatTimer(seconds % 3600).padStart(5, '0')}`
+}
 
 export function CookPage() {
   const [searchParams] = useSearchParams()
@@ -40,6 +47,7 @@ export function CookPage() {
 
   const servings = night.servings ?? recipe.defaultServings
   const factor = servings / recipe.defaultServings
+  const isFallback = requestedDay === null && night.day !== today
 
   return (
     <div className="cook-shell planner-view">
@@ -48,7 +56,10 @@ export function CookPage() {
           <Link className="button button--paper" to="/week">‹ This week</Link>
           <span>{DAY_NAMES[night.day]} · Serves {servings}</span>
         </div>
-        <h1 ref={heading} tabIndex={-1} className="single-paper-title">{recipe.title}</h1>
+        <h1 ref={heading} tabIndex={-1} className="single-paper-title">
+          {isFallback ? `Cook ${DAY_NAMES[night.day]}’s dinner` : recipe.title}
+        </h1>
+        {isFallback && <h2 className="cook-recipe-title">{recipe.title}</h2>}
         <p className="script-copy">{recipe.activeMinutes} min hands-on · {formatDuration(recipe.totalMinutes)} total</p>
       </FridgePanel>
       <PreviewNotice />
@@ -74,7 +85,7 @@ export function CookPage() {
                 {recipe.cookTonight.map((step) => (
                   <li className="task-card" key={step.id}>
                     <strong>{step.text}</strong>
-                    {step.timerSeconds !== null && <em className="timer">Timer {formatTimer(step.timerSeconds)}</em>}
+                    {step.timerSeconds !== null && <em className="timer">Timer {formatCookTimer(step.timerSeconds)}</em>}
                   </li>
                 ))}
               </ol>
@@ -83,12 +94,18 @@ export function CookPage() {
           <aside className="paper-card ingredients-card" aria-labelledby="cook-ingredients-title">
             <h2 id="cook-ingredients-title">Ingredients · for {servings}</h2>
             <dl className="cook-ingredients">
-              {recipe.ingredients.map((ingredient) => (
-                <div key={ingredient.id}>
-                  <dt>{ingredient.name}</dt>
-                  <dd>{ingredient.quantity === null ? 'To taste' : formatAmount(ingredient.quantity * factor, ingredient.unit)}</dd>
-                </div>
-              ))}
+              {recipe.ingredients.map(({ id, name, quantity, unit }) => {
+                const amount = quantity === null || quantity === 0 || factor === 1
+                  ? quantity
+                  : roundQuantity(quantity * factor, unit)
+
+                return (
+                  <div key={id}>
+                    <dt>{name}</dt>
+                    <dd>{amount === null ? 'To taste' : formatAmount(amount, unit)}</dd>
+                  </div>
+                )
+              })}
             </dl>
           </aside>
         </div>

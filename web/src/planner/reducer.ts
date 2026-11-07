@@ -66,6 +66,13 @@ const FIELD_GUESSES: Partial<Record<keyof DraftPatch, DraftGuessKey[]>> = {
   prepAhead: ['prepAhead', 'storage'],
 }
 
+/** Servings a recipe is written for must be a positive, finite number (scaling divides by it). */
+export function hasValidServings(recipe: { defaultServings: number }): boolean {
+  return Number.isFinite(recipe.defaultServings) && recipe.defaultServings > 0
+}
+
+const BAD_SERVINGS = 'Servings must be a number greater than zero.'
+
 export function canApproveDraft(draft: Draft): boolean {
   return DRAFT_GUESS_KEYS.every((key) => draft.confirmed[key])
 }
@@ -87,6 +94,11 @@ function draftToRecipe(draft: Draft, id: string): Recipe {
   }
 }
 
+/** The store never keeps a reference to an object the caller can still mutate. */
+function clone<T>(value: T): T {
+  return structuredClone(value)
+}
+
 function without<T>(record: Record<string, T>, key: string): Record<string, T> {
   const { [key]: removed, ...rest } = record
   void removed
@@ -100,14 +112,17 @@ function isPlanned(state: PlannerState, recipeId: string): boolean {
 export function reducer(state: PlannerState, action: PlannerAction): PlannerState {
   switch (action.type) {
     case 'recipe/add': {
+      if (!hasValidServings(action.recipe)) return withStatus(state, 'warning', BAD_SERVINGS)
       const id = uniqueId(action.recipe.id, state.recipes.map((recipe) => recipe.id))
-      return { ...state, recipes: [...state.recipes, { ...action.recipe, id }] }
+      return { ...state, recipes: [...state.recipes, { ...clone(action.recipe), id }] }
     }
     case 'recipe/update': {
       if (!state.recipes.some((recipe) => recipe.id === action.recipe.id)) return state
+      if (!hasValidServings(action.recipe)) return withStatus(state, 'warning', BAD_SERVINGS)
+      const incoming = clone(action.recipe)
       const next = {
         ...state,
-        recipes: state.recipes.map((recipe) => (recipe.id === action.recipe.id ? action.recipe : recipe)),
+        recipes: state.recipes.map((recipe) => (recipe.id === incoming.id ? incoming : recipe)),
       }
       return isPlanned(state, action.recipe.id)
         ? withStatus(next, 'info', 'This week’s shopping and prep were updated.')
@@ -122,6 +137,9 @@ export function reducer(state: PlannerState, action: PlannerAction): PlannerStat
         ),
       }
     case 'draft/update':
+      if (action.patch.defaultServings !== undefined && !hasValidServings({ defaultServings: action.patch.defaultServings })) {
+        return withStatus(state, 'warning', BAD_SERVINGS)
+      }
       return {
         ...state,
         drafts: state.drafts.map((draft) => {
@@ -130,13 +148,14 @@ export function reducer(state: PlannerState, action: PlannerAction): PlannerStat
           for (const field of Object.keys(action.patch) as (keyof DraftPatch)[]) {
             for (const guess of FIELD_GUESSES[field] ?? []) confirmed[guess] = false
           }
-          return { ...draft, ...action.patch, confirmed, revision: draft.revision + 1 }
+          return { ...draft, ...clone(action.patch), confirmed, revision: draft.revision + 1 }
         }),
       }
     case 'draft/approve': {
       const draft = state.drafts.find((candidate) => candidate.id === action.id)
       if (!draft) return state
       if (!canApproveDraft(draft)) return withStatus(state, 'warning', 'Confirm every guess before approving this draft.')
+      if (!hasValidServings(draft)) return withStatus(state, 'warning', BAD_SERVINGS)
       const id = uniqueId(action.recipeId, state.recipes.map((recipe) => recipe.id))
       return withStatus(
         {

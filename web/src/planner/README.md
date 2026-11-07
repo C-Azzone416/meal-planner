@@ -42,6 +42,12 @@ Refused actions (Surprise me on a pinned/skipped night, moving onto a skipped ni
 
 Every plan-changing action (fill, keep, assign, move, skip, open, pin/unpin, servings) stores one snapshot of **plan + progress** and sets `undoInfo`, e.g. "Swapped Thursday to Red lentil coconut soup". `undo()` restores both and clears it. Repeated servings changes on the same night collapse into one undo step. The 10-second window is UI-side: key a timer on `undoInfo.seq` and call `dismissUndo()` when it fires.
 
+### Rules worth knowing
+- **A recipe can be on only one night per week.** `assignRecipe` / `keepProposal` refuse a duplicate with the status "`<title>` is already on Monday"; Plan my week and Surprise me never pick a recipe already in the week; stored data that violates it is discarded.
+- **`fillOrder(plan, prepDay)`** (plan.ts) is the order open nights get dinners: Mon/Wed/Thu first, then earliest open nights, prep day last. Use it instead of re-deriving the order.
+- **Hooks:** `usePlanner()` (data + actions), `usePlannerData()`, and `usePlannerActions()` (stable object; never re-renders on data changes). Exposed data is typed read-only; change it only through actions. The store copies recipes/drafts it is given, so mutating your object afterwards has no effect.
+- **Keys:** `shoppingKey`, `prepKey` and `pantryLowKey` encode each part, so no name or id can collide by containing `:` or `|`. Running-low pantry rows use `pantryLowKey` (never merged with a regular row of the same word).
+
 ## Derivation rules (§3)
 
 Shopping and prep are never stored; only progress is (`progress.shoppingChecked`, `progress.prepDone`), keyed by stable keys.

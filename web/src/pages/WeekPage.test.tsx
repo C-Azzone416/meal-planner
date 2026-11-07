@@ -177,6 +177,31 @@ test('restarts the ten-second undo window on each serving change', () => {
   expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
 })
 
+test('keeps Undo before the night controls and pauses its countdown for hover and focus', () => {
+  vi.useFakeTimers()
+  renderPlanner()
+  click('Monday')
+  click('Increase servings')
+  const undo = screen.getByRole('button', { name: 'Undo' })
+
+  expect(undo.compareDocumentPosition(night('Monday')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  act(() => vi.advanceTimersByTime(2000))
+  fireEvent.mouseEnter(undo)
+  act(() => vi.advanceTimersByTime(12000))
+  expect(screen.getByRole('button', { name: 'Undo' })).toBe(undo)
+
+  act(() => undo.focus())
+  fireEvent.mouseLeave(undo)
+  act(() => vi.advanceTimersByTime(12000))
+  expect(screen.getByRole('button', { name: 'Undo' })).toBe(undo)
+
+  act(() => night('Monday').focus())
+  act(() => vi.advanceTimersByTime(7999))
+  expect(screen.getByRole('button', { name: 'Undo' })).toBe(undo)
+  act(() => vi.advanceTimersByTime(1))
+  expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+})
+
 test('opens Cook for the requested night with scaled ingredients and display timers', () => {
   renderPlanner()
   click('Thursday')
@@ -188,7 +213,18 @@ test('opens Cook for the requested night with scaled ingredients and display tim
   expect(screen.getByRole('heading', { name: 'Prep tonight' })).toBeTruthy()
   expect(screen.getByRole('heading', { name: 'Cook tonight' })).toBeTruthy()
   expect(screen.getByText('2½ lb')).toBeTruthy()
+  expect(screen.getByText('1¾ cups')).toBeTruthy()
   expect(screen.getByText('Timer 9:00')).toBeTruthy()
+})
+
+test('rounds scaled cans to whole amounts and displays long timers in hours', () => {
+  renderPlanner()
+  click('Wednesday')
+  click('Increase servings')
+  fireEvent.click(screen.getByRole('link', { name: 'Cook tonight →', description: 'Wednesday' }))
+
+  expect(screen.getByText('3 cans')).toBeTruthy()
+  expect(screen.getByText('Timer 6:00:00')).toBeTruthy()
 })
 
 test('shows the cook empty state for an explicitly requested open night', () => {
@@ -206,5 +242,6 @@ test('defaults Cook to today or the first planned dinner', () => {
 
   vi.setSystemTime(new Date(2026, 10, 6, 12))
   renderPlanner('/cook')
-  expect(screen.getByRole('heading', { level: 1, name: chicken })).toBeTruthy()
+  expect(screen.getByRole('heading', { level: 1, name: 'Cook Monday’s dinner' })).toBeTruthy()
+  expect(screen.getByRole('heading', { level: 2, name: chicken })).toBeTruthy()
 })

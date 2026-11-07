@@ -2,8 +2,15 @@
  * Pure derivations from PlannerState (docs/ux-decisions.md §3).
  */
 import { formatAmount, formatQuantity } from './format'
-import { normalizeName, prepKey, shoppingKey } from './keys'
-import { AISLES, type Aisle, DAY_NAMES, type DayIndex, type PlannerState, type Recipe } from './types'
+import { normalizeName, normalizeUnit, pantryLowKey, prepKey, shoppingKey } from './keys'
+import { AISLES, type Aisle, DAY_NAMES, type DayIndex, type PlannerState, type Progress, type Recipe } from './types'
+
+/** Each derivation reads only these slices, so callers can memoise it against exactly them. */
+export type PlanInput = Pick<PlannerState, 'recipes' | 'plan'>
+export type ShoppingInput = PlanInput & Pick<PlannerState, 'pantryLow'> & { progress: Pick<Progress, 'shoppingChecked'> }
+export type PrepInput = PlanInput & { houseRules: Pick<PlannerState['houseRules'], 'prepDay'>; progress: Pick<Progress, 'prepDone'> }
+export type PantryInput = PlanInput & Pick<PlannerState, 'pantryLow'>
+export type SummaryInput = Pick<PlannerState, 'plan'> & { houseRules: Pick<PlannerState['houseRules'], 'targetDinners'> }
 
 /** A planned meal that needs an ingredient (used for "chili + chicken" labels). */
 export interface MealRef {
@@ -144,7 +151,7 @@ export interface PlanSummary {
 const EPSILON = 1e-9
 
 /** Units measured in fractions: round up to quarter steps. */
-const QUARTER_UNITS = new Set(['cup', 'lb', 'pound', 'oz', 'ounce', 'tbsp', 'tsp', 'quart', 'gallon', 'g', 'kg', 'ml', 'l'])
+const QUARTER_UNITS = new Set(['cup', 'lb', 'oz', 'tbsp', 'tsp', 'quart', 'gallon', 'g', 'kg', 'ml', 'l'])
 /** Units sold in halves. */
 const HALF_UNITS = new Set(['bunch'])
 
@@ -153,24 +160,26 @@ const HALF_UNITS = new Set(['bunch'])
  * ½ for bunches, whole numbers for counts. Always rounds up so nobody under-buys.
  */
 export function roundQuantity(quantity: number, unit: string): number {
-  const u = unit.toLowerCase().trim()
+  const u = normalizeUnit(unit)
   const step = QUARTER_UNITS.has(u) ? 0.25 : HALF_UNITS.has(u) ? 0.5 : 1
   const rounded = Math.ceil(quantity / step - EPSILON) * step
   return Math.max(rounded, step)
 }
 
-function mealsOf(state: PlannerState): { meal: MealRef; recipe: Recipe; servings: number; factor: number }[] {
+function mealsOf(state: PlanInput): { meal: MealRef; recipe: Recipe; servings: number; factor: number }[] {
   const meals: { meal: MealRef; recipe: Recipe; servings: number; factor: number }[] = []
   for (const night of state.plan.nights) {
     if (night.status !== 'planned') continue
     const recipe = state.recipes.find((candidate) => candidate.id === night.recipeId)
     if (!recipe || night.recipeId === undefined) continue
     const servings = night.servings ?? recipe.defaultServings
+    // A corrupt default (0, negative, NaN) must never produce Infinity/NaN quantities: don't scale.
+    const validDefault = Number.isFinite(recipe.defaultServings) && recipe.defaultServings > 0
     meals.push({
       meal: { day: night.day, recipeId: recipe.id, title: recipe.title, label: recipe.shortName ?? recipe.title },
       recipe,
       servings,
-      factor: servings / recipe.defaultServings,
+      factor: validDefault && Number.isFinite(servings) ? servings / recipe.defaultServings : 1,
     })
   }
   return meals
@@ -202,7 +211,7 @@ interface Accumulator {
  * progress on top: a checked row whose requirement grows becomes 'needs-more'; a checked
  * row that is no longer required moves to `noLongerNeeded`.
  */
-export function deriveShopping(state: PlannerState): ShoppingList {
+export function deriveShopping(state: ShoppingInput): ShoppingList {
   const planned = mealsOf(state)
   const accumulators = new Map<string, Accumulator>()
   const pantryUse = new Map<string, MealRef[]>()
@@ -278,8 +287,8 @@ export function deriveShopping(state: PlannerState): ShoppingList {
   }
   for (const low of state.pantryLow) {
     const pantryKey = normalizeName(low)
-    const key = shoppingKey(low, '')
-    if (rows.some((row) => row.key === key)) continue
+    // Its own identity (never merged with a regular row for the same word), so the signal and its progress survive.
+    const key = pantryLowKey(low)
     const name = pantryNames.get(pantryKey) ?? pantryDisplayName(state, pantryKey) ?? low
     rows.push(
       makeRow({ key, name, unit: '', aisle: 'Pantry aisle', quantity: null, meals: pantryUse.get(pantryKey) ?? [], source: 'pantry-low' }),
@@ -312,7 +321,7 @@ export function deriveShopping(state: PlannerState): ShoppingList {
   return { rows, groups, byMeal, noLongerNeeded, counts: { total: rows.length, toBuy: rows.length - checked, checked } }
 }
 
-function pantryDisplayName(state: PlannerState, pantryKey: string): string | undefined {
+function pantryDisplayName(state: PlanInput, pantryKey: string): string | undefined {
   for (const recipe of state.recipes) {
     for (const ingredient of recipe.ingredients) {
       if (ingredient.isPantry && normalizeName(ingredient.name) === pantryKey) return ingredient.name
@@ -322,7 +331,7 @@ function pantryDisplayName(state: PlannerState, pantryKey: string): string | und
 }
 
 /** The pantry shelf: every staple any saved recipe uses (plus anything marked low), sorted by name. */
-export function derivePantry(state: PlannerState): PantryItem[] {
+export function derivePantry(state: PantryInput): PantryItem[] {
   const items = new Map<string, PantryItem>()
   const lows = new Set(state.pantryLow.map(normalizeName))
   for (const recipe of state.recipes) {
@@ -350,7 +359,7 @@ export function derivePantry(state: PlannerState): PantryItem[] {
  * Prep-ahead tasks for every planned meal, with done state and keep-time warnings (§3).
  * A done task whose serving factor has since grown is 'topup' (still counted done).
  */
-export function derivePrep(state: PlannerState): PrepPlan {
+export function derivePrep(state: PrepInput): PrepPlan {
   const { prepDay } = state.houseRules
   const { prepDone } = state.progress
   const tasks: PrepTask[] = []
@@ -411,15 +420,20 @@ export function derivePrep(state: PlannerState): PrepPlan {
 }
 
 /** Prep-timing warnings per night, keyed by day index. */
-export function deriveNightWarnings(state: PlannerState): Record<DayIndex, string[]> {
+export function deriveNightWarnings(state: PrepInput): Record<DayIndex, string[]> {
+  return nightWarningsFromPrep(derivePrep(state))
+}
+
+/** Same as `deriveNightWarnings` for callers that already hold the prep plan (avoids deriving it twice). */
+export function nightWarningsFromPrep(prep: PrepPlan): Record<DayIndex, string[]> {
   const warnings: Record<DayIndex, string[]> = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] }
-  for (const task of derivePrep(state).tasks) {
+  for (const task of prep.tasks) {
     if (task.warning) warnings[task.day].push(task.warning.message)
   }
   return warnings
 }
 
-export function planSummary(state: PlannerState): PlanSummary {
+export function planSummary(state: SummaryInput): PlanSummary {
   const { nights } = state.plan
   const planned = nights.filter((night) => night.status === 'planned').length
   const target = state.houseRules.targetDinners

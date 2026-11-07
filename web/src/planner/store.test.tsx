@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from 'vitest'
 import { parsePersisted, RESET_NOTICE, STORAGE_KEY, type StorageLike } from './persist'
 import { createSeedState } from './seed'
 import { mulberry32 } from './plan'
-import { PlannerProvider, usePlanner } from './store'
+import { PlannerProvider, usePlanner, usePlannerActions } from './store'
 import type { NewRecipe } from './types'
 
 afterEach(cleanup)
@@ -182,5 +182,103 @@ describe('PlannerProvider', () => {
     const { result } = mount(null)
     act(() => result.current.setHouseRules({ targetDinners: 40, prepDay: 3 }))
     expect(result.current.houseRules).toEqual({ targetDinners: 7, prepDay: 3 })
+  })
+})
+
+describe('same-tick id assignment', () => {
+  test('two addRecipe calls in one tick return the ids the store actually holds', () => {
+    const { result } = mount(null)
+    const ids: string[] = []
+    act(() => {
+      ids.push(result.current.addRecipe(newRecipe))
+      ids.push(result.current.addRecipe(newRecipe))
+      ids.push(result.current.addRecipe(newRecipe))
+    })
+    expect(ids).toEqual(['test-tacos', 'test-tacos-2', 'test-tacos-3'])
+    for (const id of ids) expect(result.current.getRecipe(id)?.title).toBe('Test Tacos')
+  })
+
+  test('approving two drafts in one tick returns distinct, real ids', () => {
+    const { result } = mount(null)
+    for (const draft of result.current.drafts) {
+      for (const key of ['activeMinutes', 'totalMinutes', 'attention', 'prepAhead', 'storage'] as const) {
+        act(() => result.current.setDraftConfirmed(draft.id, key, true))
+      }
+    }
+    const ids: (string | null)[] = []
+    act(() => {
+      ids.push(result.current.approveDraft('draft-black-bean-chili'))
+      ids.push(result.current.approveDraft('draft-fennel-traybake'))
+    })
+    expect(new Set(ids).size).toBe(2)
+    for (const id of ids) expect(result.current.getRecipe(id as string)).toBeDefined()
+  })
+
+  test('a title colliding with an existing recipe gets a suffix that matches the store', () => {
+    const { result } = mount(null)
+    let id = ''
+    act(() => { id = result.current.addRecipe({ ...newRecipe, title: 'Red lentil coconut soup' }) })
+    expect(id).toBe('red-lentil-coconut-soup-2')
+    expect(result.current.getRecipe(id)).toBeDefined()
+  })
+
+  test('addRecipe with invalid servings is rejected with a status and an empty id', () => {
+    const { result } = mount(null)
+    let id = 'unset'
+    act(() => { id = result.current.addRecipe({ ...newRecipe, defaultServings: 0 }) })
+    expect(id).toBe('')
+    expect(result.current.recipes).toHaveLength(8)
+    expect(result.current.status?.kind).toBe('warning')
+  })
+})
+
+describe('isolation and render stability', () => {
+  test('the store keeps its own copy of recipes it is given', () => {
+    const { result } = mount(null)
+    const input = structuredClone(newRecipe)
+    let id = ''
+    act(() => { id = result.current.addRecipe(input) })
+    input.title = 'Mutated'
+    input.ingredients[0].name = 'mutated'
+    expect(result.current.getRecipe(id)?.title).toBe('Test Tacos')
+    expect(result.current.getRecipe(id)?.ingredients[0].name).toBe('tortillas')
+
+    const edit = structuredClone(result.current.getRecipe(id)!) as typeof newRecipe & { id: string }
+    act(() => result.current.updateRecipe(edit))
+    edit.cookTonight.push({ id: 'x', text: 'sneaky', timerSeconds: null })
+    expect(result.current.getRecipe(id)?.cookTonight).toHaveLength(1)
+
+    const patch = { tags: ['a'] }
+    act(() => result.current.updateDraft('draft-fennel-traybake', patch))
+    patch.tags.push('b')
+    expect(result.current.getDraft('draft-fennel-traybake')?.tags).toEqual(['a'])
+  })
+
+  test('derivations are recomputed only when their own slices change', () => {
+    const { result } = mount(null)
+    const first = result.current
+    const task = first.prep.tasks.find((t) => !t.done)!
+    act(() => result.current.togglePrepDone(task.key))
+    expect(result.current.shopping).toBe(first.shopping) // prep progress does not touch shopping
+    expect(result.current.pantry).toBe(first.pantry)
+    expect(result.current.prep).not.toBe(first.prep)
+
+    const afterPrep = result.current
+    const row = result.current.shopping.rows[0]
+    act(() => result.current.toggleShoppingChecked(row.key))
+    expect(result.current.prep).toBe(afterPrep.prep) // and shopping progress does not touch prep
+    expect(result.current.nightWarnings).toBe(afterPrep.nightWarnings)
+    expect(result.current.shopping).not.toBe(afterPrep.shopping)
+  })
+
+  test('the actions object is stable across data changes', () => {
+    const { result } = mount(null)
+    const actions = renderHook(() => usePlannerActions(), {
+      wrapper: ({ children }: { children: ReactNode }) => <PlannerProvider storage={null}>{children}</PlannerProvider>,
+    })
+    const before = actions.result.current
+    act(() => actions.result.current.setSkipped(5))
+    expect(actions.result.current).toBe(before)
+    expect(result.current.setSkipped).toBeTypeOf('function')
   })
 })

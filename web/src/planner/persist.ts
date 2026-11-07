@@ -99,6 +99,11 @@ const isPrepTonight = (value: unknown): boolean => isRecord(value) && isString(v
 const isCookStep = (value: unknown): boolean =>
   isRecord(value) && isString(value.id) && isString(value.text) && (value.timerSeconds === null || isNum(value.timerSeconds))
 
+function hasUniqueIds(items: unknown): boolean {
+  const ids = (items as Json[]).map((item) => item.id)
+  return new Set(ids).size === ids.length
+}
+
 function hasRecipeBody(value: Json): boolean {
   return (
     isString(value.id) &&
@@ -111,8 +116,8 @@ function hasRecipeBody(value: Json): boolean {
     isStringArray(value.tags) &&
     isNum(value.defaultServings) &&
     value.defaultServings >= 1 &&
-    Array.isArray(value.ingredients) && value.ingredients.every(isIngredient) &&
-    Array.isArray(value.prepAhead) && value.prepAhead.every(isPrepAhead) &&
+    Array.isArray(value.ingredients) && value.ingredients.every(isIngredient) && hasUniqueIds(value.ingredients) &&
+    Array.isArray(value.prepAhead) && value.prepAhead.every(isPrepAhead) && hasUniqueIds(value.prepAhead) &&
     Array.isArray(value.prepTonight) && value.prepTonight.every(isPrepTonight) &&
     Array.isArray(value.cookTonight) && value.cookTonight.every(isCookStep)
   )
@@ -130,10 +135,16 @@ const isDraft = (value: unknown): boolean =>
 
 function isPlan(value: unknown, recipeIds: Set<string>): boolean {
   if (!isRecord(value) || !isNum(value.revision) || !Array.isArray(value.nights) || value.nights.length !== 7) return false
+  // A recipe may appear on only one night per week.
+  const planned = value.nights.filter((night: unknown) => isRecord(night) && night.status === 'planned').map((night: Json) => night.recipeId)
+  if (new Set(planned).size !== planned.length) return false
   return value.nights.every((night: unknown, index) => {
     if (!isRecord(night) || night.day !== index || typeof night.pinned !== 'boolean') return false
     if (night.status === 'planned') {
-      return isString(night.recipeId) && recipeIds.has(night.recipeId) && isNum(night.servings) && night.servings >= 1
+      return (
+        isString(night.recipeId) && recipeIds.has(night.recipeId) &&
+        Number.isInteger(night.servings) && (night.servings as number) >= 1 && (night.servings as number) <= 12
+      )
     }
     return night.status === 'open' || night.status === 'skipped'
   })
@@ -167,6 +178,28 @@ export function parsePersisted(raw: string): PersistedState | null {
   if (!shopping || !prep) return null
   if (!isStringArray(s.pantryLow)) return null
   const rules = s.houseRules
-  if (!isRecord(rules) || !isNum(rules.targetDinners) || !isNum(rules.prepDay) || rules.prepDay < 0 || rules.prepDay > 6) return null
-  return data.state as unknown as PersistedState
+  if (!isRecord(rules)) return null
+  const { targetDinners, prepDay } = rules
+  if (!Number.isInteger(targetDinners) || (targetDinners as number) < 1 || (targetDinners as number) > 7) return null
+  if (!Number.isInteger(prepDay) || (prepDay as number) < 0 || (prepDay as number) > 6) return null
+  // Return ONLY the validated fields: a stored blob must never smuggle in transient state (undo, proposal, status…).
+  const plan = s.plan as Json
+  return {
+    recipes: s.recipes as unknown as PersistedState['recipes'],
+    drafts: s.drafts as unknown as PersistedState['drafts'],
+    plan: {
+      revision: plan.revision as number,
+      nights: (plan.nights as Json[]).map((night) =>
+        night.status === 'planned'
+          ? { day: night.day, status: 'planned', recipeId: night.recipeId, servings: night.servings, pinned: night.pinned }
+          : { day: night.day, status: night.status, pinned: night.pinned },
+      ) as unknown as PersistedState['plan']['nights'],
+    },
+    progress: {
+      shoppingChecked: s.progress.shoppingChecked as PersistedState['progress']['shoppingChecked'],
+      prepDone: s.progress.prepDone as PersistedState['progress']['prepDone'],
+    },
+    pantryLow: s.pantryLow,
+    houseRules: { targetDinners: targetDinners as number, prepDay: prepDay as PersistedState['houseRules']['prepDay'] },
+  }
 }
