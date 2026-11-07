@@ -1,0 +1,33 @@
+/* Shopping + Prep pages (#38). Complements app.css; scoped by class prefix sp-. */
+.sp-empty a{display:inline-block;margin-top:12px}
+.sp-section{margin-bottom:28px}
+.sp-section h2{margin:0 0 6px}
+.sp-section-note{margin:0 0 10px;font-size:14px;color:#485047}
+.sp-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px 12px;align-items:center;border-bottom:1px solid #d9d9d2;padding:8px 0;min-height:48px}
+.sp-check{display:flex;align-items:flex-start;gap:12px;min-height:44px;padding:4px 0;cursor:pointer}
+.sp-check input{flex:none;width:25px;height:25px;margin-top:2px;accent-color:var(--green)}
+.sp-check input:focus-visible,.sp-row button:focus-visible,.sp-segmented button:focus-visible{outline:3px solid #1d3fd1;outline-offset:2px}
+.sp-text{display:grid;gap:2px;min-width:0}
+.sp-meals{font:600 16px Caveat,cursive;color:#9d482e}
+.sp-amount{white-space:nowrap}
+.sp-note{display:block;font-size:14px;font-weight:700;color:#8f2c1d}
+.sp-note::before{content:"↑ "}
+.sp-row--checked .sp-name,.sp-row--gone .sp-name{text-decoration:line-through;color:#6b7169}
+.sp-row--needs-more{background:rgba(236,211,141,.35);border-radius:8px;padding-left:8px;padding-right:8px}
+.sp-badge{display:inline-block;justify-self:start;border-radius:999px;padding:3px 9px;font-size:12px;font-weight:800;background:#ecd38d;color:#20231f}
+.sp-badge--gone{background:#e3eadf}
+.sp-small-button{min-height:44px;min-width:44px;border:2px solid #7d837b;border-radius:999px;background:white;padding:6px 14px;font-weight:700;color:var(--ink)}
+.sp-small-button[aria-pressed="true"]{background:var(--ink);color:white;border-color:var(--ink)}
+.sp-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 32px}
+.sp-group h2{color:#985034;font-family:"Libre Baskerville",serif;font-size:20px}
+.sp-gone{background:rgba(255,255,255,.55);border:2px dashed #8d9788;border-radius:18px;padding:18px 20px;margin-top:24px}
+.sp-warning{display:block;font-size:14px;font-weight:700;color:#8f2c1d}
+.sp-warning::before{content:"⚠ "}
+.sp-storage-list{margin:0;padding-left:18px;display:grid;gap:6px}
+.sp-pantry-note{font-size:14px;color:#485047}
+.sp-prep-task{grid-template-columns:auto 1fr auto}
+.sp-prep-task.task-card--done .sp-name{text-decoration:line-through}
+.sp-hero-status{margin:10px 0 0}
+@media (max-width:900px){.sp-grid{grid-template-columns:1fr}}
+@media (max-width:520px){.sp-row{grid-template-columns:minmax(0,1fr) auto}.sp-row .sp-small-button{grid-column:1/-1;justify-self:start}}
+@media (prefers-reduced-motion:reduce){.sp-row,.sp-small-button{transition:none}}
