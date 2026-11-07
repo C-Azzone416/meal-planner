@@ -1,16 +1,101 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
+import { formatDuration } from '../planner/format'
+import { usePlanner } from '../planner/store'
+import { DRAFT_GUESS_KEYS, type Draft, type DraftGuessKey } from '../planner/types'
+import '../styles/recipes.css'
 
-const guesses = [
-  ['ACTIVE TIME', '10 min'], ['TOTAL TIME', '6 h on low'], ['ATTENTION', 'Low'], ['PREP AHEAD', 'Dice onion + sweet potato the day before'], ['STORAGE', 'Diced sweet potato keeps 3 days, fridge'],
-]
+const GUESS_LABELS: Record<DraftGuessKey, string> = {
+  activeMinutes: 'ACTIVE TIME',
+  totalMinutes: 'TOTAL TIME',
+  attention: 'ATTENTION',
+  prepAhead: 'PREP AHEAD',
+  storage: 'STORAGE',
+}
+
+function guessValue(draft: Draft, key: DraftGuessKey): string {
+  switch (key) {
+    case 'activeMinutes':
+      return `${draft.activeMinutes} min`
+    case 'totalMinutes':
+      return formatDuration(draft.totalMinutes)
+    case 'attention':
+      return draft.attention[0].toUpperCase() + draft.attention.slice(1)
+    case 'prepAhead':
+      return draft.prepAhead.length ? draft.prepAhead.map((step) => step.text).join(' · ') : 'Nothing to prep ahead'
+    case 'storage': {
+      const notes = draft.prepAhead.map((step) => step.storageNote).filter(Boolean)
+      return notes.length ? notes.join(' · ') : 'No storage notes'
+    }
+  }
+}
 
 export function DraftsPage() {
-  const [confirmed, setConfirmed] = useState([false, true, false, false, false])
-  const [notice, setNotice] = useState('')
+  const planner = usePlanner()
+  const navigate = useNavigate()
+  const [discarding, setDiscarding] = useState<Draft | null>(null)
+  const [message, setMessage] = useState('')
+  const listRef = useRef<HTMLDivElement>(null)
+  const { drafts } = planner
+
+  const approve = (draft: Draft) => {
+    const id = planner.approveDraft(draft.id)
+    if (id) navigate(`/recipes/${id}`, { state: { saved: true } })
+  }
+
   return <>
-    <FridgePanel className="hero-panel"><PaperTitle words={['drafts', 'to', 'review']} /><p className="script-copy">your agent sent these over · nothing is saved until you say so</p></FridgePanel>
+    <FridgePanel className="hero-panel">
+      <PaperTitle words={['drafts', 'to', 'review']} />
+      <p className="script-copy">your agent sent these over · nothing is saved until you say so</p>
+    </FridgePanel>
     <PreviewNotice />
-    <FridgePanel className="content-panel" paw="rust"><div className="draft-layout"><aside className="draft-list"><div className="draft-picker draft-picker--active">Black bean & sweet potato chili<small>rev 3 · reviewing now</small></div><button type="button" className="draft-picker" disabled title="The second draft detail is part of the next functionality phase">Chicken thigh traybake with fennel<small>detail preview comes next</small></button><pre>$ mealplanner draft list{`\n`}2 drafts · 0 skipped</pre></aside><article className="paper-card draft-detail"><header><span className="tag">Draft · rev 3</span><span>{confirmed.filter(Boolean).length} of {confirmed.length} checked</span></header><h2>Slow-cooker black bean & sweet potato chili</h2><p>Serves 4–6 · 11 ingredients · 7 steps</p><p><strong>● Structurally valid</strong> · 2 warnings</p><em>Structural check only. This is not food-safety verification, recipe review, or approval.</em>{guesses.map(([label, value], index) => <section className="guess-row" key={label}><div><small>{label}</small><p>{value}</p></div><div>{confirmed[index] ? <button type="button" className="button button--muted" onClick={() => setConfirmed((items) => items.map((item, i) => i === index ? false : item))}>✓ Confirmed · undo</button> : <><button type="button" className="button button--green" onClick={() => setConfirmed((items) => items.map((item, i) => i === index ? true : item))}>Confirm</button><button type="button" className="button button--paper" onClick={() => setNotice('Editing draft guesses comes in the next functionality phase.')}>Change</button></>}</div></section>)}<button type="button" className="button button--green full-button" disabled={!confirmed.every(Boolean)} onClick={() => setNotice('Review complete in this preview. Saving comes in the next functionality phase.')}>{confirmed.every(Boolean) ? 'Complete preview review' : 'Check every guess to continue'}</button>{notice && <p className="inline-note" role="status">{notice}</p>}</article></div></FridgePanel>
+    <FridgePanel className="content-panel" paw="rust">
+      <div ref={listRef} tabIndex={-1} className="rx-drafts" aria-label="Drafts waiting for review">
+        {drafts.length === 0 ? (
+          <div className="empty-state"><h2>No drafts waiting</h2><p>When your agent sends a recipe over, it will show up here for review.</p></div>
+        ) : drafts.map((draft) => {
+          const confirmedCount = DRAFT_GUESS_KEYS.filter((key) => draft.confirmed[key]).length
+          const allConfirmed = confirmedCount === DRAFT_GUESS_KEYS.length
+          const headingId = `draft-${draft.id}-title`
+          return <article className="paper-card draft-card" key={draft.id} aria-labelledby={headingId}>
+            <header>
+              <span className="tag draft-badge">Draft · not saved</span>
+              <span>{confirmedCount} of {DRAFT_GUESS_KEYS.length} checked · rev {draft.revision}</span>
+            </header>
+            <h2 id={headingId}>{draft.icon} {draft.title}</h2>
+            <p>Serves {draft.defaultServings} · {draft.ingredients.length} {draft.ingredients.length === 1 ? 'ingredient' : 'ingredients'} · {draft.prepAhead.length + draft.prepTonight.length + draft.cookTonight.length} steps</p>
+            {draft.warnings.length > 0 && <ul className="rx-warnings" aria-label="Draft warnings">{draft.warnings.map((warning) => <li key={warning}>⚠ {warning}</li>)}</ul>}
+            <em>Structural check only. This is not food-safety verification, recipe review, or approval.</em>
+            {DRAFT_GUESS_KEYS.map((key) => <section className="guess-row" key={key}>
+              <div><small>{GUESS_LABELS[key]}</small><p>{guessValue(draft, key)}</p></div>
+              <div>{draft.confirmed[key]
+                ? <button type="button" className="button button--muted rx-button" aria-label={`Undo confirmation of ${GUESS_LABELS[key].toLowerCase()} for ${draft.title}`} onClick={() => planner.setDraftConfirmed(draft.id, key, false)}>✓ Confirmed · undo</button>
+                : <button type="button" className="button button--green rx-button" aria-label={`Confirm ${GUESS_LABELS[key].toLowerCase()} for ${draft.title}`} onClick={() => planner.setDraftConfirmed(draft.id, key, true)}>Confirm</button>}</div>
+            </section>)}
+            <div className="button-row rx-draft-actions">
+              <button type="button" className="button button--green rx-button" disabled={!allConfirmed} aria-describedby={allConfirmed ? undefined : `${headingId}-reason`} onClick={() => approve(draft)}>Approve and save recipe</button>
+              <button type="button" className="button button--paper rx-button" onClick={() => setDiscarding(draft)}>Discard</button>
+            </div>
+            {!allConfirmed && <p id={`${headingId}-reason`} className="rx-reason">Check every guess to approve ({DRAFT_GUESS_KEYS.length - confirmedCount} left).</p>}
+          </article>
+        })}
+      </div>
+      <div role="status" className="rx-status">{message}</div>
+    </FridgePanel>
+    {discarding && <ConfirmDialog
+      title="Discard this draft?"
+      message={`“${discarding.title}” will be removed and can’t be recovered here.`}
+      confirmLabel="Discard draft"
+      cancelLabel="Keep draft"
+      onConfirm={() => {
+        planner.discardDraft(discarding.id)
+        setDiscarding(null)
+        setMessage(`Discarded “${discarding.title}”.`)
+        listRef.current?.focus()
+      }}
+      onCancel={() => setDiscarding(null)}
+    />}
   </>
 }
