@@ -8,7 +8,9 @@ Do not put real account identifiers, provider dashboard links, tokens, or endpoi
 
 A **code-only Production deployment** can ship the reviewed auth routes and UI while keeping `NEON_AUTH_BASE_URL` unset in Production. Verify that `GET /api/auth-config` returns `enabled: false`, sign-in stays disabled, and protected APIs fail closed. A merged release, successful deployment, or green CI does not establish operational Production authentication.
 
-**Operational Production auth** requires separate approval for provider and deployment-security changes, independent Production configuration, the first-account acceptance gate below, and Production verification. Do not copy Preview settings or enable Production auth merely because the code deployment succeeded. The complete environment configuration enables the sign-in form; there is no separate application activation switch. Keep Production disabled while any prerequisite remains unverified.
+**Controlled Production activation** requires reviewed, independent Production provider setup, approved administrative provisioning of the intended single account, and separate approval for the configuration/security changes. Keep Production auth disabled until those prerequisites are in place. Then enable the complete configuration only for approved owner-only verification, with public email signup still disabled and the single-identity allowlist enforced. The complete environment configuration enables the sign-in form; there is no separate application activation switch. Do not copy Preview settings or activate auth merely because the code deployment succeeded.
+
+**Operational Production auth is ready** only after the first-account acceptance gate and release checks below pass against the deployed Production release. The app's first-password flow needs the complete configuration, so those checks happen during controlled activation, not before configuration can be enabled. An enabled sign-in form alone is not evidence that login is ready.
 
 ## Configuration
 
@@ -60,7 +62,7 @@ Verify the following for the intended environment under an approved, controlled 
 - Inspect `emailVerified` in the provider user and the issued token. Verify inbox control through the approved provider flow and confirm the application accepts only a verified identity. Do not assume password reset sets this flag or manually mark an unverified account as verified to pass the gate.
 - Audit users again after password setup and negative tests. An unexpected or duplicate user, unverified identity, failed first-password flow, or unsupported provisioning path blocks activation.
 
-These are acceptance criteria, not completed checks. If the branch-specific procedure cannot satisfy them, leave Production auth disabled and resolve the bootstrap blocker first.
+These are acceptance criteria, not completed checks. Missing provider setup, approved account provisioning, or activation approval keeps Production disabled. If an acceptance check fails during controlled activation, stop, resolve the blocker, and keep or return Production auth to the disabled state with the appropriate approval. Do not call login ready.
 
 ## Password-reset session and token checks
 
@@ -78,7 +80,7 @@ For a publicly reachable Production deployment, use the ordinary HTTPS webhook r
 
 Review Neon's [Production checklist](https://neon.com/docs/auth/production-checklist) for the Production branch: trusted Production domains, email delivery/provider configuration, the application name, email verification, and disabled localhost access. Do not change those settings or configure credentials without the appropriate approval. Document any unresolved delivery or verification requirement as a blocker.
 
-Only proceed to the approved Production configuration and controlled login verification once the first-account and provider prerequisites are evidenced. Do not describe login as ready until the checks below also pass against the deployed Production release.
+Only add the complete Production configuration for approved, controlled owner-only verification once provider setup and approved administrative account provisioning are in place. Verify the first-password flow, same user ID, verified email, and all release checks during that controlled activation before describing login as ready.
 
 ## Release gate
 
@@ -93,6 +95,6 @@ Before considering login ready, verify all of the following against the intended
 - an unsigned, stale, wrong-event, wrong-endpoint, or incorrectly signed webhook is rejected;
 - a protected API rejects a missing token, a valid token from another auth environment, an unverified identity, and the wrong email;
 - browser history, refreshes, and direct links preserve the expected route;
-- Production remains disabled until its separate provider configuration, allowlist, first-account procedure, and activation approval are in place; Preview success alone does not satisfy these gates.
+- Production remains disabled until its separate provider setup, allowlist, approved administrative account provisioning, and controlled-activation approval are in place; operational-ready status waits for all acceptance checks, and Preview success alone does not satisfy them.
 
 Do not weaken the provider webhook to a client-side email check. The UI intentionally does not know the allowlisted account.
