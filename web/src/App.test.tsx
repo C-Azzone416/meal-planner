@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AppRoutes } from './App'
 import { AuthProvider } from './auth/AuthProvider'
+import { PlannerProvider } from './planner/store'
 import {
   AuthCodeVerificationError,
   AuthCredentialsError,
@@ -32,7 +33,9 @@ function renderRoute(path: string, service: AuthService | null) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <AuthProvider serviceFactory={serviceFactory}>
-        <AppRoutes />
+        <PlannerProvider storage={null}>
+          <AppRoutes />
+        </PlannerProvider>
       </AuthProvider>
     </MemoryRouter>,
   )
@@ -48,7 +51,7 @@ test('redirects a signed-out direct URL to sign in', async () => {
 test('renders protected sample views and working navigation', async () => {
   renderRoute('/week', makeService(user))
   expect(await screen.findByRole('heading', { name: 'this week’s dinners' })).toBeTruthy()
-  expect(screen.getByText('Sample preview · changes on this screen reset when you reload.')).toBeTruthy()
+  expect(screen.getByText('Preview data · saved in this browser only')).toBeTruthy()
 
   fireEvent.click(screen.getAllByRole('link', { name: 'Recipes' })[0])
   expect(await screen.findByRole('heading', { name: 'our recipes' })).toBeTruthy()
@@ -56,7 +59,8 @@ test('renders protected sample views and working navigation', async () => {
 
 test('opens the cook view from the planned Thursday meal', async () => {
   renderRoute('/week', makeService(user))
-  fireEvent.click(await screen.findByRole('link', { name: 'Cook tonight →' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Thursday' }))
+  fireEvent.click(screen.getByRole('link', { name: 'Cook tonight →', description: 'Thursday' }))
   expect(await screen.findByRole('heading', { name: 'Seared salmon, lemon-herb orzo' })).toBeTruthy()
 })
 
@@ -65,7 +69,7 @@ test('updates a house-rule preview choice without claiming persistence', async (
   const choice = await screen.findByRole('button', { name: 'One person does it all' })
   fireEvent.click(choice)
   expect(choice.getAttribute('aria-pressed')).toBe('true')
-  expect(screen.getByText('Sample preview · changes on this screen reset when you reload.')).toBeTruthy()
+  expect(screen.getByText('Preview data · saved in this browser only')).toBeTruthy()
 })
 
 test.each([
@@ -74,7 +78,7 @@ test.each([
   ['/prep', 'sunday prep'],
   ['/shopping', 'shopping list'],
   ['/drafts', 'drafts to review'],
-  ['/cook', 'Seared salmon, lemon-herb orzo'],
+  ['/cook?day=4', 'Seared salmon, lemon-herb orzo'],
   ['/house-rules', 'house rules'],
 ])('renders the protected direct route %s', async (path, heading) => {
   renderRoute(path, makeService(user))
@@ -137,7 +141,7 @@ test('reports an invalid password code without exposing provider details', async
   fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'private-password' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save password & open my fridge' }))
 
-  expect((await screen.findByRole('alert')).textContent).toBe('That code is invalid or expired. Request a new code and try again.')
+  expect((await screen.findByRole('alert')).textContent).toBe('That code is invalid or expired. Request a new code.')
 })
 
 test('reports invalid password credentials without exposing provider details', async () => {
@@ -184,4 +188,24 @@ test('signs out and returns to the sign-in screen', async () => {
 
   await waitFor(() => expect(service.signOut).toHaveBeenCalled())
   expect(await screen.findByRole('heading', { name: 'what’s for dinner?' })).toBeTruthy()
+})
+
+test('resets preview data only after confirming in the app dialog', async () => {
+  renderRoute('/house-rules', makeService(user))
+  fireEvent.click(await screen.findByRole('button', { name: 'Reset preview data' }))
+
+  const dialog = await screen.findByRole('alertdialog', { name: 'Reset preview data?' })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Keep my data' }))
+  expect(screen.queryByRole('alertdialog')).toBeNull()
+  expect(screen.queryByText('Preview data was reset.')).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Reset preview data' }))
+  fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Reset data' }))
+  expect((await screen.findByText('Preview data was reset.')).getAttribute('role')).toBe('status')
+})
+
+test('house-rule steppers are labelled groups', async () => {
+  renderRoute('/house-rules', makeService(user))
+  const group = await screen.findByRole('group', { name: 'dinners' })
+  expect(within(group).getByRole('button', { name: 'Increase dinners' })).toBeTruthy()
 })

@@ -1,3 +1,5 @@
+// Legacy sample data for pages that have not migrated yet. New code must read from usePlanner()
+// (web/src/planner); the seed there is the source of truth. Delete this file once pages migrate.
 export type Recipe = {
   title: string
   day?: string
