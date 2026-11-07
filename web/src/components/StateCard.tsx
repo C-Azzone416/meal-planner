@@ -67,10 +67,11 @@ function StateActionView({ action }: { action: StateAction }) {
   )
 }
 
-/** Loading placeholder: skeleton cards inside a busy region. No shimmer under prefers-reduced-motion (CSS). */
-export function PageSkeleton({ label = 'Loading', cards = 3 }: { label?: string; cards?: number }) {
+/**
+ * Loading placeholder: skeleton cards inside a busy region. No shimmer under prefers-reduced-motion (CSS). */
+export function PageSkeleton({ label = 'Loading', cards = 3, width = '100%' }: { label?: string; cards?: number; width?: string }) {
   return (
-    <section className="page-skeleton" role="status" aria-busy="true" aria-label={label}>
+    <section className="page-skeleton" role="status" aria-busy="true" aria-label={label} style={{ width }}>
       <span className="sr-only">{label}…</span>
       {Array.from({ length: cards }, (_, index) => <div className="page-skeleton__card" aria-hidden="true" key={index} />)}
     </section>

@@ -28,6 +28,14 @@ export class AuthSessionEstablishmentError extends Error {
   }
 }
 
+/** The request never got an answer (offline, DNS, server down). Distinct from "the server said no". */
+export class AuthNetworkError extends Error {
+  constructor() {
+    super('The server could not be reached.')
+    this.name = 'AuthNetworkError'
+  }
+}
+
 export class AuthCredentialsError extends Error {
   constructor() {
     super('The email or password was not accepted.')
@@ -120,6 +128,19 @@ function isInvalidCredentialsError(error: unknown): boolean {
     || code === 'INVALID_PASSWORD'
     || code === 'USER_NOT_FOUND'
   ))
+}
+
+/** True for failures with no server answer: fetch TypeErrors, status 0, 5xx, or explicit network codes. */
+export function isNetworkFailure(error: unknown): boolean {
+  if (error instanceof TypeError) return true
+  if (!error || typeof error !== 'object') return false
+  const record = error as Record<string, unknown>
+  const status = typeof record.status === 'number' ? record.status : undefined
+  if (status !== undefined && (status === 0 || status >= 500)) return true
+  const code = nestedString(error, 'code')
+  if (code && /NETWORK|FETCH|OFFLINE|TIMEOUT|UNAVAILABLE/i.test(code)) return true
+  const message = nestedString(error, 'message')
+  return Boolean(message && /failed to fetch|network ?error|load failed|networkerror/i.test(message))
 }
 
 function isPasswordPolicyError(error: unknown): boolean {
@@ -245,7 +266,10 @@ export async function loadAuthService(
 
     async sendPasswordResetCode(email) {
       const error = await authOperationError(() => client.emailOtp.requestPasswordReset({ email }))
-      if (error) throw authError(error, 'Could not send a password reset code.')
+      if (error) {
+        if (isNetworkFailure(error)) throw new AuthNetworkError()
+        throw authError(error, 'Could not send a password reset code.')
+      }
     },
 
     async setPassword(email, code, password) {

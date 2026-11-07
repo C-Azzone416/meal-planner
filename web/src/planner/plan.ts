@@ -144,6 +144,7 @@ export function fillOrder(plan: Pick<WeekPlan, 'nights'>, prepDay: DayIndex): Da
  */
 export function fillWeek(state: PlannerState, rng: Rng): PlannerState {
   const { targetDinners, prepDay } = state.houseRules
+  if (state.recipes.length === 0) return withStatus(state, 'warning', 'You have no saved recipes yet.')
   const nights = state.plan.nights
   const plannedCount = nights.filter((night) => night.status === 'planned').length
   const need = targetDinners - plannedCount
@@ -246,7 +247,9 @@ export function assignRecipe(state: PlannerState, day: DayIndex, recipeId: strin
   if (elsewhere !== undefined) return withStatus(state, 'warning', `${recipe.title} is already on ${dayName(elsewhere)}`)
   const message = night.status === 'planned' ? `Swapped ${name} to ${recipe.title}` : `Planned ${name}: ${recipe.title}`
   const count = servings === undefined ? recipe.defaultServings : clampServings(servings)
-  return commit(state, replaceNight(state.plan.nights, planned(day, recipe, count)), message)
+  return commit(state, replaceNight(state.plan.nights, planned(day, recipe, count)), message, {
+    status: { kind: 'success', text: message },
+  })
 }
 
 /** Move a planned night to another night; swaps if the target is planned. Pins travel with the meal. */

@@ -197,3 +197,30 @@ describe('returning to the page after sign-in', () => {
     expect(router.state.location.pathname).toBe('/week')
   })
 })
+
+describe('reset-code failures never enumerate accounts', () => {
+  test.each([
+    ['an unknown-account style error', new Error('USER_NOT_FOUND')],
+    ['a rate-limit style error', Object.assign(new Error('Too many requests'), { status: 429 })],
+    ['an arbitrary failure', new Error('boom')],
+  ])('%s looks exactly like success', async (_name, failure) => {
+    const service = makeService(null)
+    vi.mocked(service.sendPasswordResetCode).mockRejectedValue(failure)
+    renderRoute('/sign-in', service)
+    await requestCode('stranger@nowhere.test')
+    expect(await screen.findByText('If that address can sign in, we sent a code.')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(document.body.textContent).not.toMatch(/check the address/i)
+  })
+
+  test('only a network failure gets its own message, and it stays on the email step', async () => {
+    const service = makeService(null)
+    vi.mocked(service.sendPasswordResetCode).mockRejectedValue(new TypeError('Failed to fetch'))
+    renderRoute('/sign-in', service)
+    await requestCode('allowed@example.test')
+    expect((await screen.findByRole('alert')).textContent).toBe('We couldn’t reach the server. Try again.')
+    expect(screen.queryByText('If that address can sign in, we sent a code.')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Email my password code' })).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/check the address/i)
+  })
+})

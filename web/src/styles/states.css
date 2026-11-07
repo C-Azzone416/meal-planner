@@ -11,10 +11,11 @@ h1[tabindex="-1"]:focus-visible { outline: 3px solid #1d3fd1; outline-offset: 4p
 
 /* Touch targets: at least 44x44 on touch-sized screens. */
 @media (max-width: 900px) {
-  :where(.button, .chip, .nav-link, .text-button, .stepper button, .segmented button, .date-control button, .sign-out-link, .settings-link, .day-button) {
+  :where(.button, .chip, .nav-link, .wordmark, .text-button, .stepper button, .segmented button, .date-control button, .sign-out-link, .settings-link, .day-button) {
     min-height: 44px;
     min-width: 44px;
   }
+  .wordmark { display: inline-flex; align-items: center; }
   :where(label.shopping-check, label.task-card, .sp-check) { min-height: 44px; }
   :where(input[type="text"], input[type="email"], input[type="password"], input[type="search"], input:not([type])) { min-height: 44px; }
   .text-button { padding: 10px 12px; }
@@ -38,7 +39,9 @@ h1[tabindex="-1"]:focus-visible { outline: 3px solid #1d3fd1; outline-offset: 4p
 .state-card__reason { font-size: 14px; font-weight: 700; color: #485047; }
 .state-card--error { border-color: #8f2c1d; }
 
-.page-skeleton { display: grid; gap: 18px; padding: 8px 0; }
+.page-skeleton { display: grid; gap: 18px; padding: 8px 0; width: 100%; }
+/* Centering containers (.auth-state: display:grid; place-items:center) would otherwise shrink-wrap the skeleton to 0px. */
+.auth-state .page-skeleton { width: min(100%, 560px); justify-self: stretch; }
 .page-skeleton__card {
   height: 120px;
   border-radius: 8px;

@@ -399,3 +399,20 @@ describe('fillOrder', () => {
     expect(plannedDays(fillWeek(state, rng()))).toEqual(fillOrder(state.plan, 0).slice(0, 3).sort((a, b) => a - b))
   })
 })
+
+describe('QA #50 planner fixes', () => {
+  test('assignRecipe sets a status and registers an undo entry', () => {
+    const state = createSeedState()
+    const next = run(state, { type: 'plan/assign', day: 2, recipeId: 'tortilla-soup' })
+    expect(next.status).toMatchObject({ kind: 'success', text: 'Planned Tuesday: Slow-cooker chicken tortilla soup' })
+    expect(next.undo?.message).toBe('Planned Tuesday: Slow-cooker chicken tortilla soup')
+    expect(recipeOn(run(next, { type: 'undo' }), 2)).toBeUndefined()
+  })
+
+  test('Plan my week with no saved recipes says so', () => {
+    const state = { ...emptyWeek(), recipes: [] }
+    const next = fillWeek(state, rng())
+    expect(next.plan).toBe(state.plan)
+    expect(next.status).toMatchObject({ kind: 'warning', text: 'You have no saved recipes yet.' })
+  })
+})

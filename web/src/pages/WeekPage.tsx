@@ -94,7 +94,7 @@ function NightDetail({ night }: { night: Night }) {
 
 export function WeekPage() {
   const {
-    plan, prep, summary, nightWarnings, getRecipe, fillWeek, proposeSurprise, keepProposal,
+    plan, recipes, prep, summary, nightWarnings, getRecipe, fillWeek, proposeSurprise, keepProposal,
     cancelProposal, togglePin, status, proposal, undoInfo, undo, dismissUndo,
   } = usePlanner()
   const [selectedDay, setSelectedDay] = useState<DayIndex | null>(null)
@@ -148,6 +148,7 @@ export function WeekPage() {
         <p className={status ? 'inline-note' : 'sr-only'} role="status">
           {status && <span key={status.seq}>{status.text}</span>}
         </p>
+        {recipes.length === 0 && <p><Link className="button button--paper" to="/recipes/new">Add recipe</Link></p>}
         <ul className="week-nights" aria-label="Week at a glance">
           {plan.nights.map((item) => {
             const recipe = getRecipe(item.recipeId)

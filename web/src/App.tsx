@@ -13,7 +13,9 @@ import { AuthProvider, useAuth } from './auth/AuthProvider'
 import {
   AuthCodeVerificationError,
   AuthCredentialsError,
+  AuthNetworkError,
   AuthPasswordPolicyError,
+  isNetworkFailure,
 } from './auth/service'
 import { AppShell } from './components/AppShell'
 import { PageSkeleton } from './components/StateCard'
@@ -43,7 +45,7 @@ function ProtectedShell() {
   const location = useLocation()
 
   if (auth.status === 'loading') {
-    return <main className="auth-state"><PageSkeleton label="Checking your fridge" cards={2} /></main>
+    return <main className="auth-state"><PageSkeleton label="Checking your fridge" cards={2} width="min(100%, 560px)" /></main>
   }
   if (auth.status !== 'signed-in') {
     return <Navigate to="/sign-in" replace state={{ from: `${location.pathname}${location.search}${location.hash}` }} />
@@ -85,9 +87,13 @@ function SignInRoute() {
     setError(undefined)
     try {
       await auth.sendPasswordResetCode(email.trim())
-    } catch {
-      setError('We could not send a password code. Check the address and try again.')
-      throw new Error('request failed')
+    } catch (cause) {
+      // Only "could not reach the server" is reported as such. Every other failure looks exactly like success
+      // ("If that address can sign in, we sent a code."), so the response never reveals whether an account exists.
+      if (isNetworkFailure(cause) || cause instanceof AuthNetworkError || !navigator.onLine) {
+        setError('We couldn’t reach the server. Try again.')
+        throw new Error('request failed', { cause })
+      }
     } finally {
       setPending(false)
     }

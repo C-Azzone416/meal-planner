@@ -53,7 +53,8 @@ function RecipeDetail() {
 
   const plannedDays = planner.plan.nights.filter((night) => night.status === 'planned' && night.recipeId === recipe.id).map((night) => night.day)
   const openDay = addToWeekNight(planner.plan, planner.houseRules.prepDay)
-  const status = planner.status && (saved || planner.status.seq > statusSeqAtMount) ? planner.status : null
+  const freshStatus = planner.status !== null && planner.status.seq > statusSeqAtMount
+  const status = planner.status && (saved || freshStatus) ? planner.status : null
   const reasonId = 'add-to-week-reason'
   const alreadyPlanned = plannedDays.length > 0
   const addDisabled = alreadyPlanned || openDay === undefined
@@ -88,7 +89,7 @@ function RecipeDetail() {
       </div>
       {addDisabled && <p id={reasonId} className="rx-reason">{addReason}</p>}
       <div role="status" className="rx-status">
-        {saved && <span className="rx-saved">Saved.</span>}
+        {saved && !freshStatus && <span className="rx-saved">Saved.</span>}
         {status && <span>{status.text}</span>}
       </div>
     </FridgePanel>

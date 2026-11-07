@@ -114,3 +114,48 @@ test('week and cook show the shared empty cards when nothing is planned', async 
   expect(await screen.findByRole('heading', { name: 'Nothing to cook tonight' })).toBeTruthy()
   expect(screen.getByRole('link', { name: 'This week →' }).getAttribute('href')).toBe('/week')
 })
+
+test('the loading skeleton has an explicit width, so the centring auth-state grid cannot shrink it to 0px', async () => {
+  // Auth never resolves, so the protected shell stays on its loading state.
+  const router = createMemoryRouter(
+    [{
+      path: '*',
+      element: (
+        <AuthProvider serviceFactory={() => new Promise(() => undefined)}>
+          <PlannerProvider storage={null}><AppRoutes /></PlannerProvider>
+        </AuthProvider>
+      ),
+    }],
+    { initialEntries: ['/week'] },
+  )
+  render(<RouterProvider router={router} />)
+  const region = await screen.findByRole('status', { name: 'Checking your fridge' })
+  expect(region.getAttribute('aria-busy')).toBe('true')
+  expect((region as HTMLElement).style.width).toBe('min(100%, 560px)')
+  expect(region.closest('.auth-state')).not.toBeNull()
+})
+
+test('adding a recipe to the week replaces the stale "Saved." with the new status', async () => {
+  const router = createMemoryRouter(
+    [{
+      path: '*',
+      element: (
+        <AuthProvider serviceFactory={() => Promise.resolve({
+          getSession: vi.fn().mockResolvedValue(user),
+          signInWithPassword: vi.fn(),
+          sendPasswordResetCode: vi.fn(),
+          setPassword: vi.fn(),
+          signOut: vi.fn(),
+        })}>
+          <PlannerProvider storage={null}><AppRoutes /></PlannerProvider>
+        </AuthProvider>
+      ),
+    }],
+    { initialEntries: [{ pathname: '/recipes/red-lentil-coconut-soup', state: { saved: true } }] },
+  )
+  render(<RouterProvider router={router} />)
+  expect(await screen.findByText('Saved.')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: /^Add to week/ }))
+  expect(await screen.findByText('Planned Tuesday: Red lentil coconut soup')).toBeTruthy()
+  expect(screen.queryByText('Saved.')).toBeNull()
+})

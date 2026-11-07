@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AppRoutes } from './App'
@@ -190,17 +190,22 @@ test('signs out and returns to the sign-in screen', async () => {
   expect(await screen.findByRole('heading', { name: 'what’s for dinner?' })).toBeTruthy()
 })
 
-test('resets preview data only after confirmation', async () => {
-  const confirm = vi.spyOn(window, 'confirm')
+test('resets preview data only after confirming in the app dialog', async () => {
   renderRoute('/house-rules', makeService(user))
-  const button = await screen.findByRole('button', { name: 'Reset preview data' })
+  fireEvent.click(await screen.findByRole('button', { name: 'Reset preview data' }))
 
-  confirm.mockReturnValueOnce(false)
-  fireEvent.click(button)
+  const dialog = await screen.findByRole('alertdialog', { name: 'Reset preview data?' })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Keep my data' }))
+  expect(screen.queryByRole('alertdialog')).toBeNull()
   expect(screen.queryByText('Preview data was reset.')).toBeNull()
 
-  confirm.mockReturnValueOnce(true)
-  fireEvent.click(button)
+  fireEvent.click(screen.getByRole('button', { name: 'Reset preview data' }))
+  fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Reset data' }))
   expect((await screen.findByText('Preview data was reset.')).getAttribute('role')).toBe('status')
-  confirm.mockRestore()
+})
+
+test('house-rule steppers are labelled groups', async () => {
+  renderRoute('/house-rules', makeService(user))
+  const group = await screen.findByRole('group', { name: 'dinners' })
+  expect(within(group).getByRole('button', { name: 'Increase dinners' })).toBeTruthy()
 })
