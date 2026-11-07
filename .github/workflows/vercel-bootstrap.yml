@@ -195,8 +195,58 @@ jobs:
           printf '# Placeholder written by the build job; pulled env values are never handed between jobs.\nVERCEL_ENV=production\n' > .vercel/.env.production.local
 
       # No VERCEL_TOKEN anywhere in this job: the build runs project install/build commands.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web/.nvmrc
+      - name: Install pinned dependencies without lifecycle scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.FRAMEBRIAR_PACKAGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$NODE_AUTH_TOKEN" ]]; then
+            echo "::error::Private Framebriar package-reader access is required; no credential fallback is permitted"
+            exit 1
+          fi
+          install_root=$(mktemp -d)
+          trap 'rm -rf "$install_root"' EXIT
+          mkdir -p "$install_root/home" "$install_root/project"
+          cp web/package.json web/package-lock.json "$install_root/project/"
+          # Fixed registry config, never the checkout's .npmrc or user config.
+          printf '%s\n' '@masra91:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$install_root/project/.npmrc"
+          : > "$install_root/user.npmrc"
+          : > "$install_root/global.npmrc"
+          # No inherited npm config, HOME credentials, lifecycle scripts or cache.
+          (cd "$install_root/project" && env -i PATH="$PATH" HOME="$install_root/home" NODE_AUTH_TOKEN="$NODE_AUTH_TOKEN" \
+            npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org \
+              --userconfig="$install_root/user.npmrc" --globalconfig="$install_root/global.npmrc" --cache="$install_root/cache")
+          mv "$install_root/project/node_modules" web/node_modules
+      - name: Review lifecycle requirements in a fresh credential-free shell
+        run: bash tools/feedback/postinstall.sh
+      - name: Prepare immutable feedback provenance
+        env:
+          FRAMEBRIAR_ENABLED: "0"
+          FRAMEBRIAR_ENVIRONMENT: production
+          FRAMEBRIAR_APP_ID: meal-planner
+          FRAMEBRIAR_BUILD_SHA: ${{ inputs.sha }}
+          FRAMEBRIAR_SCREENSHOTS: "0"
+        run: node tools/feedback/prepare-build.mjs
       - name: Vercel build (production)
+        env:
+          FRAMEBRIAR_ENABLED: "0"
+          FRAMEBRIAR_ENVIRONMENT: production
+          FRAMEBRIAR_APP_ID: meal-planner
+          FRAMEBRIAR_BUILD_SHA: ${{ inputs.sha }}
+          FRAMEBRIAR_SCREENSHOTS: "0"
         run: npx --yes "vercel@${VERCEL_CLI_VERSION}" build --target=production --yes
+      - name: Verify packaged feedback target
+        env:
+          FRAMEBRIAR_ENABLED: "0"
+          FRAMEBRIAR_ENVIRONMENT: production
+          FRAMEBRIAR_APP_ID: meal-planner
+          FRAMEBRIAR_BUILD_SHA: ${{ inputs.sha }}
+          FRAMEBRIAR_SCREENSHOTS: "0"
+        run: node tools/feedback/check-artifact.mjs .vercel/output/static
+
 
       # `vercel build` leaves some files (the compiled Go binary lives in the runner's /tmp) outside the function
       # directory and points at them from .vc-config.json `filePathMap`. The deploy runner does not have them, so
@@ -214,6 +264,9 @@ jobs:
 
       - name: Make build output self-contained
         run: .deploy-tools/tools/deploy/materialize-output.sh .
+
+      - name: Verify materialized feedback server provenance
+        run: node tools/feedback/check-server-artifact.mjs .vercel/output/functions "$SHA" production
 
       - name: Package build output and record checksum
         id: pack
@@ -520,8 +573,58 @@ jobs:
           printf '# Placeholder written by the build job; pulled env values are never handed between jobs.\nVERCEL_ENV=preview\n' > .vercel/.env.preview.local
 
       # No VERCEL_TOKEN anywhere in this job: the build runs project install/build commands.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web/.nvmrc
+      - name: Install pinned dependencies without lifecycle scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.FRAMEBRIAR_PACKAGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$NODE_AUTH_TOKEN" ]]; then
+            echo "::error::Private Framebriar package-reader access is required; no credential fallback is permitted"
+            exit 1
+          fi
+          install_root=$(mktemp -d)
+          trap 'rm -rf "$install_root"' EXIT
+          mkdir -p "$install_root/home" "$install_root/project"
+          cp web/package.json web/package-lock.json "$install_root/project/"
+          # Fixed registry config, never the checkout's .npmrc or user config.
+          printf '%s\n' '@masra91:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$install_root/project/.npmrc"
+          : > "$install_root/user.npmrc"
+          : > "$install_root/global.npmrc"
+          # No inherited npm config, HOME credentials, lifecycle scripts or cache.
+          (cd "$install_root/project" && env -i PATH="$PATH" HOME="$install_root/home" NODE_AUTH_TOKEN="$NODE_AUTH_TOKEN" \
+            npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org \
+              --userconfig="$install_root/user.npmrc" --globalconfig="$install_root/global.npmrc" --cache="$install_root/cache")
+          mv "$install_root/project/node_modules" web/node_modules
+      - name: Review lifecycle requirements in a fresh credential-free shell
+        run: bash tools/feedback/postinstall.sh
+      - name: Prepare immutable feedback provenance
+        env:
+          FRAMEBRIAR_ENABLED: "0"
+          FRAMEBRIAR_ENVIRONMENT: preview
+          FRAMEBRIAR_APP_ID: meal-planner-preview
+          FRAMEBRIAR_BUILD_SHA: ${{ inputs.sha }}
+          FRAMEBRIAR_SCREENSHOTS: "0"
+        run: node tools/feedback/prepare-build.mjs
       - name: Vercel build (preview)
+        env:
+          FRAMEBRIAR_ENABLED: "0"
+          FRAMEBRIAR_ENVIRONMENT: preview
+          FRAMEBRIAR_APP_ID: meal-planner-preview
+          FRAMEBRIAR_BUILD_SHA: ${{ inputs.sha }}
+          FRAMEBRIAR_SCREENSHOTS: "0"
         run: npx --yes "vercel@${VERCEL_CLI_VERSION}" build --target=preview --yes
+      - name: Verify packaged feedback target
+        env:
+          FRAMEBRIAR_ENABLED: "0"
+          FRAMEBRIAR_ENVIRONMENT: preview
+          FRAMEBRIAR_APP_ID: meal-planner-preview
+          FRAMEBRIAR_BUILD_SHA: ${{ inputs.sha }}
+          FRAMEBRIAR_SCREENSHOTS: "0"
+        run: node tools/feedback/check-artifact.mjs .vercel/output/static
+
 
       # `vercel build` leaves some files (the compiled Go binary lives in the runner's /tmp) outside the function
       # directory and points at them from .vc-config.json `filePathMap`. The deploy runner does not have them, so
@@ -539,6 +642,9 @@ jobs:
 
       - name: Make build output self-contained
         run: .deploy-tools/tools/deploy/materialize-output.sh .
+
+      - name: Verify materialized feedback server provenance
+        run: node tools/feedback/check-server-artifact.mjs .vercel/output/functions "$SHA" preview
 
       - name: Package build output and record checksum
         id: pack
