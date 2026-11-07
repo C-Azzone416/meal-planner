@@ -7,7 +7,7 @@ fail=0
 # run NAME EXPECT(0|1) [VAR=VAL ...]  -- starts from an all-unselected, all-skipped baseline
 run() {
   local name="$1" want="$2"; shift 2
-  env -i PATH="$PATH" AFFECTED_RESULT=success \
+  env -i PATH="$PATH" AFFECTED_RESULT=success RES_SECRETS=success RES_HYGIENE=success \
     SEL_WEB=false SEL_HOSTED_GO=false SEL_LOCAL_GO=false SEL_CONTRACTS=false SEL_INTEGRATION=false SEL_HOSTED_PREVIEW=false \
     RES_WEB=skipped RES_HOSTED_GO=skipped RES_LOCAL_GO=skipped RES_CONTRACTS=skipped RES_INTEGRATION=skipped RES_PREVIEW=skipped \
     "$@" bash "$here/gate.sh" >/dev/null 2>&1
@@ -34,5 +34,13 @@ run "preview selected but skipped"           1 SEL_HOSTED_PREVIEW=true RES_PREVI
 run "preview selected but failed"            1 SEL_HOSTED_PREVIEW=true RES_PREVIEW=failure SEL_WEB=true RES_WEB=success
 run "preview ran though unselected"          1 RES_PREVIEW=success
 run "all selected and green"                 0 SEL_WEB=true SEL_HOSTED_GO=true SEL_LOCAL_GO=true SEL_CONTRACTS=true SEL_INTEGRATION=true RES_WEB=success RES_HOSTED_GO=success RES_LOCAL_GO=success RES_CONTRACTS=success RES_INTEGRATION=success
+run "secret scan failed"                     1 RES_SECRETS=failure
+run "secret scan skipped"                    1 RES_SECRETS=skipped
+run "secret scan cancelled"                  1 RES_SECRETS=cancelled
+run "secret scan result missing"             1 RES_SECRETS=
+run "hygiene failed"                         1 RES_HYGIENE=failure
+run "hygiene skipped"                        1 RES_HYGIENE=skipped
+run "hygiene result missing"                 1 RES_HYGIENE=
+run "scan failure with components green"     1 RES_SECRETS=failure SEL_WEB=true RES_WEB=success
 
 exit "$fail"

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC1091,SC2154 # the classifier output is sourced; the selection variables come from it
 # Read changed paths on stdin and run the matching local component checks.
 set -euo pipefail
 
@@ -20,8 +21,14 @@ if [[ "$hosted_go" == true || "$local_go" == true || "$contracts" == true ]]; th
 fi
 
 if [[ "$need_go" == true ]]; then
-  unformatted="$(gofmt -l -- $(git ls-files '*.go'))"
-  [[ -z "$unformatted" ]] || { echo "gofmt required:" >&2; echo "$unformatted" >&2; exit 1; }
+  # NUL-delimited so paths with spaces or glob characters stay intact; an enumeration failure fails the check.
+  git ls-files -z -- '*.go' > "$tmp/go-files"
+  go_files=()
+  while IFS= read -r -d '' go_file; do go_files+=("$go_file"); done < "$tmp/go-files"
+  if (( ${#go_files[@]} > 0 )); then
+    unformatted="$(gofmt -l -- "${go_files[@]}")"
+    [[ -z "$unformatted" ]] || { echo "gofmt required:" >&2; echo "$unformatted" >&2; exit 1; }
+  fi
   go vet ./...
 fi
 

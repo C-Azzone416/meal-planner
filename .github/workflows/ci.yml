@@ -38,14 +38,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Secret scan
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Repository hygiene
-        run: bash scripts/check-repo-hygiene.sh
-
       - name: Test classifier, gate and deploy scripts
         run: |
           bash .github/scripts/classify_test.sh
@@ -109,6 +101,98 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           cat classified.txt >> "$GITHUB_OUTPUT"
+
+  # Scans run in their own jobs so that a scan failure never skips the component jobs (their results stay
+  # visible), and `required` fails closed on either scan.
+  secrets:
+    name: secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      # Pinned gitleaks CLI. The checksum is the release's published linux_x64 sha256, recorded here
+      # so a changed or tampered download fails instead of running.
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks CLI
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/gitleaks-bin"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/gitleaks-bin" gitleaks
+          echo "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
+
+      - name: Test the scan scripts
+        run: |
+          gitleaks version
+          bash scripts/secret-scan.test.sh
+
+      # The full range the event adds, merges included, redacted. Nothing is written back to the pull request.
+      - name: Scan the event range for secrets
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            bash scripts/secret-scan.sh "${PR_BASE_SHA}..${PR_HEAD_SHA}"
+          elif [[ -n "$PUSH_BEFORE_SHA" && ! "$PUSH_BEFORE_SHA" =~ ^0+$ ]] && git cat-file -e "${PUSH_BEFORE_SHA}^{commit}" 2>/dev/null; then
+            bash scripts/secret-scan.sh "${PUSH_BEFORE_SHA}..${HEAD_SHA}"
+          else
+            echo "No usable base commit: scanning the full history of ${HEAD_SHA}"
+            bash scripts/secret-scan.sh "${HEAD_SHA}"
+          fi
+
+  hygiene:
+    name: hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Test the hygiene and pre-push scripts
+        run: |
+          bash scripts/check-repo-hygiene.test.sh
+          bash scripts/pre-push.test.sh
+
+      # Checks the commit CI checked out and every file the event adds, not whatever is in the worktree.
+      - name: Repository hygiene
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base="$PR_BASE_SHA"
+          else
+            base="$PUSH_BEFORE_SHA"
+          fi
+          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "No usable base commit: checking the checked-out tree only"
+            bash scripts/check-repo-hygiene.sh HEAD
+          else
+            bash scripts/check-repo-hygiene.sh HEAD "$base"
+          fi
 
   web:
     name: web
@@ -240,12 +324,14 @@ jobs:
   # The event/ref condition repeats the classifier's PREVIEW_TRUSTED rule as a second check.
   preview:
     name: preview
-    needs: [affected, web, hosted-go, local-go, contracts, integration]
+    needs: [affected, secrets, hygiene, web, hosted-go, local-go, contracts, integration]
     if: >-
       ${{ !cancelled()
       && github.event_name == 'push'
       && github.ref == 'refs/heads/develop'
       && needs.affected.result == 'success'
+      && needs.secrets.result == 'success'
+      && needs.hygiene.result == 'success'
       && needs.affected.outputs.hosted_preview == 'true'
       && !contains(needs.*.result, 'failure')
       && !contains(needs.*.result, 'cancelled') }}
@@ -262,7 +348,7 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [affected, web, hosted-go, local-go, contracts, integration, preview]
+    needs: [affected, secrets, hygiene, web, hosted-go, local-go, contracts, integration, preview]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -272,6 +358,8 @@ jobs:
       - name: Evaluate selection and results
         env:
           AFFECTED_RESULT: ${{ needs.affected.result }}
+          RES_SECRETS: ${{ needs.secrets.result }}
+          RES_HYGIENE: ${{ needs.hygiene.result }}
           SEL_DOCS: ${{ needs.affected.outputs.docs }}
           SEL_WEB: ${{ needs.affected.outputs.web }}
           SEL_HOSTED_GO: ${{ needs.affected.outputs.hosted_go }}
