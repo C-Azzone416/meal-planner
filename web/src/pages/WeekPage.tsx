@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
 import { Magnet, PawMagnet } from '../components/Magnet'
@@ -9,6 +9,54 @@ import { DAY_NAMES, DAY_SHORT_NAMES, type DayIndex, type Night } from '../planne
 import '../styles/week.css'
 
 const mealColors = ['rust', 'green', 'gold'] as const
+const undoDurationMs = 10_000
+// The provider keeps each undo entry stable across routes, even when sequence numbers are reused.
+const undoDeadlines = new WeakMap<object, number>()
+
+function UndoToast({ onUndo }: { onUndo: () => void }) {
+  const { undoInfo, dismissUndo } = usePlanner()
+  const [hovered, setHovered] = useState(false)
+  const [focused, setFocused] = useState(false)
+  useLayoutEffect(() => {
+    if (!undoInfo) return
+
+    const now = Date.now()
+    const expiresAt = undoDeadlines.get(undoInfo) ?? now + undoDurationMs
+    undoDeadlines.set(undoInfo, expiresAt)
+    const remainingMs = expiresAt - now
+    if (remainingMs <= 0) {
+      dismissUndo()
+      return
+    }
+    if (hovered || focused) {
+      return () => {
+        undoDeadlines.set(undoInfo, Date.now() + remainingMs)
+      }
+    }
+
+    const timer = window.setTimeout(dismissUndo, remainingMs)
+    return () => window.clearTimeout(timer)
+  }, [dismissUndo, focused, hovered, undoInfo])
+
+  return (
+    <div
+      className={undoInfo ? 'week-undo paper-card' : 'sr-only'}
+      onMouseEnter={() => { if (undoInfo) setHovered(true) }}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false)
+      }}
+    >
+      <span role="status">{undoInfo?.message}</span>
+      {undoInfo && <button type="button" className="button button--dark" onClick={() => {
+        setHovered(false)
+        setFocused(false)
+        onUndo()
+      }}>Undo</button>}
+    </div>
+  )
+}
 
 function PinButton({ night, onToggle, compact = false }: {
   night: Night
@@ -95,7 +143,7 @@ function NightDetail({ night }: { night: Night }) {
 export function WeekPage() {
   const {
     plan, recipes, prep, summary, nightWarnings, getRecipe, fillWeek, proposeSurprise, keepProposal,
-    cancelProposal, togglePin, status, proposal, undoInfo, undo, dismissUndo,
+    cancelProposal, togglePin, status, proposal, undo,
   } = usePlanner()
   const [selectedDay, setSelectedDay] = useState<DayIndex | null>(null)
   const heading = useRef<HTMLHeadingElement>(null)
@@ -112,13 +160,6 @@ export function WeekPage() {
   useEffect(() => {
     heading.current?.focus()
   }, [])
-
-  const undoSeq = undoInfo?.seq
-  useEffect(() => {
-    if (undoSeq === undefined) return
-    const timer = window.setTimeout(dismissUndo, 10_000)
-    return () => window.clearTimeout(timer)
-  }, [dismissUndo, undoSeq])
 
   const onFillWeek = () => {
     if (planned.length === 0) heading.current?.focus()
@@ -149,6 +190,10 @@ export function WeekPage() {
           {status && <span key={status.seq}>{status.text}</span>}
         </p>
         {recipes.length === 0 && <p><Link className="button button--paper" to="/recipes/new">Add recipe</Link></p>}
+        <UndoToast onUndo={() => {
+          heading.current?.focus()
+          undo()
+        }} />
         <ul className="week-nights" aria-label="Week at a glance">
           {plan.nights.map((item) => {
             const recipe = getRecipe(item.recipeId)
@@ -245,13 +290,6 @@ export function WeekPage() {
           ) : <p>No prep-ahead tasks this week.</p>}
           <Link className="button button--paper" to="/prep">See prep plan →</Link>
         </aside>
-      </div>
-      <div className={undoInfo ? 'week-undo paper-card' : 'sr-only'}>
-        <span role="status">{undoInfo?.message}</span>
-        {undoInfo && <button type="button" className="button button--dark" onClick={() => {
-          undo()
-          heading.current?.focus()
-        }}>Undo</button>}
       </div>
     </div>
   )

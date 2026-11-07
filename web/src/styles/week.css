@@ -5,7 +5,7 @@
   overflow-wrap: anywhere;
 }
 
-.planner-view :is(a, button, select):focus-visible,
+.planner-view :is(a, button, input, select):focus-visible,
 .planner-view h1:focus-visible {
   outline: 3px solid #24234d;
   outline-offset: 3px;
@@ -213,6 +213,14 @@
   font-weight: 800;
 }
 
+.week-undo .button {
+  white-space: nowrap;
+}
+
+.cook-recipe-title {
+  margin: 12px 5px 0;
+}
+
 .planner-view .cook-topline {
   flex-flow: row wrap;
   align-items: center;
@@ -243,11 +251,29 @@
   display: list-item;
   min-height: 0;
   margin-bottom: 10px;
+  padding: 0;
 }
 
-.cook-steps .task-card :is(span, em) {
-  display: table;
-  margin-top: 6px;
+.cook-steps .task-card[aria-current="step"] {
+  outline: 2px solid var(--ink);
+}
+
+.cook-step-check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  min-height: 44px;
+  padding: 12px;
+  cursor: pointer;
+}
+
+.cook-step-check input {
+  margin: 0;
+}
+
+.cook-step-check input:checked + span strong {
+  text-decoration: line-through;
 }
 
 .cook-ingredients {

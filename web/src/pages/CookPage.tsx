@@ -1,16 +1,24 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { FridgePanel, PreviewNotice } from '../components/FridgePanel'
 import { StateCard } from '../components/StateCard'
+import { roundQuantity } from '../planner/derive'
 import { formatAmount, formatDuration, formatTimer } from '../planner/format'
 import { usePlanner } from '../planner/store'
 import { DAY_NAMES } from '../planner/types'
 import '../styles/week.css'
 
+function formatCookTimer(seconds: number): string {
+  const hours = Math.floor(seconds / 3600)
+  if (hours === 0) return formatTimer(seconds)
+  return `${hours}:${formatTimer(seconds % 3600).padStart(5, '0')}`
+}
+
 export function CookPage() {
   const [searchParams] = useSearchParams()
   const { plan, getRecipe } = usePlanner()
   const heading = useRef<HTMLHeadingElement>(null)
+  const [completedSteps, setCompletedSteps] = useState(() => new Map<string, ReadonlySet<string>>())
   const requestedDay = searchParams.get('day')
   const planned = plan.nights.filter((night) => night.status === 'planned')
   const today = new Date().getDay()
@@ -39,6 +47,41 @@ export function CookPage() {
 
   const servings = night.servings ?? recipe.defaultServings
   const factor = servings / recipe.defaultServings
+  const isFallback = requestedDay === null && night.day !== today
+  const dinnerKey = `${night.day}:${recipe.id}`
+  const completed = completedSteps.get(dinnerKey)
+  const phases = [
+    {
+      id: 'prep-tonight',
+      title: 'Prep tonight',
+      empty: 'No prep steps for tonight.',
+      steps: recipe.prepTonight.map(({ id, text, minutes }) => ({
+        id: `prep:${id}`,
+        text,
+        detail: <span>{formatDuration(minutes)}</span>,
+      })),
+    },
+    {
+      id: 'cook-tonight',
+      title: 'Cook tonight',
+      empty: 'No cooking steps for tonight.',
+      steps: recipe.cookTonight.map(({ id, text, timerSeconds }) => ({
+        id: `cook:${id}`,
+        text,
+        detail: timerSeconds === null ? null : <em className="timer">Timer {formatCookTimer(timerSeconds)}</em>,
+      })),
+    },
+  ]
+  const nextStep = phases.flatMap(({ steps }) => steps).find(({ id }) => !completed?.has(id))
+
+  function setStepDone(stepId: string, done: boolean) {
+    setCompletedSteps((previous) => {
+      const next = new Set(previous.get(dinnerKey))
+      if (done) next.add(stepId)
+      else next.delete(stepId)
+      return new Map(previous).set(dinnerKey, next)
+    })
+  }
 
   return (
     <div className="cook-shell planner-view">
@@ -47,37 +90,47 @@ export function CookPage() {
           <Link className="button button--paper" to="/week">‹ This week</Link>
           <span>{DAY_NAMES[night.day]} · Serves {servings}</span>
         </div>
-        <h1 ref={heading} tabIndex={-1} className="single-paper-title">{recipe.title}</h1>
+        <h1 ref={heading} tabIndex={-1} className="single-paper-title">
+          {isFallback ? `Cook ${DAY_NAMES[night.day]}’s dinner` : recipe.title}
+        </h1>
+        {isFallback && <h2 className="cook-recipe-title">{recipe.title}</h2>}
         <p className="script-copy">{recipe.activeMinutes} min hands-on · {formatDuration(recipe.totalMinutes)} total</p>
+        <p role="status">{nextStep ? `Next: ${nextStep.text}` : 'All steps done'}</p>
+        <button
+          type="button"
+          className="button button--green"
+          disabled={!nextStep}
+          onClick={() => { if (nextStep) setStepDone(nextStep.id, true) }}
+        >Done — next step</button>
       </FridgePanel>
       <PreviewNotice />
       <FridgePanel className="content-panel cook-content">
         <div className="cook-layout">
           <div className="cook-phases">
-            <section aria-labelledby="prep-tonight-title">
-              <h2 id="prep-tonight-title">Prep tonight</h2>
-              {recipe.prepTonight.length > 0 ? (
-                <ol className="task-list cook-steps">
-                  {recipe.prepTonight.map((step) => (
-                    <li className="task-card" key={step.id}>
-                      <strong>{step.text}</strong>
-                      <span>{formatDuration(step.minutes)}</span>
-                    </li>
-                  ))}
-                </ol>
-              ) : <p>No prep steps for tonight.</p>}
-            </section>
-            <section aria-labelledby="cook-tonight-title">
-              <h2 id="cook-tonight-title">Cook tonight</h2>
-              <ol className="task-list cook-steps">
-                {recipe.cookTonight.map((step) => (
-                  <li className="task-card" key={step.id}>
-                    <strong>{step.text}</strong>
-                    {step.timerSeconds !== null && <em className="timer">Timer {formatTimer(step.timerSeconds)}</em>}
-                  </li>
-                ))}
-              </ol>
-            </section>
+            {phases.map(({ id, title, empty, steps }) => (
+              <section key={id} aria-labelledby={`${id}-title`}>
+                <h2 id={`${id}-title`}>{title}</h2>
+                {steps.length > 0 ? (
+                  <ol className="task-list cook-steps">
+                    {steps.map((step) => (
+                      <li className="task-card" key={step.id} aria-current={nextStep?.id === step.id ? 'step' : undefined}>
+                        <label className="cook-step-check">
+                          <input
+                            type="checkbox"
+                            checked={completed?.has(step.id) ?? false}
+                            onChange={(event) => setStepDone(step.id, event.target.checked)}
+                          />
+                          <span>
+                            <strong>{step.text}</strong>
+                            {step.detail}
+                          </span>
+                        </label>
+                      </li>
+                    ))}
+                  </ol>
+                ) : <p>{empty}</p>}
+              </section>
+            ))}
             <section aria-labelledby="cook-feedback-title">
               <h2 id="cook-feedback-title">After dinner</h2>
               <button type="button" className="button button--paper" disabled aria-describedby="cook-feedback-reason">How did it go?</button>
@@ -87,12 +140,18 @@ export function CookPage() {
           <aside className="paper-card ingredients-card" aria-labelledby="cook-ingredients-title">
             <h2 id="cook-ingredients-title">Ingredients · for {servings}</h2>
             <dl className="cook-ingredients">
-              {recipe.ingredients.map((ingredient) => (
-                <div key={ingredient.id}>
-                  <dt>{ingredient.name}</dt>
-                  <dd>{ingredient.quantity === null ? 'To taste' : formatAmount(ingredient.quantity * factor, ingredient.unit)}</dd>
-                </div>
-              ))}
+              {recipe.ingredients.map(({ id, name, quantity, unit }) => {
+                const amount = quantity === null || quantity === 0 || factor === 1
+                  ? quantity
+                  : roundQuantity(quantity * factor, unit)
+
+                return (
+                  <div key={id}>
+                    <dt>{name}</dt>
+                    <dd>{amount === null ? 'To taste' : formatAmount(amount, unit)}</dd>
+                  </div>
+                )
+              })}
             </dl>
           </aside>
         </div>
