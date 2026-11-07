@@ -16,5 +16,5 @@ export function PaperTitle({ words }: { words: string[] }) {
 }
 
 export function PreviewNotice() {
-  return <p className="preview-notice">Sample preview · changes on this screen reset when you reload.</p>
+  return <p className="preview-notice">Preview data · saved in this browser only</p>
 }

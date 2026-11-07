@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AppRoutes } from './App'
 import { AuthProvider } from './auth/AuthProvider'
+import { PlannerProvider } from './planner/store'
 import {
   AuthCodeVerificationError,
   AuthCredentialsError,
@@ -32,7 +33,9 @@ function renderRoute(path: string, service: AuthService | null) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <AuthProvider serviceFactory={serviceFactory}>
-        <AppRoutes />
+        <PlannerProvider storage={null}>
+          <AppRoutes />
+        </PlannerProvider>
       </AuthProvider>
     </MemoryRouter>,
   )
@@ -48,7 +51,7 @@ test('redirects a signed-out direct URL to sign in', async () => {
 test('renders protected sample views and working navigation', async () => {
   renderRoute('/week', makeService(user))
   expect(await screen.findByRole('heading', { name: 'this week’s dinners' })).toBeTruthy()
-  expect(screen.getByText('Sample preview · changes on this screen reset when you reload.')).toBeTruthy()
+  expect(screen.getByText('Preview data · saved in this browser only')).toBeTruthy()
 
   fireEvent.click(screen.getAllByRole('link', { name: 'Recipes' })[0])
   expect(await screen.findByRole('heading', { name: 'our recipes' })).toBeTruthy()
@@ -65,7 +68,7 @@ test('updates a house-rule preview choice without claiming persistence', async (
   const choice = await screen.findByRole('button', { name: 'One person does it all' })
   fireEvent.click(choice)
   expect(choice.getAttribute('aria-pressed')).toBe('true')
-  expect(screen.getByText('Sample preview · changes on this screen reset when you reload.')).toBeTruthy()
+  expect(screen.getByText('Preview data · saved in this browser only')).toBeTruthy()
 })
 
 test.each([
