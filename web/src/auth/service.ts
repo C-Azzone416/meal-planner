@@ -8,6 +8,7 @@ export interface AuthUser {
 
 export interface AuthService {
   getSession(): Promise<AuthUser | null>
+  getToken(expectedUserId: string): Promise<string>
   signInWithPassword(email: string, password: string): Promise<AuthUser>
   sendPasswordResetCode(email: string): Promise<void>
   setPassword(email: string, code: string, password: string): Promise<AuthUser>
@@ -233,6 +234,13 @@ export async function loadAuthService(
   }
 
   return {
+    async getToken(expectedUserId) {
+      const session = await getCurrentSession()
+      if (!session || session.user.id !== expectedUserId || !await authorizeUser(session)) {
+        throw new AuthSessionEstablishmentError()
+      }
+      return session.token
+    },
     async getSession() {
       const user = await authorizeUser(await getCurrentSession())
       if (!user) await client.signOut()

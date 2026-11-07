@@ -7,14 +7,15 @@ import {
   useMemo,
   useState,
 } from 'react'
-import { type AuthService, type AuthUser, loadAuthService } from './service'
+import {
+  AuthSessionEstablishmentError,
+  type AuthService,
+  type AuthUser,
+  loadAuthService,
+} from './service'
 
 type AuthStatus =
-  | 'loading'
-  | 'unavailable'
-  | 'signed-out'
-  | 'signed-in'
-  | 'error'
+  'loading' | 'unavailable' | 'signed-out' | 'signed-in' | 'error'
 
 interface AuthContextValue {
   status: AuthStatus
@@ -25,6 +26,7 @@ interface AuthContextValue {
   setPassword(email: string, code: string, password: string): Promise<void>
   signOut(): Promise<void>
   retry(): void
+  getToken(): Promise<string>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -119,6 +121,44 @@ export function AuthProvider({
     setStatus(service ? 'signed-out' : 'unavailable')
   }, [service])
 
+  const getToken = useCallback(async () => {
+    if (!service || !user) throw new Error('Sign-in required')
+    try {
+      return await service.getToken(user.id)
+    } catch (error) {
+      if (error instanceof AuthSessionEstablishmentError) {
+        window.dispatchEvent(new Event('feedback-session-ended'))
+        setUser(null)
+        setStatus('signed-out')
+      }
+      throw error
+    }
+  }, [service, user])
+
+  useEffect(() => {
+    if (!service || !user) return
+    let active = true
+    const check = async () => {
+      try {
+        const current = await service.getSession()
+        if (active && current?.id !== user.id) {
+          window.dispatchEvent(new Event('feedback-session-ended'))
+          setUser(current)
+          setStatus(current ? 'signed-in' : 'signed-out')
+        }
+      } catch {
+        /* Transient outages do not erase the session. Requests revalidate. */
+      }
+    }
+    const timer = window.setInterval(() => void check(), 30000)
+    window.addEventListener('focus', check)
+    return () => {
+      active = false
+      clearInterval(timer)
+      window.removeEventListener('focus', check)
+    }
+  }, [service, user])
+
   const retry = useCallback(() => {
     setStatus('loading')
     setMessage(null)
@@ -128,6 +168,7 @@ export function AuthProvider({
   const value = useMemo<AuthContextValue>(
     () => ({
       status,
+      getToken,
       user,
       message,
       signInWithPassword,
@@ -138,6 +179,7 @@ export function AuthProvider({
     }),
     [
       message,
+      getToken,
       retry,
       sendPasswordResetCode,
       setPassword,

@@ -14,6 +14,7 @@ import {
   AuthCredentialsError,
   AuthPasswordPolicyError,
 } from './auth/service'
+import { FeedbackProvider } from './feedback/Feedback'
 import { AppShell } from './components/AppShell'
 import {
   CookPage,
@@ -37,7 +38,7 @@ function ProtectedShell() {
     return <Navigate to="/sign-in" replace state={{ from: location.pathname }} />
   }
 
-  return <AppShell onSignOut={() => void auth.signOut()}><Outlet /></AppShell>
+  return <FeedbackProvider key={auth.user?.id}><AppShell onSignOut={() => void auth.signOut()}><Outlet /></AppShell></FeedbackProvider>
 }
 
 function SignInRoute() {
