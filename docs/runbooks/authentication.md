@@ -51,7 +51,7 @@ If the automation-bypass secret is exposed, revoke it immediately and replace it
 
 Neon's [Auth management API documentation](https://neon.com/docs/auth/guides/manage-auth-api) lists administrative user creation under the selected branch's `/auth/users` endpoint. That documents an administrative capability, not a proven or approved Meal Planner invitation/bootstrap procedure. Do not assume it triggers the blocking webhook, sets `emailVerified`, or creates a usable first-password account. Public email signup must remain disabled; do not temporarily open it or weaken the webhook to create the first account.
 
-Before operational activation, verify the following in an approved, protected Preview exercise, then independently establish the corresponding Production account and provider evidence. Record results privately, with no account identifiers, cookies, codes, or tokens in repository artifacts:
+Verify the following for the intended environment under an approved, controlled setup. Rehearse in protected Preview when a suitable approved test account exists; do not delete or recreate the existing Preview user or provision another account/environment merely to satisfy this gate. The intended single-account Production administrative bootstrap can itself be the controlled check, with public signup remaining disabled. Independently verify the Production results before calling login ready. Record results privately, with no account identifiers, cookies, codes, or tokens in repository artifacts:
 
 - Review the exact administrative provisioning action and intended branch/account before executing it. Obtain the required approval; this runbook is not authorization to create an account or change security settings.
 - Audit the branch's users before provisioning and immediately afterward. Confirm that only the intended account was added and stop on any unexpected user.
@@ -82,7 +82,7 @@ Only proceed to the approved Production configuration and controlled login verif
 
 ## Release gate
 
-Before considering login ready, verify all of the following in protected Preview, then repeat them against the intended Production branch and deployed release with separate approval:
+Before considering login ready, verify all of the following against the intended environment and deployed release under the approved controlled setup. Protected Preview rehearsal does not replace independent Production verification or its separate approval:
 
 - the first-account acceptance gate has passed for the environment, the intended user exists before requesting a password code, and no unexpected or duplicate account rows exist;
 - provider email self-signup is disabled and session revocation on password reset is enabled;
