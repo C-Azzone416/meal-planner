@@ -194,8 +194,9 @@ Only `CI / required` is configured as a ruleset requirement. It runs uncondition
 2. inspect every selected job result;
 3. accept an intentional skip only when the classifier did not select that job;
 4. require `preview` success (deploy and smoke steps) when `hosted_preview` is selected (it is never selected for a pull request, so `preview` is then skipped and accepted);
-5. fail on cancellation, failure, missing output, unknown result, or an unexpectedly skipped selected job (and fail if `affected` itself did not succeed, or if a job ran although it was not selected); and
-6. publish a human-readable selection/result summary.
+5. fail on cancellation, failure, missing output, unknown result, or an unexpectedly skipped selected job (and fail if `affected` itself did not succeed, or if a job ran although it was not selected);
+6. require the always-on `secrets` (gitleaks over the whole event range, merges included) and `hygiene` (paths and sizes of the checked-out tree and every file the event adds, or the full reachable history when there is no usable base) jobs to succeed. They are separate jobs, not steps of `affected`, so a scan failure never skips the component jobs; and
+7. publish a human-readable selection/result summary.
 
 Job display names must be unique across workflows. Renaming the stable job is a repository-settings migration: add the new check, prove it reports, then remove the old requirement.
 
@@ -222,7 +223,7 @@ Changes to workflow files, release metadata, migration tooling, and dependency-u
 
 Preview is **Approved** only for a push to `develop` with hosted changes. Pull requests run checks only. Production is separate: manual `workflow_dispatch` from `main`.
 
-Preview runs in a separate trusted job (`preview`, a reusable-workflow call), tied to the exact pushed commit SHA (`github.sha`). It starts only after `affected` and every selected check succeeded. Preview secrets (`VERCEL_TOKEN`) are referenced only by that job and never reach the `pull_request` check jobs.
+Preview runs in a separate trusted job (`preview`, a reusable-workflow call), tied to the exact pushed commit SHA (`github.sha`). It starts only after `affected`, the `secrets` and `hygiene` scans, and every selected check succeeded. Preview secrets (`VERCEL_TOKEN`) are referenced only by that job and never reach the `pull_request` check jobs.
 
 **Stable alias.** If the repository variable `PREVIEW_ALIAS` is set (a hostname such as `meal-planner-develop.vercel.app`), the deploy job, after the smoke test passes, assigns it with Vercel's `POST /v2/deployments/{id}/aliases` API (only if it would move forward: skipped when the alias already serves a descendant commit on `develop`, found by an unauthenticated blob-less fetch of `develop`; a failed comparison fails the step), then polls `/v4/aliases/<alias>` until it points at this deployment ID (up to 3 minutes) and records it in the step summary. The REST path avoids the CLI's unsupported user lookup for project-scoped tokens; the token is sent only through curl config on stdin and the response must confirm the requested alias. Unset means the step is skipped with a notice. The step fails if the alias is one of the project's production domains; that guard covers this project's domains only and fails closed above 100 domains. The fetch requires the repository to stay public.
 
