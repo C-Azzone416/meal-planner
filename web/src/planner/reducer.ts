@@ -1,6 +1,6 @@
 /** The planner reducer. Pure: random choices arrive as seeds drawn by the store. */
 import { deriveShopping, derivePrep } from './derive'
-import { containsIllFormed, normalizeName, uniqueId } from './keys'
+import { containsIllFormed, normalizeName, pantryLowKey, uniqueId } from './keys'
 import {
   assignRecipe,
   cancelProposal,
@@ -50,6 +50,7 @@ export type PlannerAction =
   | { type: 'plan/assign'; day: DayIndex; recipeId: string; servings?: number }
   | { type: 'shopping/toggle'; key: string }
   | { type: 'prep/toggle'; key: string }
+  | { type: 'prep/topup'; key: string }
   | { type: 'pantry/toggleLow'; name: string }
   | { type: 'dismiss'; kind: 'shopping' | 'prep'; key: string }
   | { type: 'rules/set'; patch: Partial<HouseRules> }
@@ -216,7 +217,7 @@ export function reducer(state: PlannerState, action: PlannerAction): PlannerStat
           ? { ...state, progress: { ...state.progress, prepDone: without(prepDone, action.key) } }
           : state
       }
-      const next = task.status === 'done'
+      const next = task.done
         ? without(prepDone, task.key)
         : {
             ...prepDone,
@@ -224,13 +225,23 @@ export function reducer(state: PlannerState, action: PlannerAction): PlannerStat
           }
       return { ...state, progress: { ...state.progress, prepDone: next } }
     }
-    case 'pantry/toggleLow': {
-      const name = normalizeName(action.name)
+    case 'prep/topup': {
+      const task = derivePrep(state).tasks.find((candidate) => candidate.key === action.key)
+      if (!task || task.status !== 'topup') return state
+      const record = state.progress.prepDone[task.key]
       return {
         ...state,
-        pantryLow: state.pantryLow.includes(name)
-          ? state.pantryLow.filter((existing) => existing !== name)
-          : [...state.pantryLow, name],
+        progress: { ...state.progress, prepDone: { ...state.progress.prepDone, [task.key]: { ...record, doneFactor: task.factor } } },
+      }
+    }
+    case 'pantry/toggleLow': {
+      const name = normalizeName(action.name)
+      if (!state.pantryLow.includes(name)) return { ...state, pantryLow: [...state.pantryLow, name] }
+      // Restocked: the low flag was the only reason it was on the list, so its checked progress goes too.
+      return {
+        ...state,
+        pantryLow: state.pantryLow.filter((existing) => existing !== name),
+        progress: { ...state.progress, shoppingChecked: without(state.progress.shoppingChecked, pantryLowKey(name)) },
       }
     }
     case 'dismiss': {

@@ -33,7 +33,7 @@ Derived (memoised, always consistent with the plan): `shopping`, `prep`, `pantry
 - **Recipes** — `addRecipe(newRecipe) → id`, `updateRecipe(recipe)`. Editing a planned recipe sets `status` to "This week’s shopping and prep were updated." Generate ids for new ingredients/steps with `newItemId()` from `keys.ts`.
 - **Drafts** — `approveDraft(id) → recipeId | null` (null until all five guesses are confirmed), `discardDraft`, `setDraftConfirmed(id, key, bool)`, `updateDraft(id, patch)`. Drafts are a separate type and never appear in `recipes`.
 - **Plan** — `fillWeek(rng?)` (fill only, up to `houseRules.targetDinners`), `proposeSurprise(day, rng?)` → `proposal`; then `keepProposal()` / `cancelProposal()` ("Try another" = call `proposeSurprise` again; it will not repeat). `moveNight(from, to)` (swaps if the target is planned), `setSkipped`, `setOpen`, `togglePin`, `setServings(day, n)` (1–12), `assignRecipe(day, recipeId, servings?)` ("Add to week"), `setHouseRules(patch)`.
-- **Progress** — `toggleShoppingChecked(row.key)`, `togglePrepDone(task.key)`, `togglePantryLow(item.key)`, `dismissNoLongerNeeded('shopping' | 'prep', key)`.
+- **Progress** — `toggleShoppingChecked(row.key)`, `togglePrepDone(task.key)`, `confirmPrepTopUp(task.key)`, `togglePantryLow(item.key)`, `dismissNoLongerNeeded('shopping' | 'prep', key)`.
 - **Undo / status** — `undo()`, `dismissUndo()`, `clearStatus()`, `dismissResetNotice()`, `resetPreviewData()` (**confirm first**).
 
 Refused actions (Surprise me on a pinned/skipped night, moving onto a skipped night, filling a full week…) leave the plan untouched and set `status` with the reason; render `status` in a `role="status"` region. They do not consume the undo slot.
@@ -56,7 +56,7 @@ Shopping and prep are never stored; only progress is (`progress.shoppingChecked`
 - Row `status`: `todo`, `checked`, or `needs-more` (checked earlier, requirement grew; `checked` is false and `note` reads "need 1 more lb (you checked 2 lb)"). A decrease keeps it checked. Ticking a `needs-more` row confirms the new total.
 - **`shopping.groups`** (by aisle, `AISLES` order), **`shopping.byMeal`**, **`shopping.noLongerNeeded`** (checked rows nobody needs now; still struck-through until `dismissNoLongerNeeded`). Un-checked vanished rows leave no trace; undo or re-adding the meal re-checks them.
 - **`pantry`** — the shelf: every staple in any saved recipe, with `usedBy` (this week) and `usedByRecipes`, `low`.
-- **`prep.tasks`** — each planned meal’s prep-ahead steps in day order. `status`: `todo`, `done`, or `topup` (done, but servings went up since — still counted as done; ticking it confirms the top-up). `warning` is set when `(mealDay − prepDay) > keepsDays`: "Marinade keeps 1 day — prep it Wednesday instead". `nightWarnings[day]` repeats those per night.
+- **`prep.tasks`** — each planned meal’s prep-ahead steps in day order. `status`: `todo`, `done`, or `topup` (done, but servings went up since — still counted as done; `confirmPrepTopUp` records the new amount; toggling it clears it like any done task). `warning` is set when `(mealDay − prepDay) > keepsDays`: "Marinade keeps 1 day — prep it Wednesday instead". `nightWarnings[day]` repeats those per night.
 - **`prep.doneNoLongerPlanned`** — done tasks whose meal was removed (kept, dismissable). `prep.totals` has task/done/minute counts.
 
 ## Persistence

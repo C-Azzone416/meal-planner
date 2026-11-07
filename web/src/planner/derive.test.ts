@@ -8,7 +8,7 @@ import {
   roundQuantity,
 } from './derive'
 import { formatAmount, formatQuantity } from './format'
-import { normalizeName, prepKey, shoppingKey } from './keys'
+import { normalizeName, pantryLowKey, prepKey, shoppingKey } from './keys'
 import { createSeedState } from './seed'
 import { cleanSeed, run } from './testing'
 
@@ -84,6 +84,10 @@ describe('deriveShopping', () => {
     const state = run(cleanSeed(), { type: 'pantry/toggleLow', name: 'Olive Oil' })
     const oil = deriveShopping(state).rows.find((r) => r.name === 'olive oil')
     expect(oil).toMatchObject({ aisle: 'Pantry aisle', source: 'pantry-low', amount: 'running low', mealsLabel: 'chicken + salmon' })
+    const key = pantryLowKey('olive oil')
+    const checkedLow = run(state, { type: 'shopping/toggle', key })
+    expect(checkedLow.progress.shoppingChecked[key]).toBeDefined()
+    expect(run(checkedLow, { type: 'pantry/toggleLow', name: 'olive oil' }).progress.shoppingChecked[key]).toBeUndefined()
     const toggledOff = run(state, { type: 'pantry/toggleLow', name: 'olive oil' })
     expect(deriveShopping(toggledOff).rows.find((r) => r.name === 'olive oil')).toBeUndefined()
   })
@@ -254,9 +258,13 @@ describe('derivePrep', () => {
     const task = derivePrep(state).tasks.find((t) => t.key === key)
     expect(task).toMatchObject({ status: 'topup', done: true })
     expect(derivePrep(state).totals.done).toBe(1)
-    state = run(state, { type: 'prep/toggle', key })
+    const toggled = run(state, { type: 'prep/toggle', key }) // a top-up task counts as done, so toggling clears it
+    expect(derivePrep(toggled).tasks.find((t) => t.key === key)?.status).toBe('todo')
+    state = run(state, { type: 'prep/topup', key })
     expect(derivePrep(state).tasks.find((t) => t.key === key)).toMatchObject({ status: 'done' })
     expect(state.progress.prepDone[key].doneFactor).toBe(1.5)
+    expect(run(state, { type: 'prep/topup', key })).toBe(state) // nothing left to top up
+    expect(run(cleanSeed(), { type: 'prep/topup', key })).toEqual(cleanSeed()) // not done at all: no-op
   })
 
   test('a decrease does not need a top-up', () => {
@@ -424,6 +432,34 @@ describe('running-low pantry rows have their own identity', () => {
     const after = deriveShopping(state).rows.filter((r) => r.name.toLowerCase().startsWith('lime'))
     expect(after.find((r) => r.source === 'pantry-low')?.checked).toBe(true)
     expect(after.find((r) => r.source === 'recipe')?.checked).toBe(false)
+  })
+})
+
+describe('judge fixes (#48)', () => {
+  test('running-low items no meal needs are exposed as unassigned', () => {
+    const cleared = run(cleanSeed(), { type: 'plan/open', day: 1 }, { type: 'plan/open', day: 3 }, { type: 'plan/open', day: 4 }, { type: 'pantry/toggleLow', name: 'olive oil' })
+    const list = deriveShopping(cleared)
+    expect(list.counts.toBuy).toBe(1)
+    expect(list.byMeal).toEqual([])
+    expect(list.unassigned.map((r) => r.name)).toEqual(['olive oil'])
+    // While a dinner uses it, it is attached to that meal instead.
+    expect(deriveShopping(run(cleanSeed(), { type: 'pantry/toggleLow', name: 'olive oil' })).unassigned).toEqual([])
+  })
+
+  test('clearing the running-low flag never touches a regular row\'s progress (olive oil as a counted ingredient)', () => {
+    const state = cleanSeed()
+    const recipes = state.recipes.map((r) =>
+      r.id === 'gochujang-chicken'
+        ? { ...r, ingredients: [...r.ingredients.filter((i) => i.id !== 'oil'), { id: 'oil2', name: 'olive oil', quantity: 1, unit: '', aisle: 'Pantry aisle' as const, isPantry: false }] }
+        : r,
+    )
+    let next = { ...state, recipes }
+    const regularKey = shoppingKey('olive oil', '')
+    next = run(next, { type: 'shopping/toggle', key: regularKey }, { type: 'pantry/toggleLow', name: 'olive oil' })
+    next = run(next, { type: 'pantry/toggleLow', name: 'olive oil' }) // clear the flag
+    const regular = deriveShopping(next).rows.find((r) => r.key === regularKey)
+    expect(regular).toMatchObject({ source: 'recipe', checked: true })
+    expect(deriveShopping(next).rows.some((r) => r.source === 'pantry-low')).toBe(false)
   })
 })
 
