@@ -394,27 +394,39 @@ test('a recipe titled "New" gets a non-colliding id and opens at its own page', 
   expect(router.state.location.pathname).toBe('/recipes/new-2')
 })
 
-test('a stored recipe with the reserved id "new" is still reachable from the list, detail and edit', async () => {
+test.each(['new', 'edit', 'by-id'])('a stored recipe with the reserved id "%s" is reachable from the list, detail and edit', async (reserved) => {
   const seed = createSeedState()
-  seed.recipes = seed.recipes.map((recipe) => (recipe.id === 'red-lentil-coconut-soup' ? { ...recipe, id: 'new' } : recipe))
+  seed.recipes = seed.recipes.map((recipe) => (recipe.id === 'red-lentil-coconut-soup' ? { ...recipe, id: reserved } : recipe))
   const storage = memoryStorage(JSON.stringify(toPersisted(seed)))
   const { router } = renderApp('/recipes', makeService(), storage)
 
   const link = await screen.findByRole('link', { name: 'Red lentil coconut soup' })
-  expect(link.getAttribute('href')).toBe('/recipes/by-id/new')
+  expect(link.getAttribute('href')).toBe(`/recipes/by-id/${reserved}`)
   fireEvent.click(link)
   expect(await screen.findByRole('heading', { level: 1, name: 'Red lentil coconut soup' })).toBeTruthy()
 
   fireEvent.click(screen.getByRole('link', { name: 'Edit' }))
   expect(await screen.findByRole('heading', { name: 'edit recipe' })).toBeTruthy()
-  expect(router.state.location.pathname).toBe('/recipes/new/edit')
+  expect(router.state.location.pathname).toBe(`/recipes/by-id/${reserved}/edit`)
   expect((screen.getByLabelText(/^Title/) as HTMLInputElement).value).toBe('Red lentil coconut soup')
 
   // Saving returns to the reachable detail path.
   change(/^Servings/, '3')
   fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
   expect(await screen.findByRole('heading', { level: 1, name: 'Red lentil coconut soup' })).toBeTruthy()
-  expect(router.state.location.pathname).toBe('/recipes/by-id/new')
+  expect(router.state.location.pathname).toBe(`/recipes/by-id/${reserved}`)
+})
+
+test('a recipe titled "By id" gets a non-colliding id and its Edit link works', async () => {
+  const { router } = renderApp('/recipes/new')
+  await screen.findByRole('heading', { name: 'add a recipe' })
+  fillValidRecipe('By id')
+  fireEvent.click(screen.getByRole('button', { name: 'Save recipe' }))
+  expect(await screen.findByRole('heading', { level: 1, name: 'By id' })).toBeTruthy()
+  expect(router.state.location.pathname).toBe('/recipes/by-id-2')
+  fireEvent.click(screen.getByRole('link', { name: 'Edit' }))
+  expect(await screen.findByRole('heading', { name: 'edit recipe' })).toBeTruthy()
+  expect((screen.getByLabelText(/^Title/) as HTMLInputElement).value).toBe('By id')
 })
 
 test('rejects numbers that overflow to Infinity, or are absurdly large, as invalid', async () => {

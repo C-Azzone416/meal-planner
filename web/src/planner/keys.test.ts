@@ -51,6 +51,8 @@ describe('uniqueId reserved words', () => {
     expect(uniqueId('New', [])).toBe('new-2')
     expect(uniqueId('new', [])).toBe('new-2')
     expect(uniqueId('Edit', [])).toBe('edit-2')
+    expect(uniqueId('By id', [])).toBe('by-id-2')
+    expect(uniqueId('by-id', ['by-id-2'])).toBe('by-id-3')
     expect(uniqueId('New', ['new-2'])).toBe('new-3')
     expect(uniqueId('New recipe', [])).toBe('new-recipe')
   })
