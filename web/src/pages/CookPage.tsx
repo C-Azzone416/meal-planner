@@ -2,11 +2,20 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { FridgePanel, PreviewNotice } from '../components/FridgePanel'
 import { StateCard } from '../components/StateCard'
-import { roundQuantity } from '../planner/derive'
 import { formatAmount, formatDuration, formatTimer } from '../planner/format'
+import { normalizeUnit } from '../planner/keys'
 import { usePlanner } from '../planner/store'
 import { DAY_NAMES } from '../planner/types'
 import '../styles/week.css'
+
+const completedCookSteps = new Map<string, ReadonlySet<string>>()
+const measuredUnits = new Set(['cup', 'lb', 'oz', 'tbsp', 'tsp', 'quart', 'gallon', 'g', 'kg', 'ml', 'l'])
+
+function roundCookQuantity(quantity: number, unit: string): number {
+  if (quantity <= 0) return quantity
+  const step = measuredUnits.has(normalizeUnit(unit)) ? 0.25 : 1
+  return Math.max(1, Math.round(quantity / step)) * step
+}
 
 function formatCookTimer(seconds: number): string {
   const hours = Math.floor(seconds / 3600)
@@ -18,7 +27,7 @@ export function CookPage() {
   const [searchParams] = useSearchParams()
   const { plan, getRecipe } = usePlanner()
   const heading = useRef<HTMLHeadingElement>(null)
-  const [completedSteps, setCompletedSteps] = useState(() => new Map<string, ReadonlySet<string>>())
+  const [completedSteps, setCompletedSteps] = useState(() => new Map(completedCookSteps))
   const requestedDay = searchParams.get('day')
   const planned = plan.nights.filter((night) => night.status === 'planned')
   const today = new Date().getDay()
@@ -75,12 +84,13 @@ export function CookPage() {
   const nextStep = phases.flatMap(({ steps }) => steps).find(({ id }) => !completed?.has(id))
 
   function setStepDone(stepId: string, done: boolean) {
-    setCompletedSteps((previous) => {
-      const next = new Set(previous.get(dinnerKey))
-      if (done) next.add(stepId)
-      else next.delete(stepId)
-      return new Map(previous).set(dinnerKey, next)
-    })
+    const next = new Set(completedCookSteps.get(dinnerKey))
+    if (done) next.add(stepId)
+    else next.delete(stepId)
+
+    if (next.size > 0) completedCookSteps.set(dinnerKey, next)
+    else completedCookSteps.delete(dinnerKey)
+    setCompletedSteps(new Map(completedCookSteps))
   }
 
   return (
@@ -141,9 +151,7 @@ export function CookPage() {
             <h2 id="cook-ingredients-title">Ingredients · for {servings}</h2>
             <dl className="cook-ingredients">
               {recipe.ingredients.map(({ id, name, quantity, unit }) => {
-                const amount = quantity === null || quantity === 0 || factor === 1
-                  ? quantity
-                  : roundQuantity(quantity * factor, unit)
+                const amount = quantity === null ? null : roundCookQuantity(quantity * factor, unit)
 
                 return (
                   <div key={id}>

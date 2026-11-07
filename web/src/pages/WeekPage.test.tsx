@@ -239,17 +239,17 @@ test('opens Cook for the requested night with scaled ingredients and display tim
   expect(screen.getByRole('heading', { name: 'Prep tonight' })).toBeTruthy()
   expect(screen.getByRole('heading', { name: 'Cook tonight' })).toBeTruthy()
   expect(screen.getByText('2½ lb')).toBeTruthy()
-  expect(screen.getByText('1¾ cups')).toBeTruthy()
+  expect(screen.getByText('1½ cups')).toBeTruthy()
   expect(screen.getByText('Timer 9:00')).toBeTruthy()
 })
 
-test('rounds scaled cans to whole amounts and displays long timers in hours', () => {
+test('rounds scaled cans to the nearest whole amount and displays long timers in hours', () => {
   renderPlanner()
   click('Wednesday')
   click('Increase servings')
   fireEvent.click(screen.getByRole('link', { name: 'Cook tonight →', description: 'Wednesday' }))
 
-  expect(screen.getByText('3 cans')).toBeTruthy()
+  expect(screen.getByText('2 cans')).toBeTruthy()
   expect(screen.getByText('Timer 6:00:00')).toBeTruthy()
 })
 
@@ -291,6 +291,21 @@ test('checks and advances Cook steps and preserves separate checklists when swit
   click('Swap Thursday and Wednesday')
   fireEvent.click(screen.getByRole('link', { name: 'View Wednesday' }))
   expect(checkbox(prepName).checked).toBe(false)
+})
+
+test('keeps a completed Cook step when leaving Cook and returning to the same dinner', () => {
+  renderPlanner('/cook?day=1')
+  const stepName = /Spread chicken, onion and broccoli on a sheet pan/
+  const step = () => screen.getByRole<HTMLInputElement>('checkbox', { name: stepName })
+  expect(step().checked).toBe(false)
+  fireEvent.click(step())
+
+  fireEvent.click(screen.getByRole('link', { name: '‹ This week' }))
+  click('Monday')
+  fireEvent.click(screen.getByRole('link', { name: 'Cook tonight →', description: 'Monday' }))
+
+  expect(step().checked).toBe(true)
+  fireEvent.click(step())
 })
 
 test('shows the cook empty state for an explicitly requested open night', () => {
