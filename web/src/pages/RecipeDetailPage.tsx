@@ -5,6 +5,7 @@ import { Magnet } from '../components/Magnet'
 import { focusPageHeading } from '../components/RouteFocus'
 import { StateCard } from '../components/StateCard'
 import { formatAmount, formatDuration, formatTimer, joinList } from '../planner/format'
+import { RecipeLoadNotice, useRemoteRecipes } from '../recipes/RemoteRecipes'
 import { usePlanner } from '../planner/store'
 import { DAY_NAMES } from '../planner/types'
 import '../styles/recipes.css'
@@ -28,6 +29,8 @@ export function RecipeDetailPage() {
   const { recipeId } = useParams()
   const planner = usePlanner()
   const recipe = planner.getRecipe(recipeId)
+  const remote = useRemoteRecipes()
+  if (!recipe && remote && (remote.loading || remote.error)) return <RecipeLoadNotice />
   if (!recipe) return <><RecipeNotFound /><PreviewNotice /></>
   return <RecipeDetail key={recipe.id} />
 }
@@ -35,6 +38,7 @@ export function RecipeDetailPage() {
 function RecipeDetail() {
   const { recipeId } = useParams()
   const planner = usePlanner()
+  const remote = useRemoteRecipes()
   const navigate = useNavigate()
   const location = useLocation()
   const recipe = planner.getRecipe(recipeId)
@@ -93,6 +97,7 @@ function RecipeDetail() {
         {status && <span>{status.text}</span>}
       </div>
     </FridgePanel>
+    {remote && <p className="preview-notice">{remote.records.some((record) => record.id === recipe?.id) ? 'Saved to account database' : 'Browser only · not uploaded'}</p>}
     <PreviewNotice />
     <FridgePanel className="content-panel rx-body">
       <section aria-labelledby="rx-ingredients">

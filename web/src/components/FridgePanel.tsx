@@ -1,4 +1,5 @@
 import type { ReactNode, Ref } from 'react'
+import { useRemoteRecipes } from '../recipes/RemoteRecipes'
 import { usePlanner } from '../planner/store'
 import { PawMagnet } from './Magnet'
 
@@ -17,10 +18,11 @@ export function PaperTitle({ words, headingRef }: { words: string[]; headingRef?
 }
 
 export function PreviewNotice() {
+  const remote = useRemoteRecipes()
   const { resetNotice, dismissResetNotice, persistenceStatus } = usePlanner()
   return (
     <>
-      <p className="preview-notice">{persistenceStatus === 'saved' ? 'Preview data · saved in this browser only' : 'Preview data · changes not saved'}</p>
+      <p className="preview-notice">{remote ? `Manual recipes save to your account database. Sample recipes, drafts and planning stay in this browser${persistenceStatus === 'saved' ? ' only.' : '; browser changes are not saved.'} Existing browser recipes are not automatically uploaded.` : persistenceStatus === 'saved' ? 'Preview data · saved in this browser only' : 'Preview data · changes not saved'}</p>
       {resetNotice && (
         <div className="reset-notice" role="status">
           <span>{resetNotice}</span>

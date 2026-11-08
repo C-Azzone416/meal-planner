@@ -1,6 +1,6 @@
 # Planner store
 
-The client-side data layer for the preview web app. Pages read and write **only** through `usePlanner()`; never import `data/sampleData.ts`. When a real API arrives, this module is the seam that gets replaced. Product rules live in [`docs/ux-decisions.md`](../../../docs/ux-decisions.md) (§0–§3).
+The client-side data layer for the preview web app. Planning pages read and write through `usePlanner()`; never import `data/sampleData.ts`. Manual recipe forms use the authenticated recipe API through `recipes/RemoteRecipes.tsx`. Hosted recipes are a read-through overlay passed to `PlannerProvider.externalRecipes`, not copied into browser recipe storage. Product rules live in [`docs/ux-decisions.md`](../../../docs/ux-decisions.md) (§0–§3).
 
 ```tsx
 const { plan, recipes, shopping, prep, summary, fillWeek, undoInfo, undo } = usePlanner()
@@ -71,3 +71,11 @@ Every action is deep-cloned (`structuredClone`) before it is applied, so mutatin
 - Plan my week orders extra nights: Mon/Wed/Thu if open, then the earliest open nights with the prep day (Sunday) last.
 - Pins travel with a meal when it is moved or swapped; skipped nights can’t be moved onto.
 - `sampleData.ts` is untouched and still feeds the pages that have not migrated yet; it will be deleted once they have.
+
+## Hosted manual recipes
+
+The authenticated app loads all account recipes from `/api/recipes` using cursor pagination. The auth service supplies a fresh account-matched bearer token; the server remains responsible for ownership and authorization. New recipe forms await a committed POST before navigation. Repeated clicks are blocked. An unconfirmed create locks its exact content and reuses its idempotency key for retries while the form remains open. Leaving the form after an unknown outcome discards that retry context, so check the recipe list before recreating it. Edits capture the opened revision and send it with PUT; a 409 keeps the form and offers the latest recipe in another tab instead of overwriting.
+
+Existing local recipes, sample data and local draft approvals are not uploaded. Editing one explicitly offers **Save a copy to account**, preserving the original browser record. The recipe list and details label each source. Planning, draft review and progress remain browser-only; hosted UUID references survive plan reload even before recipe content loads. Loading/failure notices warn that derived shopping and prep may be incomplete. Resetting preview data does not delete database recipes.
+
+Account switches remount both stores. Guards reject old token/read/write completions, including late 401 responses, so they cannot update or expire another account. Hosted content is never cached as local recipe data. Legacy unowned browser data remains preserved separately. `hosted-recipes.test.tsx` exercises the real authenticated app boundary with a fake recipe API; the original preview regression suites intentionally isolate that boundary.

@@ -38,6 +38,7 @@ type BearerAuthConfig struct {
 
 // UserIdentity is the verified caller identity placed on protected requests.
 type UserIdentity struct {
+	Issuer  string
 	Subject string
 	Email   string
 }
@@ -198,7 +199,7 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 	if claims.Subject == "" || !emailVerified || email == "" || !strings.EqualFold(email, strings.TrimSpace(config.AllowedEmail)) {
 		return UserIdentity{}, ErrInvalidBearer
 	}
-	return UserIdentity{Subject: claims.Subject, Email: email}, nil
+	return UserIdentity{Issuer: claims.Issuer, Subject: claims.Subject, Email: email}, nil
 }
 
 func audienceContains(raw json.RawMessage, expected string) bool {

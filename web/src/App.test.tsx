@@ -2,6 +2,15 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
+
+// Keep the existing browser-preview regression suite isolated. hosted-recipes.test.tsx
+// exercises the authenticated database boundary and durability/failure behavior.
+vi.mock('./recipes/RemoteRecipes', () => ({
+  AccountRecipes: ({ children }: { children: import('react').ReactNode }) => children,
+  useRemoteRecipes: () => null,
+  RecipeLoadNotice: () => null,
+}))
+
 import { AppRoutes } from './App'
 import { AuthProvider } from './auth/AuthProvider'
 import {

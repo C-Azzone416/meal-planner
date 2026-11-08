@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
+import { RecipeLoadNotice } from '../recipes/RemoteRecipes'
 import { OfflineBanner } from './OfflineBanner'
 import { PageErrorBoundary } from './PageErrorBoundary'
 import { usePlanner } from '../planner/store'
@@ -32,6 +33,7 @@ export function AppShell({ children, onSignOut }: { children: ReactNode; onSignO
   return (
     <div className="app-shell">
       <OfflineBanner />
+      {!pathname.startsWith('/recipes') && <RecipeLoadNotice />}
       {persistenceNotice && <div className="reset-notice" role="alert"><span>{persistenceNotice}</span><button type="button" onClick={retryPersistence}>Retry saving</button></div>}
       {legacyNotice && <p className="reset-notice" role="status">{legacyNotice}</p>}
       <header className="brand-row">

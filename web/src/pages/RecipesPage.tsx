@@ -4,6 +4,7 @@ import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePane
 import { Magnet } from '../components/Magnet'
 import { StateCard } from '../components/StateCard'
 import { formatDuration } from '../planner/format'
+import { RecipeLoadNotice, useRemoteRecipes } from '../recipes/RemoteRecipes'
 import { usePlanner } from '../planner/store'
 import { DAY_SHORT_NAMES, type DayIndex } from '../planner/types'
 import '../styles/recipes.css'
@@ -13,6 +14,7 @@ const filters = ['All', 'Low attention', 'Dump-and-go', 'Under 15 min', 'Vegetar
 const magnetColors = ['rust', 'green', 'gold', 'purple'] as const
 
 export function RecipesPage() {
+  const remote = useRemoteRecipes()
   const { recipes, plan } = usePlanner()
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('All')
@@ -51,11 +53,12 @@ export function RecipesPage() {
       <div className="chip-row" role="group" aria-label="Recipe filters">{filters.map((item) => <button type="button" aria-pressed={filter === item} className={filter === item ? 'chip chip--active rx-chip' : 'chip rx-chip'} onClick={() => setFilter(item)} key={item}>{item}</button>)}</div>
     </FridgePanel>
     <PreviewNotice />
+    <RecipeLoadNotice />
     <FridgePanel className="content-panel">
       <h2>All recipes · {visible.length}</h2>
       {recipes.length === 0 ? (
         <StateCard icon="📖" heading="No recipes yet" action={{ label: 'Add recipe', to: '/recipes/new' }}>
-          Add your first recipe, or approve a draft your agent sent over.
+          Add your first recipe. Agent drafts in this preview remain browser-only.
         </StateCard>
       ) : visible.length === 0 ? (
         <StateCard
@@ -72,6 +75,7 @@ export function RecipesPage() {
           return <li className="paper-card recipe-card rx-card" key={recipe.id}>
             <span className="card-magnet"><Magnet color={magnetColors[index % magnetColors.length]}>{recipe.icon}</Magnet></span>
             {days && <p className="rust-script">on {days.map((day) => DAY_SHORT_NAMES[day]).join(', ')}</p>}
+            {remote && <p>{remote.records.some((record) => record.id === recipe.id) ? 'Saved to account database' : 'Browser only · not uploaded'}</p>}
             <h3><Link className="rx-card-link" to={recipePath(recipe.id)}>{recipe.title}</Link></h3>
             <p>{recipe.activeMinutes} min hands-on · {formatDuration(recipe.totalMinutes)} total</p>
             <div className="tag-list">{recipe.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>

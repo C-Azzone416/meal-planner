@@ -1,3 +1,4 @@
+import { useRemoteRecipes } from '../recipes/RemoteRecipes'
 import { useSyncExternalStore } from 'react'
 import '../styles/states.css'
 
@@ -18,6 +19,7 @@ export function useOnlineStatus(): boolean {
 /** Slim banner shown only while offline. Preview data is local, so actions still work (§4). */
 export function OfflineBanner() {
   const online = useOnlineStatus()
+  const remote = useRemoteRecipes()
   if (online) return null
-  return <p className="offline-banner" role="status">You’re offline. This app uses browser-only storage; check the save status before leaving.</p>
+  return <p className="offline-banner" role="status">{remote ? 'You’re offline. Database recipe saves need a connection. Keep unconfirmed edits open and retry when connected; planning remains browser-only.' : 'You’re offline. This app uses browser-only storage; check the save status before leaving.'}</p>
 }

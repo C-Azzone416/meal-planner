@@ -161,13 +161,17 @@ export interface PlannerProviderProps {
   accountId?: string
   /** Default random source for fillWeek/proposeSurprise. Defaults to Math.random. */
   random?: Rng
+  /** Hosted records are a read-through overlay, never written into browser recipe storage. */
+  externalRecipes?: Recipe[]
 }
 
 export function PlannerProvider(props: PlannerProviderProps) {
   return <PlannerStore key={props.accountId ?? 'test-preview'} {...props} />
 }
 
-function PlannerStore({ children, storage, accountId, random = Math.random }: PlannerProviderProps) {
+const NO_EXTERNAL_RECIPES: Recipe[] = []
+
+function PlannerStore({ children, storage, accountId, random = Math.random, externalRecipes = NO_EXTERNAL_RECIPES }: PlannerProviderProps) {
   const [store] = useState<StorageLike | null>(() => (storage === undefined ? defaultStorage() : storage))
   const storageKey = accountId === undefined ? STORAGE_KEY : accountStorageKey(accountId)
   const [boot] = useState(() => loadState(store, storageKey))
@@ -177,7 +181,18 @@ function PlannerStore({ children, storage, accountId, random = Math.random }: Pl
   const [persistenceStatus, setPersistenceStatus] = useState<'saved' | 'unsaved'>('unsaved')
   const [saveAttempt, setSaveAttempt] = useState(0)
   const [readBlocked, setReadBlocked] = useState(boot.readFailed ?? false)
-  const [state, dispatch] = useReducer(reducer, boot.state)
+  const [localState, dispatch] = useReducer((local: PlannerState, action: PlannerAction) => {
+    if (!externalRecipes.length) return reducer(local, action)
+    const remoteIds = new Set(externalRecipes.map((recipe) => recipe.id))
+    const next = reducer({ ...local, recipes: [...local.recipes.filter((recipe) => !remoteIds.has(recipe.id)), ...externalRecipes] }, action)
+    const localRecipes = next.recipes.filter((recipe) => !remoteIds.has(recipe.id))
+    // Preserve legacy browser records even if an old custom id happens to equal a hosted UUID.
+    localRecipes.push(...local.recipes.filter((recipe) => remoteIds.has(recipe.id)))
+    return { ...next, recipes: localRecipes }
+
+  }, boot.state)
+  const combinedRecipes = useMemo(() => externalRecipes.length ? [...localState.recipes.filter((recipe) => !externalRecipes.some((remote) => remote.id === recipe.id)), ...externalRecipes] : localState.recipes, [localState.recipes, externalRecipes])
+  const state = useMemo(() => ({ ...localState, recipes: combinedRecipes }), [localState, combinedRecipes])
   const [resetNotice, setResetNotice] = useState<string | null>(boot.resetNotice)
   const [cookProgressScope, setCookProgressScope] = useState<object>(() => ({}))
 
@@ -196,12 +211,12 @@ function PlannerStore({ children, storage, accountId, random = Math.random }: Pl
         if (store?.getItem(storageKey) === null) blocked = false
       } catch { /* keep blocked */ }
     }
-    const saved = !blocked && saveState(store, { recipes, drafts, plan, progress, pantryLow, houseRules }, storageKey)
+    const saved = !blocked && saveState(store, { recipes: localState.recipes, drafts, plan, progress, pantryLow, houseRules }, storageKey)
     // Report the synchronous external storage result, rather than optimistic save claims.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setReadBlocked(blocked)
     setPersistenceStatus(saved ? 'saved' : 'unsaved')
-  }, [store, storageKey, recipes, drafts, plan, progress, pantryLow, houseRules, saveAttempt, readBlocked])
+  }, [store, storageKey, localState.recipes, drafts, plan, progress, pantryLow, houseRules, saveAttempt, readBlocked])
   const persistenceNotice = persistenceStatus === 'saved' ? null : readBlocked
     ? 'Browser data could not be read. Changes are not saved. Enable browser storage and reload to recover existing data; unsaved changes will be lost.'
     : 'Changes are not saved. Browser storage may be disabled or full. Keep this page open and retry after freeing space or enabling storage.'

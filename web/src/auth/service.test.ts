@@ -110,6 +110,8 @@ test('password sign-in authorizes with the JWT injected into a fresh real-adapte
     email: 'allowed@example.test',
   })
   expect(authorization).toBe('Bearer signed-api-jwt')
+  await expect(service!.getAccessToken!('user-test')).resolves.toBe('signed-api-jwt')
+  await expect(service!.getAccessToken!('other-account')).resolves.toBeNull()
   expect(providerRequests.some((url) => url.endsWith('/get-session'))).toBe(true)
   expect(providerRequests.some((url) => url.endsWith('/revoke-other-sessions'))).toBe(false)
   expect(providerRequests.some((url) => url.endsWith('/token'))).toBe(false)

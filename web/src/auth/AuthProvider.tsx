@@ -25,6 +25,7 @@ interface AuthContextValue {
   clearNotice(): void
   /** Call when any request reports the session is gone (e.g. a future API 401). */
   expireSession(): void
+  getAccessToken(expectedAccountId: string): Promise<string | null>
   signInWithPassword(email: string, password: string): Promise<void>
   sendPasswordResetCode(email: string): Promise<void>
   setPassword(email: string, code: string, password: string): Promise<void>
@@ -145,6 +146,12 @@ export function AuthProvider({
     setStatus((current) => (current === 'signed-in' ? 'signed-out' : current))
   }, [])
 
+  const getAccessToken = useCallback(async (expectedAccountId: string) => {
+    if (status !== 'signed-in' || user?.id !== expectedAccountId) return null
+    if (!service?.getAccessToken) throw new Error('Recipe access is unavailable.')
+    return service.getAccessToken(expectedAccountId)
+  }, [service, status, user?.id])
+
   const clearNotice = useCallback(() => setNotice(null), [])
 
   // While signed in, notice a session that ended elsewhere (other tab, expiry, revoked) and send the
@@ -190,6 +197,7 @@ export function AuthProvider({
       notice,
       clearNotice,
       expireSession,
+      getAccessToken,
       signInWithPassword,
       sendPasswordResetCode,
       setPassword,
@@ -201,6 +209,7 @@ export function AuthProvider({
       notice,
       clearNotice,
       expireSession,
+      getAccessToken,
       retry,
       sendPasswordResetCode,
       setPassword,
