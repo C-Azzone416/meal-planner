@@ -50,3 +50,26 @@ test('an account change while acquiring a token prevents sending the request', a
   await expect(request).rejects.toThrow('account changed')
   expect(fetcher).not.toHaveBeenCalled()
 })
+
+test('follows short pages: many one-item pages with non-null cursors are all read, in order', async () => {
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(json({ recipes: [{ id: 'a' }], nextCursor: 'a' }))
+    .mockResolvedValueOnce(json({ recipes: [{ id: 'b' }, { id: 'c' }], nextCursor: 'c' }))
+    .mockResolvedValueOnce(json({ recipes: [{ id: 'd' }], nextCursor: 'd' }))
+    .mockResolvedValueOnce(json({ recipes: [{ id: 'e' }], nextCursor: null }))
+  const client = recipeClient(async () => 'token', vi.fn(), fetcher)
+  expect((await client.list()).map((recipe) => recipe.id)).toEqual(['a', 'b', 'c', 'd', 'e'])
+  expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+    '/api/recipes?limit=100',
+    '/api/recipes?limit=100&after=a',
+    '/api/recipes?limit=100&after=c',
+    '/api/recipes?limit=100&after=d',
+  ])
+})
+
+test('a repeated cursor is rejected instead of looping forever', async () => {
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(json({ recipes: [{ id: 'a' }], nextCursor: 'a' }))
+    .mockResolvedValueOnce(json({ recipes: [{ id: 'b' }], nextCursor: 'a' }))
+  await expect(recipeClient(async () => 'token', vi.fn(), fetcher).list()).rejects.toThrow('Invalid recipe pagination')
+})

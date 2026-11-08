@@ -158,17 +158,14 @@ func RecipesHandler(repository RecipeRepository) http.Handler {
 				recipeRepositoryError(w, err)
 				return
 			}
-			if recipes == nil {
-				recipes = []RecipeEnvelope{}
+			body, err := recipePageJSON(recipes, next, maxRecipeListResponseBytes)
+			if err != nil {
+				recipeError(w, 503, "unavailable", "Recipe storage is unavailable.")
+				return
 			}
-			var cursor *string
-			if next != "" {
-				cursor = &next
-			}
-			recipeJSON(w, 200, struct {
-				Recipes    []RecipeEnvelope `json:"recipes"`
-				NextCursor *string          `json:"nextCursor"`
-			}{recipes, cursor})
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			_, _ = w.Write(body)
 		default:
 			media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 			if err != nil || media != "application/json" {
@@ -235,6 +232,91 @@ func recipeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// maxRecipeListResponseBytes bounds one list response, measured on the exact bytes written (recipes, commas,
+// envelope, nextCursor and the encoder's trailing newline). Vercel Functions fail responses over 4.5 MB
+// (FUNCTION_PAYLOAD_TOO_LARGE), and the 256 KiB request cap does NOT bound the encoded size: encoding/json
+// writes <, > and & as 6-byte escapes, so one valid recipe can encode to about 6x its request size (~1.5 MB).
+// 3.5 MB leaves about 1 MB of headroom, and a single worst-case recipe fits many times over (see tests).
+const maxRecipeListResponseBytes = 3_500_000
+
+// recipeEncode is the one encoder used for every recipe response, so sizes are measured with the settings
+// that are actually written (json.Encoder defaults: HTML escaping on, trailing newline).
+func recipeEncode(v any) ([]byte, error) {
+	var b bytes.Buffer
+	if err := json.NewEncoder(&b).Encode(v); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+// recipePageJSON builds the list response: whole recipes only, in the order given, as many as fit in budget
+// bytes, but always at least one so a client can make progress. When it has to stop early (or the repository
+// reports more rows), nextCursor is the ID of the last INCLUDED recipe; the store's cursor means "after this
+// ID" in ID order, so the next request continues with no loss and no duplicates. A page may therefore hold
+// fewer than `limit` items while nextCursor is non-null.
+func recipePageJSON(recipes []RecipeEnvelope, next string, budget int) ([]byte, error) {
+	const head = `{"recipes":[`
+	tail := func(cursor string) (string, error) {
+		if cursor == "" {
+			return "],\"nextCursor\":null}\n", nil
+		}
+		encoded, err := recipeEncode(cursor)
+		if err != nil {
+			return "", err
+		}
+		return "],\"nextCursor\":" + string(encoded[:len(encoded)-1]) + "}\n", nil
+	}
+	items := make([][]byte, 0, len(recipes))
+	used := len(head)
+	finalTail := ""
+	for i, recipe := range recipes {
+		encoded, err := recipeEncode(recipe)
+		if err != nil {
+			return nil, err
+		}
+		encoded = encoded[:len(encoded)-1] // the encoder's newline is not part of the array element
+		cursor := next
+		if i < len(recipes)-1 {
+			cursor = recipe.ID // stopping here would continue right after this recipe
+		}
+		t, err := tail(cursor)
+		if err != nil {
+			return nil, err
+		}
+		size := used + len(encoded) + len(t)
+		if i > 0 {
+			size++ // comma
+		}
+		if i > 0 && size > budget {
+			// Recipe i does not fit: stop after the previous one and continue from it.
+			prev := recipes[i-1].ID
+			if finalTail, err = tail(prev); err != nil {
+				return nil, err
+			}
+			break
+		}
+		used += len(encoded)
+		if i > 0 {
+			used++
+		}
+		items = append(items, encoded)
+		finalTail = t
+	}
+	if len(items) == 0 {
+		finalTail, _ = tail(next)
+	}
+	out := make([]byte, 0, used+len(finalTail))
+	out = append(out, head...)
+	for i, item := range items {
+		if i > 0 {
+			out = append(out, ',')
+		}
+		out = append(out, item...)
+	}
+	out = append(out, finalTail...)
+	return out, nil
 }
 func recipeError(w http.ResponseWriter, status int, code, message string) {
 	recipeJSON(w, status, struct {

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -485,5 +486,43 @@ func TestRecipePostgresTransactionLocalTimeouts(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// The real store's ID-ordered "after" cursor must continue exactly after the last recipe a byte-bounded page
+// included: nothing lost, nothing repeated, every page under the response budget.
+func TestRecipePostgresByteBoundedListPagesContinueWithoutLossOrDuplicates(t *testing.T) {
+	s, _ := recipeTestDatabase(t)
+	ctx := context.Background()
+	owner := RecipeOwner{testIssuer, "account-a"}
+	units := []string{"<", "&", "🍕", "<", " ", "日", ">", "<", "a", "<", "&", "<"}
+	want := map[string]string{}
+	for i, unit := range units {
+		content := maxContent(t, unit)
+		content.Title = fmt.Sprintf("Stress %02d %s", i, unit)
+		created, _, e := s.Create(ctx, owner, fmt.Sprintf("stress-%02d", i), content)
+		if e != nil {
+			t.Fatal(e)
+		}
+		want[created.ID] = content.Title
+	}
+	ids, sizes, counts := walk(t, s, 100)
+	if len(ids) != len(units) || !sort.StringsAreSorted(ids) {
+		t.Fatalf("got %d ids (sorted=%v), want %d in ID order", len(ids), sort.StringsAreSorted(ids), len(units))
+	}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if seen[id] || want[id] == "" {
+			t.Fatalf("duplicate or unknown id %s", id)
+		}
+		seen[id] = true
+	}
+	for i, size := range sizes {
+		if size > maxRecipeListResponseBytes || size >= vercelResponseLimit {
+			t.Fatalf("page %d is %d bytes", i, size)
+		}
+	}
+	if len(sizes) < 3 {
+		t.Fatalf("expected the oversized list to span several pages, got %v", counts)
 	}
 }
