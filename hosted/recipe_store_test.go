@@ -14,12 +14,17 @@ func TestRecipeDatabaseURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	u, _ := url.Parse(got)
-	for k, v := range map[string]string{"sslmode": "verify-full", "connect_timeout": "5", "statement_timeout": "10000", "lock_timeout": "5000"} {
+	for k, v := range map[string]string{"sslmode": "verify-full", "connect_timeout": "5", "application_name": "meal-planner-recipes"} {
 		if u.Query().Get(k) != v {
 			t.Errorf("%s not bounded", k)
 		}
 	}
-	for _, bad := range []string{"", "host=localhost user=test", "https://user@host/db?sslmode=verify-full", "postgres://host/db?sslmode=verify-full", "postgres://user@host/?sslmode=verify-full", strings.Replace(good, "verify-full", "require", 1), strings.Replace(good, "verify-full", "disable", 1), good + "&sslmode=disable", good + "&host=localhost", good + "&channel_binding=require", good + "&password=other", good + "#fragment", good + "&connect_timeout=0", good + "&sslrootcert=%zz"} {
+	for _, key := range []string{"statement_timeout", "lock_timeout", "options"} {
+		if u.Query().Has(key) {
+			t.Fatalf("pooler-incompatible startup setting: %s", key)
+		}
+	}
+	for _, bad := range []string{"", "host=localhost user=test", "https://user@host/db?sslmode=verify-full", "postgres://host/db?sslmode=verify-full", "postgres://user@host/?sslmode=verify-full", strings.Replace(good, "verify-full", "require", 1), strings.Replace(good, "verify-full", "disable", 1), good + "&sslmode=disable", good + "&host=localhost", good + "&statement_timeout=10000", good + "&lock_timeout=5000", good + "&options=-c%20statement_timeout%3D10000", good + "&channel_binding=require", good + "&password=other", good + "#fragment", good + "&connect_timeout=0", good + "&sslrootcert=%zz"} {
 		t.Run(bad, func(t *testing.T) {
 			if _, e := recipeDatabaseURL(bad); e == nil {
 				t.Fatal("accepted unsafe connection settings")

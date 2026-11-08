@@ -438,3 +438,52 @@ func TestRecipePostgresLeastPrivilegeRuntime(t *testing.T) {
 		t.Fatalf("denied actions damaged saved data: %v", err)
 	}
 }
+
+func TestRecipePostgresTransactionLocalTimeouts(t *testing.T) {
+	s, _ := recipeTestDatabase(t)
+	ctx := context.Background()
+	// Reuse one backend connection to expose any settings leaked by commit/rollback.
+	s.db.SetMaxOpenConns(1)
+	s.db.SetMaxIdleConns(1)
+	const settings = `SELECT current_setting('statement_timeout'), current_setting('lock_timeout'), current_setting('transaction_read_only')`
+	var baselineStatement, baselineLock, baselineReadOnly string
+	if err := s.db.QueryRowContext(ctx, settings).Scan(&baselineStatement, &baselineLock, &baselineReadOnly); err != nil {
+		t.Fatal(err)
+	}
+	for _, readOnly := range []bool{false, true} {
+		for _, commit := range []bool{false, true} {
+			t.Run(fmt.Sprintf("readOnly=%v/commit=%v", readOnly, commit), func(t *testing.T) {
+				tx, err := s.beginRecipeTx(ctx, readOnly)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback()
+				var statement, lock, read string
+				if err = tx.QueryRowContext(ctx, settings).Scan(&statement, &lock, &read); err != nil {
+					t.Fatal(err)
+				}
+				expectedRead := "off"
+				if readOnly {
+					expectedRead = "on"
+				}
+				if statement != "10s" || lock != "5s" || read != expectedRead {
+					t.Fatalf("transaction bounds: statement=%s lock=%s readOnly=%s", statement, lock, read)
+				}
+				if commit {
+					err = tx.Commit()
+				} else {
+					err = tx.Rollback()
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = s.db.QueryRowContext(ctx, settings).Scan(&statement, &lock, &read); err != nil {
+					t.Fatal(err)
+				}
+				if statement != baselineStatement || lock != baselineLock || read != baselineReadOnly {
+					t.Fatalf("transaction settings leaked: statement=%s lock=%s readOnly=%s", statement, lock, read)
+				}
+			})
+		}
+	}
+}

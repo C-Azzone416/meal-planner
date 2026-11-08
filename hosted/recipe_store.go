@@ -52,8 +52,6 @@ func recipeDatabaseURL(raw string) (string, error) {
 		}
 	}
 	q.Set("connect_timeout", "5")
-	q.Set("statement_timeout", "10000")
-	q.Set("lock_timeout", "5000")
 	q.Set("application_name", "meal-planner-recipes")
 	u.RawQuery = q.Encode()
 	return u.String(), nil
@@ -62,6 +60,22 @@ func recipeDatabaseURL(raw string) (string, error) {
 // NewPostgresRecipeStore accepts an already configured pool, primarily for tests.
 func NewPostgresRecipeStore(db *sql.DB) *PostgresRecipeStore { return &PostgresRecipeStore{db: db} }
 func (s *PostgresRecipeStore) Close() error                  { return s.db.Close() }
+
+// beginRecipeTx bounds every operation without sending unsupported startup
+// parameters to Neon/PgBouncer. SET LOCAL is transaction-scoped, so settings
+// cannot leak to another request when the backend connection returns to a pool.
+func (s *PostgresRecipeStore) beginRecipeTx(ctx context.Context, readOnly bool) (*sql.Tx, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: readOnly})
+	if err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `SET LOCAL statement_timeout = '10s'; SET LOCAL lock_timeout = '5s'`); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	return tx, nil
+}
+
 func recipePayload(c RecipeContent) ([]byte, []byte, error) {
 	b, e := json.Marshal(c)
 	if e != nil {
@@ -123,7 +137,7 @@ func (s *PostgresRecipeStore) Create(ctx context.Context, o RecipeOwner, key str
 	if e != nil {
 		return z, false, e
 	}
-	tx, e := s.db.BeginTx(ctx, nil)
+	tx, e := s.beginRecipeTx(ctx, false)
 	if e != nil {
 		return z, false, e
 	}
@@ -175,7 +189,19 @@ func (s *PostgresRecipeStore) Get(ctx context.Context, o RecipeOwner, id string)
 	if !validRecipeOwner(o) || !validRecipeUUID(id) {
 		return RecipeEnvelope{}, ErrRecipeNotFound
 	}
-	return scanRecipe(s.db.QueryRowContext(ctx, `SELECT `+recipeColumns+` FROM meal_planner.recipes WHERE owner_issuer=$1 AND owner_subject=$2 AND id=$3 AND status='approved' AND origin='manual'`, o.Issuer, o.Subject, id))
+	tx, err := s.beginRecipeTx(ctx, true)
+	if err != nil {
+		return RecipeEnvelope{}, err
+	}
+	defer tx.Rollback()
+	result, err := scanRecipe(tx.QueryRowContext(ctx, `SELECT `+recipeColumns+` FROM meal_planner.recipes WHERE owner_issuer=$1 AND owner_subject=$2 AND id=$3 AND status='approved' AND origin='manual'`, o.Issuer, o.Subject, id))
+	if err != nil {
+		return RecipeEnvelope{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return RecipeEnvelope{}, err
+	}
+	return result, nil
 }
 func (s *PostgresRecipeStore) List(ctx context.Context, o RecipeOwner, after string, limit int) ([]RecipeEnvelope, string, error) {
 	if !validRecipeOwner(o) || limit < 1 || limit > 100 || (after != "" && !validRecipeUUID(after)) {
@@ -189,7 +215,12 @@ func (s *PostgresRecipeStore) List(ctx context.Context, o RecipeOwner, after str
 		args = append(args, after)
 	}
 	q += ` ORDER BY id LIMIT $3`
-	rows, e := s.db.QueryContext(ctx, q, args...)
+	tx, e := s.beginRecipeTx(ctx, true)
+	if e != nil {
+		return nil, "", e
+	}
+	defer tx.Rollback()
+	rows, e := tx.QueryContext(ctx, q, args...)
 	if e != nil {
 		return nil, "", e
 	}
@@ -203,6 +234,12 @@ func (s *PostgresRecipeStore) List(ctx context.Context, o RecipeOwner, after str
 		out = append(out, r)
 	}
 	if e = rows.Err(); e != nil {
+		return nil, "", e
+	}
+	if e = rows.Close(); e != nil {
+		return nil, "", e
+	}
+	if e = tx.Commit(); e != nil {
 		return nil, "", e
 	}
 	next := ""
@@ -227,7 +264,7 @@ func (s *PostgresRecipeStore) Update(ctx context.Context, o RecipeOwner, id stri
 	if e != nil {
 		return z, e
 	}
-	tx, e := s.db.BeginTx(ctx, nil)
+	tx, e := s.beginRecipeTx(ctx, false)
 	if e != nil {
 		return z, e
 	}
