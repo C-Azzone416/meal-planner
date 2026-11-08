@@ -1,0 +1,204 @@
+name: Framebriar reviewed CI (informational)
+run-name: Reviewed PR ${{ inputs.pr }} at ${{ inputs.sha }}
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Same-repository open PR number
+        type: string
+        required: true
+      sha:
+        description: Exact current PR head SHA approved for private SDK access
+        type: string
+        required: true
+      workflow_sha:
+        description: Exact trusted main workflow commit reviewed by the owner
+        type: string
+        required: true
+permissions: {}
+concurrency:
+  group: framebriar-reviewed-${{ inputs.pr }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+env:
+  TARGET_SHA: ${{ inputs.sha }}
+  PR_NUMBER: ${{ inputs.pr }}
+  APPROVED_WORKFLOW_SHA: ${{ inputs.workflow_sha }}
+jobs:
+  validate:
+    name: Validate owner and immutable source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    outputs:
+      base_sha: ${{ steps.source.outputs.base_sha }}
+      sha: ${{ steps.source.outputs.sha }}
+      workflow_sha: ${{ steps.source.outputs.workflow_sha }}
+      package_sha256: ${{ steps.source.outputs.package_sha256 }}
+      lock_sha256: ${{ steps.source.outputs.lock_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: trusted
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+      - name: Verify exact source and existing owner environment policy
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node trusted/tools/framebriar-ci/verify.mjs
+
+  frontend:
+    name: Owner-approved frontend checks
+    needs: validate
+    environment: framebriar-ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    steps:
+      # Trusted workflow code only. Target source is not checked out until after install.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: trusted
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+      - name: Revalidate after owner approval and prepare exact manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_BASE_SHA: ${{ needs.validate.outputs.base_sha }}
+          EXPECTED_PACKAGE_HASH: ${{ needs.validate.outputs.package_sha256 }}
+          EXPECTED_LOCK_HASH: ${{ needs.validate.outputs.lock_sha256 }}
+          INSTALL_ROOT: ${{ runner.temp }}/framebriar-install
+        run: node trusted/tools/framebriar-ci/verify.mjs
+      - name: Isolated registry install only
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.FRAMEBRIAR_PACKAGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ -n "$NODE_AUTH_TOKEN" ]] || { echo '::error::Approved environment package reader is missing'; exit 1; }
+          root="$RUNNER_TEMP/framebriar-install"
+          trap 'rm -rf "$root/cache" "$root/home" "$root/project/.npmrc" "$root/user.npmrc" "$root/global.npmrc"' EXIT
+          mkdir -p "$root/home"
+          # Keep the token placeholder literal for npm; do not write its value.
+          # shellcheck disable=SC2016
+          printf '%s\n' '@masra91:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$root/project/.npmrc"
+          : > "$root/user.npmrc"
+          : > "$root/global.npmrc"
+          cd "$root/project"
+          env -i PATH="$PATH" HOME="$root/home" NODE_AUTH_TOKEN="$NODE_AUTH_TOKEN" \
+            npm ci --ignore-scripts --no-audit --no-fund --loglevel=error --logs-max=0 \
+              --registry=https://registry.npmjs.org --userconfig="$root/user.npmrc" \
+              --globalconfig="$root/global.npmrc" --cache="$root/cache"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+          path: target
+      - name: Verify checkout and manifests before target execution
+        env:
+          EXPECTED_SHA: ${{ needs.validate.outputs.sha }}
+          EXPECTED_BASE_SHA: ${{ needs.validate.outputs.base_sha }}
+          EXPECTED_PACKAGE_HASH: ${{ needs.validate.outputs.package_sha256 }}
+          EXPECTED_LOCK_HASH: ${{ needs.validate.outputs.lock_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$(git -C target rev-parse HEAD)" == "$EXPECTED_SHA" ]] || exit 1
+          [[ ! -L target/web && ! -L target/web/package.json && ! -L target/web/package-lock.json ]] || exit 1
+          [[ "$(sha256sum target/web/package.json | cut -d' ' -f1)" == "$EXPECTED_PACKAGE_HASH" ]] || exit 1
+          [[ "$(sha256sum target/web/package-lock.json | cut -d' ' -f1)" == "$EXPECTED_LOCK_HASH" ]] || exit 1
+          [[ ! -e target/web/node_modules && ! -L target/web/node_modules ]] || exit 1
+          mv "$RUNNER_TEMP/framebriar-install/project/node_modules" target/web/node_modules
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26'
+          cache: false
+      - name: Validate credential-free lifecycle requirements
+        working-directory: target
+        run: bash tools/feedback/postinstall.sh
+      - name: Frontend static and unit checks
+        working-directory: target
+        run: |
+          set -euo pipefail
+          npm run --prefix web lint
+          npm run --prefix web typecheck
+          npm run --prefix web test
+          node --test tools/feedback/*.test.mjs
+      - name: Prepare disposable browser fixtures
+        working-directory: target/web
+        run: |
+          set -euo pipefail
+          command -v pg_config >/dev/null || { echo '::error::Local PostgreSQL tools missing'; exit 1; }
+          bin=$(pg_config --bindir)
+          for tool in initdb pg_ctl postgres; do [[ -x "$bin/$tool" ]] || exit 1; done
+          printf '%s\n' "$bin" >> "$GITHUB_PATH"
+          npx --no-install playwright install --with-deps chromium webkit
+      - name: Real browser and target artifact checks
+        working-directory: target
+        env:
+          FRAMEBRIAR_BUILD_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          npm run --prefix web test:browser
+          bash tools/feedback/check-targets.sh
+      # No output/artifact upload from this target-controlled runner.
+
+  evidence:
+    name: Publish informational exact-SHA evidence
+    needs: [validate, frontend]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.frontend.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: trusted
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+      - name: Reject stale source before publishing evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_BASE_SHA: ${{ needs.validate.outputs.base_sha }}
+          EXPECTED_PACKAGE_HASH: ${{ needs.validate.outputs.package_sha256 }}
+          EXPECTED_LOCK_HASH: ${{ needs.validate.outputs.lock_sha256 }}
+        run: node trusted/tools/framebriar-ci/verify.mjs
+      - name: Report trusted run evidence without replacing mandatory CI
+        env:
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          SOURCE_SHA: ${{ needs.validate.outputs.sha }}
+          WORKFLOW_SHA: ${{ needs.validate.outputs.workflow_sha }}
+          PACKAGE_HASH: ${{ needs.validate.outputs.package_sha256 }}
+          LOCK_HASH: ${{ needs.validate.outputs.lock_sha256 }}
+          BASE_SHA: ${{ needs.validate.outputs.base_sha }}
+          EVIDENCE_DIR: ${{ runner.temp }}/framebriar-evidence
+        run: node trusted/tools/framebriar-ci/report.mjs
+      # Immutable upload: no overwrite. A name collision fails the whole run.
+      - name: Publish clean non-secret evidence only
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: framebriar-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/framebriar-evidence/evidence.json
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: false
