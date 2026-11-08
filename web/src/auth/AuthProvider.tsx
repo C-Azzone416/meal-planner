@@ -127,10 +127,16 @@ export function AuthProvider({
   )
 
   const signOut = useCallback(async () => {
-    if (service) await service.signOut()
+    // Hide account data immediately, including when the remote sign-out fails.
     setUser(null)
-    setNotice(service ? SIGNED_OUT_NOTICE : null)
+    setNotice(null)
+    setMessage(null)
     setStatus(service ? 'signed-out' : 'unavailable')
+    if (service) {
+      try { await service.signOut(); setNotice(SIGNED_OUT_NOTICE) } catch {
+        setMessage('Account data is hidden for now. Remote sign-out could not be confirmed, so reloading may reopen your session. Reconnect, sign in again, then sign out to retry.')
+      }
+    }
   }, [service])
 
   const expireSession = useCallback(() => {
@@ -150,7 +156,7 @@ export function AuthProvider({
       service
         .getSession()
         .then((session) => {
-          if (active && (!session || !session.emailVerified)) expireSession()
+          if (active && (!session || !session.emailVerified || session.id !== user?.id)) expireSession()
         })
         .catch(() => {
           // A failed check (offline, server hiccup) is not proof the session ended: stay signed in.
@@ -168,7 +174,7 @@ export function AuthProvider({
       window.removeEventListener('focus', check)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [expireSession, service, status])
+  }, [expireSession, service, status, user?.id])
 
   const retry = useCallback(() => {
     setStatus('loading')

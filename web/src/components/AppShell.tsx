@@ -28,9 +28,12 @@ function MainLinks({ mobile = false }: { mobile?: boolean }) {
 
 export function AppShell({ children, onSignOut }: { children: ReactNode; onSignOut?: () => void }) {
   const { pathname } = useLocation()
+  const { persistenceNotice, legacyNotice, retryPersistence } = usePlanner()
   return (
     <div className="app-shell">
       <OfflineBanner />
+      {persistenceNotice && <div className="reset-notice" role="alert"><span>{persistenceNotice}</span><button type="button" onClick={retryPersistence}>Retry saving</button></div>}
+      {legacyNotice && <p className="reset-notice" role="status">{legacyNotice}</p>}
       <header className="brand-row">
         <NavLink to="/week" className="wordmark">dinner, sorted.</NavLink>
         <nav className="desktop-nav" aria-label="Main navigation"><MainLinks /></nav>

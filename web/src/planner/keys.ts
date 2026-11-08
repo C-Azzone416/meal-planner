@@ -46,7 +46,7 @@ const UNIT_ALIASES: Record<string, string> = {
 /** Canonical unit: case-insensitive, alias-merged ("Cups", "lbs", "tablespoons" → cup, lb, tbsp), singularised otherwise. */
 export function normalizeUnit(unit: string): string {
   const base = unit.normalize('NFKC').toLocaleLowerCase('en-US').trim().replace(/\.$/, '').replace(/\s+/g, ' ')
-  return UNIT_ALIASES[base] ?? singularize(base)
+  return Object.hasOwn(UNIT_ALIASES, base) ? UNIT_ALIASES[base] : singularize(base)
 }
 
 /** A lone UTF-16 surrogate (half of an emoji, say). `encodeURIComponent` throws on these. With the `u` flag this matches only unpaired ones. */

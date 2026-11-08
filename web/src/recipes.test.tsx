@@ -5,9 +5,10 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { AppRoutes } from './App'
 import { AuthProvider } from './auth/AuthProvider'
 import type { AuthService, AuthUser } from './auth/service'
-import { STORAGE_KEY, type StorageLike, toPersisted } from './planner/persist'
+import { accountStorageKey, type StorageLike, toPersisted } from './planner/persist'
 import { createSeedState } from './planner/seed'
-import { PlannerProvider } from './planner/store'
+
+const STORAGE_KEY = accountStorageKey('user-test')
 
 const user: AuthUser = { id: 'user-test', email: 'allowed@example.test', emailVerified: true }
 
@@ -27,15 +28,13 @@ function memoryStorage(initial?: string): StorageLike & { data: Map<string, stri
   return { data, getItem: (key) => data.get(key) ?? null, setItem: (key, value) => void data.set(key, value), removeItem: (key) => void data.delete(key) }
 }
 
-function renderApp(path: string, service = makeService(), storage: StorageLike | null = null) {
+function renderApp(path: string, service = makeService(), storage: StorageLike | null = memoryStorage()) {
   const router = createMemoryRouter(
     [{
       path: '*',
       element: (
         <AuthProvider serviceFactory={() => Promise.resolve(service)}>
-          <PlannerProvider storage={storage}>
-            <AppRoutes />
-          </PlannerProvider>
+          <AppRoutes plannerStorage={storage} />
         </AuthProvider>
       ),
     }],
@@ -45,7 +44,7 @@ function renderApp(path: string, service = makeService(), storage: StorageLike |
   return { router, service }
 }
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); localStorage.clear() })
 
 const change = (label: string | RegExp, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } })
 

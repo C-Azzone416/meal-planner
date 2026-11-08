@@ -3,10 +3,10 @@ import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePane
 import { StateCard } from '../components/StateCard'
 import type { ShoppingRow } from '../planner/derive'
 import { usePlanner } from '../planner/store'
-import { DAY_NAMES } from '../planner/types'
+import { DAY_NAMES, type DeepReadonly } from '../planner/types'
 import '../styles/shopping-prep.css'
 
-function Row({ row }: { row: ShoppingRow }) {
+function Row({ row }: { row: DeepReadonly<ShoppingRow> }) {
   const { toggleShoppingChecked, togglePantryLow } = usePlanner()
   const id = useId()
   const amountId = useId()

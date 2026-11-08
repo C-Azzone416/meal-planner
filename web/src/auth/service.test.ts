@@ -225,3 +225,10 @@ test('classifies only unanswered requests as network failures', async () => {
   expect(isNetworkFailure(new Error('Unknown email'))).toBe(false)
   expect(isNetworkFailure(undefined)).toBe(false)
 })
+
+test('real adapter maps an unanswered reset request to an explicit transport outcome', async () => {
+  const { AuthNetworkError } = await import('./service')
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
+  const service = await loadAuthService(fetchResponse({ enabled: true, baseUrl: '/api/auth-proxy' }), 'https://meal.example.test')
+  await expect(service!.sendPasswordResetCode('allowed@example.test')).rejects.toBeInstanceOf(AuthNetworkError)
+})

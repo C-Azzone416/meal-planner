@@ -19,5 +19,5 @@ export function useOnlineStatus(): boolean {
 export function OfflineBanner() {
   const online = useOnlineStatus()
   if (online) return null
-  return <p className="offline-banner" role="status">You’re offline. Changes are saved in this browser.</p>
+  return <p className="offline-banner" role="status">You’re offline. This app uses browser-only storage; check the save status before leaving.</p>
 }

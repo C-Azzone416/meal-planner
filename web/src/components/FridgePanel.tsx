@@ -17,10 +17,10 @@ export function PaperTitle({ words, headingRef }: { words: string[]; headingRef?
 }
 
 export function PreviewNotice() {
-  const { resetNotice, dismissResetNotice } = usePlanner()
+  const { resetNotice, dismissResetNotice, persistenceStatus } = usePlanner()
   return (
     <>
-      <p className="preview-notice">Preview data · saved in this browser only</p>
+      <p className="preview-notice">{persistenceStatus === 'saved' ? 'Preview data · saved in this browser only' : 'Preview data · changes not saved'}</p>
       {resetNotice && (
         <div className="reset-notice" role="status">
           <span>{resetNotice}</span>

@@ -24,7 +24,7 @@ function ErrorFallback({ onRetry }: { onRetry: () => void }) {
   }, [])
   return (
     <StateCard level={1} icon="🐈‍⬛" tone="error" heading="Something went wrong on this page" action={{ label: 'Try again', onClick: onRetry }}>
-      The rest of the app is fine. Your preview data is still saved in this browser.
+      Try reopening this page. Check the save status before reloading; unsaved changes may be lost.
     </StateCard>
   )
 }

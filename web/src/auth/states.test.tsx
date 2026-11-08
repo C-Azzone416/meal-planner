@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { AppRoutes } from '../App'
 import { PlannerProvider } from '../planner/store'
 import { AuthProvider } from './AuthProvider'
-import { AuthCredentialsError, type AuthService, type AuthUser } from './service'
+import { AuthCredentialsError, AuthNetworkError, loadAuthService, type AuthService, type AuthUser } from './service'
 
 const user: AuthUser = { id: 'u1', email: 'allowed@example.test', emailVerified: true }
 
@@ -34,6 +34,8 @@ function renderRoute(path: string, service: AuthService) {
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 /** Click a button once it is enabled: the form starts disabled while the auth service loads or a request flushes. */
@@ -53,7 +55,7 @@ describe('password reset code request', () => {
   test.each(['allowed@example.test', 'stranger@nowhere.test'])('says the same thing for %s', async (email) => {
     renderRoute('/sign-in', makeService(null))
     await requestCode(email)
-    expect((await screen.findByRole('status', { name: '' })).textContent).toBe('If that address can sign in, we sent a code.')
+    expect((await screen.findByRole('status', { name: '' })).textContent).toBe('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')
     expect(screen.queryByText(email)).toBeNull() // never echoes the address back
   })
 
@@ -81,7 +83,7 @@ describe('password reset code request', () => {
     const service = makeService(null)
     renderRoute('/sign-in', service)
     await requestCode('allowed@example.test')
-    await screen.findByText('If that address can sign in, we sent a code.')
+    await screen.findByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')
     act(() => { vi.advanceTimersByTime(60_000) })
     const resend = screen.getByRole('button', { name: 'Email me a new password code' }) as HTMLButtonElement
     await waitFor(() => expect(resend.disabled).toBe(false))
@@ -95,7 +97,7 @@ describe('password reset code request', () => {
     const service = makeService(null)
     renderRoute('/sign-in', service)
     await requestCode('allowed@example.test')
-    await screen.findByText('If that address can sign in, we sent a code.')
+    await screen.findByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')
     // The route's pending flag may still be flushing, which keeps the buttons disabled for a tick.
     const back = screen.getByRole('button', { name: 'Back to sign in' }) as HTMLButtonElement
     await waitFor(() => expect(back.disabled).toBe(false))
@@ -121,7 +123,7 @@ describe('sign-out and session expiry notices', () => {
     expect(await screen.findByRole('heading', { name: 'our recipes' })).toBeTruthy()
 
     vi.mocked(service.getSession).mockResolvedValue(null)
-    act(() => { window.dispatchEvent(new Event('focus')) })
+    await act(async () => { window.dispatchEvent(new Event('focus')) })
     expect(await screen.findByText('Your session ended. Sign in again.')).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'what’s for dinner?' })).toBeTruthy()
 
@@ -136,8 +138,9 @@ describe('sign-out and session expiry notices', () => {
     const service = makeService(user)
     renderRoute('/week', service)
     await screen.findByRole('heading', { name: 'this week’s dinners' })
+    await act(async () => {}) // Flush the signed-in effect before dispatching focus.
     vi.mocked(service.getSession).mockRejectedValue(new Error('network down'))
-    act(() => { window.dispatchEvent(new Event('focus')) })
+    await act(async () => { window.dispatchEvent(new Event('focus')) })
     await waitFor(() => expect(service.getSession).toHaveBeenCalledTimes(2))
     expect(screen.getByRole('heading', { name: 'this week’s dinners' })).toBeTruthy()
     expect(screen.queryByText('Your session ended. Sign in again.')).toBeNull()
@@ -148,7 +151,7 @@ describe('sign-out and session expiry notices', () => {
     renderRoute('/week', service)
     await screen.findByRole('heading', { name: 'this week’s dinners' })
     vi.mocked(service.getSession).mockResolvedValue(null)
-    act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
     expect(await screen.findByText('Your session ended. Sign in again.')).toBeTruthy()
   })
 
@@ -226,7 +229,7 @@ describe('reset-code outcome is uniform', () => {
     vi.mocked(service.sendPasswordResetCode).mockRejectedValue(failure)
     renderRoute('/sign-in', service)
     await requestCode(email)
-    expect(await screen.findByText('If that address can sign in, we sent a code.')).toBeTruthy()
+    expect(await screen.findByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.getByText('You can request another code in 60 seconds.')).toBeTruthy()
     expect(document.body.textContent).not.toMatch(/check the address|couldn.t reach/i)
@@ -235,17 +238,17 @@ describe('reset-code outcome is uniform', () => {
   test('success looks identical (same message, same cooldown)', async () => {
     renderRoute('/sign-in', makeService(null))
     await requestCode('allowed@example.test')
-    expect(await screen.findByText('If that address can sign in, we sent a code.')).toBeTruthy()
+    expect(await screen.findByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')).toBeTruthy()
     expect(screen.getByText('You can request another code in 60 seconds.')).toBeTruthy()
   })
 
   test('only a client-side network failure gets its own message, with no cooldown and the form still usable', async () => {
     const service = makeService(null)
-    vi.mocked(service.sendPasswordResetCode).mockRejectedValue(new TypeError('Failed to fetch'))
+    vi.mocked(service.sendPasswordResetCode).mockRejectedValue(new AuthNetworkError())
     renderRoute('/sign-in', service)
     await requestCode('allowed@example.test')
     expect((await screen.findByRole('alert')).textContent).toBe('We couldn’t reach the server. Try again.')
-    expect(screen.queryByText('If that address can sign in, we sent a code.')).toBeNull()
+    expect(screen.queryByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')).toBeNull()
     expect(screen.queryByText(/You can request another code/)).toBeNull()
     expect(((await screen.findByRole('button', { name: 'Email my password code' })) as HTMLButtonElement).disabled).toBe(false)
     expect(document.body.textContent).not.toMatch(/check the address/i)
@@ -304,19 +307,38 @@ describe('reset-code failures never enumerate accounts', () => {
     vi.mocked(service.sendPasswordResetCode).mockRejectedValue(failure)
     renderRoute('/sign-in', service)
     await requestCode('stranger@nowhere.test')
-    expect(await screen.findByText('If that address can sign in, we sent a code.')).toBeTruthy()
+    expect(await screen.findByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
     expect(document.body.textContent).not.toMatch(/check the address/i)
   })
 
   test('only a network failure gets its own message, and it stays on the email step', async () => {
     const service = makeService(null)
-    vi.mocked(service.sendPasswordResetCode).mockRejectedValue(new TypeError('Failed to fetch'))
+    vi.mocked(service.sendPasswordResetCode).mockRejectedValue(new AuthNetworkError())
     renderRoute('/sign-in', service)
     await requestCode('allowed@example.test')
     expect((await screen.findByRole('alert')).textContent).toBe('We couldn’t reach the server. Try again.')
-    expect(screen.queryByText('If that address can sign in, we sent a code.')).toBeNull()
+    expect(screen.queryByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')).toBeNull()
     expect(screen.getByRole('button', { name: 'Email my password code' })).toBeTruthy()
     expect(document.body.textContent).not.toMatch(/check the address/i)
   })
+})
+
+test.each([400, 401, 403, 404, 429, 500, 503])('real adapter HTTP %s stays neutral even with network wording and an offline hint', async (status) => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ message: 'Network error contacting the mail provider' }), {
+    status, headers: { 'Content-Type': 'application/json' },
+  })))
+  vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+  const configFetch = vi.fn(async () => new Response(JSON.stringify({ enabled: true, baseUrl: '/api/auth-proxy' }), {
+    headers: { 'Content-Type': 'application/json' },
+  })) as unknown as typeof fetch
+  const adapter = await loadAuthService(configFetch, 'https://meal.example.test')
+  const service = makeService(null)
+  service.sendPasswordResetCode = adapter!.sendPasswordResetCode
+  renderRoute('/sign-in', service)
+  await requestCode('allowed@example.test')
+  expect(await screen.findByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')).toBeTruthy()
+  expect(screen.getByText('You can request another code in 60 seconds.')).toBeTruthy()
+  expect(screen.queryByRole('alert')).toBeNull()
+  vi.restoreAllMocks()
 })

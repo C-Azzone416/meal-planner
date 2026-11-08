@@ -6,7 +6,7 @@ The client-side data layer for the preview web app. Pages read and write **only*
 const { plan, recipes, shopping, prep, summary, fillWeek, undoInfo, undo } = usePlanner()
 ```
 
-`PlannerProvider` sits inside `AuthProvider` and around the routes (already done in `App.tsx`). In tests wrap with `<PlannerProvider storage={null} random={mulberry32(1)}>`, or pass an in-memory `StorageLike`.
+`PlannerProvider` mounts only inside the authenticated route shell, keyed by the provider user ID. It remounts on an account change and unmounts on sign-out/session expiry. In tests wrap with `<PlannerProvider storage={null} random={mulberry32(1)}>`, or pass an in-memory `StorageLike`.
 
 ## Files
 
@@ -18,7 +18,7 @@ const { plan, recipes, shopping, prep, summary, fillWeek, undoInfo, undo } = use
 | `reducer.ts` | Pure reducer. Random choices arrive as seeds (drawn once per action), so it is safe under StrictMode. |
 | `plan.ts` | Pure plan operations (fill, surprise, move, skip, pin, servings, undo) + `mulberry32` seedable RNG. |
 | `derive.ts` | Pure derivations: `deriveShopping`, `derivePrep`, `derivePantry`, `deriveNightWarnings`, `planSummary`. |
-| `persist.ts` | localStorage key `mealplanner.preview.v1` (`{version, state}`), validation, reseed on corrupt/old data. |
+| `persist.ts` | Account-scoped localStorage keys (`{version, state}`), validation, save-failure reporting and legacy-data preservation. |
 | `keys.ts`, `format.ts` | Stable keys (`shoppingKey`, `prepKey`), ids, quantity/duration formatting. `uniqueId` never returns a reserved recipe id (`RESERVED_RECIPE_IDS` = `new`, `edit`, `by-id`: they are words in the `/recipes/...` URLs), so a title "New" becomes `new-2`. A recipe that already has a reserved id opens at `/recipes/by-id/<id>` (see `pages/recipePath.ts`). |
 | `testing.ts` | Test helpers (`emptyWeek`, `cleanSeed`, `run`, `sequence`). |
 
@@ -61,10 +61,10 @@ Shopping and prep are never stored; only progress is (`progress.shoppingChecked`
 
 ## Persistence
 
-`localStorage['mealplanner.preview.v1'] = { version: 2, state: { recipes, drafts, plan, progress, pantryLow, houseRules } }`. Proposal, undo and status are transient. Unparseable, wrong-version (a version 1 blob included: key encoding changed in version 2) or structurally invalid data (lone UTF-16 surrogates included) is discarded: the seed is loaded, `resetNotice` is set ("We reset the preview data because it could not be read."), and the next write overwrites the bad value. There is no cross-tab sync.
+`localStorage['mealplanner.preview.v1.account.' + encodeURIComponent(user.id)] = { version: 2, state: { recipes, drafts, plan, progress, pantryLow, houseRules } }`. Production always provides the authenticated ID; the unscoped default is only for isolated component/test usage. The old unscoped key is never automatically loaded or overwritten by the authenticated app: ownership cannot be proved. A visible notice explains that it is preserved separately. Any recovery/import needs an explicit ownership decision; no automatic migration is provided. Proposal, undo and status are transient. Unparseable, wrong-version (a version 1 blob included: key encoding changed in version 2) or structurally invalid data (lone UTF-16 surrogates included) is discarded: the seed is loaded, `resetNotice` is set ("We reset the preview data because it could not be read."), and the next write overwrites the bad value. There is no cross-tab sync, hosted backup, or schema migration. Browser clearing, storage eviction, or losing this browser can lose data. A failed write exposes `persistenceStatus: unsaved`, an app-wide warning and retry action; no page claims the data is saved then. A failed initial read blocks writes over unknown existing data, even after a retry, until reload can read the existing snapshot. Focus/session checks that discover another account force reauthentication and discard in-memory UI state.
 
 ## Payload safety
-Every action is deep-cloned (`structuredClone`) before it is applied, so mutating the object you passed after the call has no effect. `DeepReadonly<T>` is exported from `types.ts` for code that wants to treat store data as immutable. Recipes/drafts containing ill-formed text are refused with a status.
+Every action is deep-cloned (`structuredClone`) before it is applied, so mutating the object you passed after the call has no effect. Every public data field and getter uses `DeepReadonly<T>`, and shared nested state and derived results are recursively frozen at runtime to protect retained references and undo snapshots. Recipes/drafts containing ill-formed text are refused with a status.
 
 ## Decisions worth knowing
 

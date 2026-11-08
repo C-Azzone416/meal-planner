@@ -135,10 +135,10 @@ function isInvalidCredentialsError(error: unknown): boolean {
  * Any HTTP status, success or error (throttling, 4xx, 5xx), is a server response and is NOT a network failure.
  */
 export function isNetworkFailure(error: unknown): boolean {
-  if (error instanceof TypeError) return true
   if (!error || typeof error !== 'object') return false
   const record = error as Record<string, unknown>
   if (typeof record.status === 'number') return record.status === 0
+  if (error instanceof TypeError) return true
   const code = nestedString(error, 'code')
   if (code && /NETWORK|FETCH|OFFLINE|TIMEOUT/i.test(code)) return true
   const message = nestedString(error, 'message')
@@ -270,7 +270,9 @@ export async function loadAuthService(
       const error = await authOperationError(() => client.emailOtp.requestPasswordReset({ email }))
       if (error) {
         if (isNetworkFailure(error)) throw new AuthNetworkError()
-        throw authError(error, 'Could not send a password reset code.')
+        // Any answered request has the same public outcome, including provider errors.
+        // Do not pass provider messages upstream for a second network classification.
+        return
       }
     },
 

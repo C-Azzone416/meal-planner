@@ -77,3 +77,11 @@ describe('key encoding is total', () => {
     expect(containsIllFormed({ a: ['fine', 3, null] })).toBe(false)
   })
 })
+
+
+describe('free-text units do not inherit object properties', () => {
+  test.each(['constructor', '__proto__', 'toString', 'hasOwnProperty'])('%s stays a string', (unit) => {
+    expect(normalizeUnit(unit)).toBe(unit.toLowerCase())
+    expect(shoppingKey('rice', unit)).toBe(`rice|${encodeURIComponent(unit.toLowerCase())}`)
+  })
+})

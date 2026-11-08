@@ -112,7 +112,7 @@ describe('OfflineBanner', () => {
   test('shows immediately when already offline', () => {
     setOnline(false)
     render(<OfflineBanner />)
-    expect(screen.getByRole('status').textContent).toBe('You’re offline. Changes are saved in this browser.')
+    expect(screen.getByRole('status').textContent).toBe('You’re offline. This app uses browser-only storage; check the save status before leaving.')
   })
 
   test('reacts to offline and online events', () => {

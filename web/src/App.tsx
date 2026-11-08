@@ -15,12 +15,12 @@ import {
   AuthCredentialsError,
   AuthNetworkError,
   AuthPasswordPolicyError,
-  isNetworkFailure,
 } from './auth/service'
 import { AppShell } from './components/AppShell'
 import { RouteFocus } from './components/RouteFocus'
 import { PageSkeleton } from './components/StateCard'
 import { PlannerProvider } from './planner/store'
+import type { StorageLike } from './planner/persist'
 import {
   CookPage,
   DraftsPage,
@@ -41,18 +41,18 @@ function returnPath(from: string | undefined): string | undefined {
   return from
 }
 
-function ProtectedShell() {
+function ProtectedShell({ storage }: { storage?: StorageLike | null }) {
   const auth = useAuth()
   const location = useLocation()
 
   if (auth.status === 'loading') {
     return <main className="auth-state"><PageSkeleton label="Checking your fridge" cards={2} width="min(100%, 560px)" /></main>
   }
-  if (auth.status !== 'signed-in') {
+  if (auth.status !== 'signed-in' || !auth.user) {
     return <Navigate to="/sign-in" replace state={{ from: `${location.pathname}${location.search}${location.hash}` }} />
   }
 
-  return <AppShell onSignOut={() => void auth.signOut()}><Outlet /></AppShell>
+  return <PlannerProvider accountId={auth.user.id} storage={storage}><AppShell onSignOut={() => void auth.signOut()}><Outlet /></AppShell></PlannerProvider>
 }
 
 function SignInRoute() {
@@ -91,7 +91,7 @@ function SignInRoute() {
     } catch (cause) {
       // Only "could not reach the server" is reported as such. Every other failure looks exactly like success
       // ("If that address can sign in, we sent a code."), so the response never reveals whether an account exists.
-      if (isNetworkFailure(cause) || cause instanceof AuthNetworkError || !navigator.onLine) {
+      if (cause instanceof AuthNetworkError) {
         setError('We couldn’t reach the server. Try again.')
         throw new Error('request failed', { cause })
       }
@@ -132,12 +132,12 @@ function SignInRoute() {
   )
 }
 
-export function AppRoutes() {
+export function AppRoutes({ plannerStorage }: { plannerStorage?: StorageLike | null } = {}) {
   return (
     <>
       <Routes>
         <Route path="/sign-in" element={<SignInRoute />} />
-        <Route element={<ProtectedShell />}>
+        <Route element={<ProtectedShell storage={plannerStorage} />}>
           <Route path="/week" element={<WeekPage />} />
           <Route path="/recipes" element={<RecipesPage />} />
           <Route path="/recipes/new" element={<RecipeFormPage mode="new" />} />
@@ -163,9 +163,7 @@ export function AppRoutes() {
 function AppProviders() {
   return (
     <AuthProvider>
-      <PlannerProvider>
-        <AppRoutes />
-      </PlannerProvider>
+      <AppRoutes />
     </AuthProvider>
   )
 }

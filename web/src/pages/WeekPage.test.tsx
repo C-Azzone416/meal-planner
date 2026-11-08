@@ -4,6 +4,8 @@ import type { ReactNode } from 'react'
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { PlannerProvider, usePlanner } from '../planner/store'
+import { createSeedState } from '../planner/seed'
+import { serialize } from '../planner/persist'
 import '../styles/app.css'
 import { CookPage } from './CookPage'
 import { WeekPage } from './WeekPage'
@@ -325,4 +327,58 @@ test('defaults Cook to today or the first planned dinner', () => {
   renderPlanner('/cook')
   expect(screen.getByRole('heading', { level: 1, name: 'Cook Monday’s dinner' })).toBeTruthy()
   expect(screen.getByRole('heading', { level: 2, name: chicken })).toBeTruthy()
+})
+
+
+test.each(['new', 'edit', 'by-id'])('Week opens legacy reserved recipe id %s through its safe route', (id) => {
+  const state = createSeedState()
+  const recipe = state.recipes.find((item) => item.id === state.plan.nights[1].recipeId)!
+  recipe.id = id
+  state.plan.nights[1].recipeId = id
+  const storage = { getItem: () => serialize(state), setItem: () => {}, removeItem: () => {} }
+  render(<MemoryRouter><PlannerProvider storage={storage}><WeekPage /></PlannerProvider></MemoryRouter>)
+  click('Monday')
+  expect(screen.getByRole('link', { name: `${recipe.title} →` }).getAttribute('href')).toBe(`/recipes/by-id/${id}`)
+})
+
+
+function ResetCookPlanner() {
+  const { resetPreviewData } = usePlanner()
+  return <button onClick={resetPreviewData}>Reset cook test data</button>
+}
+
+test('Cook progress clears immediately when the same browser switches accounts', () => {
+  const app = (accountId: string) => (
+    <MemoryRouter initialEntries={['/cook?day=1']}>
+      <PlannerProvider accountId={accountId} storage={null}><CookPage /></PlannerProvider>
+    </MemoryRouter>
+  )
+  const view = render(app('account-a'))
+  click('Done — next step')
+  expect(screen.getAllByRole('checkbox', { checked: true })).toHaveLength(1)
+  view.rerender(app('account-b'))
+  expect(screen.queryAllByRole('checkbox', { checked: true })).toHaveLength(0)
+  view.rerender(app('account-a'))
+  expect(screen.queryAllByRole('checkbox', { checked: true })).toHaveLength(0)
+})
+
+test('Cook progress clears on logout/provider unmount and a later login', () => {
+  const first = renderPlanner('/cook?day=1')
+  click('Done — next step')
+  expect(screen.getAllByRole('checkbox', { checked: true })).toHaveLength(1)
+  first.unmount()
+  renderPlanner('/cook?day=1')
+  expect(screen.queryAllByRole('checkbox', { checked: true })).toHaveLength(0)
+})
+
+test('reset data clears Cook progress immediately and after route navigation', () => {
+  renderPlanner('/cook?day=1', <ResetCookPlanner />)
+  click('Done — next step')
+  expect(screen.getAllByRole('checkbox', { checked: true })).toHaveLength(1)
+  click('Reset cook test data')
+  expect(screen.queryAllByRole('checkbox', { checked: true })).toHaveLength(0)
+  fireEvent.click(screen.getByRole('link', { name: '‹ This week' }))
+  click('Monday')
+  fireEvent.click(screen.getByRole('link', { name: 'Cook tonight →', description: 'Monday' }))
+  expect(screen.queryAllByRole('checkbox', { checked: true })).toHaveLength(0)
 })

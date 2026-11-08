@@ -1,6 +1,6 @@
 /** Form model, conversion and validation for adding/editing a recipe (docs/ux-decisions.md §1). */
 import { newItemId } from '../planner/keys'
-import type { Aisle, Attention, NewRecipe, Recipe } from '../planner/types'
+import type { Aisle, Attention, DeepReadonly, NewRecipe, Recipe } from '../planner/types'
 
 export interface IngredientRow {
   id: string
@@ -89,9 +89,12 @@ export function emptyForm(): RecipeFormValues {
   }
 }
 
-const num = (value: number | null) => (value === null ? '' : String(Math.round(value * 100) / 100))
+// Keep ordinary inputs concise, but never display a positive stored amount as zero.
+const num = (value: number | null) => value === null ? '' : value > 0 && value < 0.005
+  ? value.toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 21 })
+  : String(Math.round(value * 100) / 100)
 
-export function formFromRecipe(recipe: Recipe): RecipeFormValues {
+export function formFromRecipe(recipe: DeepReadonly<Recipe>): RecipeFormValues {
   return {
     title: recipe.title,
     icon: recipe.icon,
@@ -204,8 +207,8 @@ export function validate(values: RecipeFormValues): FormError[] {
     const key = `cook-${row.id}`
     if (blank(row.text)) add(`${key}-text`, 'Cook step text is required.')
     else cookSteps += 1
-    if (!blank(row.timerMinutes) && (!isDecimal(row.timerMinutes) || Number(row.timerMinutes) <= 0 || Number(row.timerMinutes) > 10080)) {
-      add(`${key}-timerMinutes`, 'Timer must be greater than 0 and at most 10080 minutes, or left empty.')
+    if (!blank(row.timerMinutes) && (!isDecimal(row.timerMinutes) || Math.round(Number(row.timerMinutes) * 60) < 1 || Number(row.timerMinutes) > 10080)) {
+      add(`${key}-timerMinutes`, 'Timer must round to at least 1 second and be at most 10080 minutes, or left empty.')
     }
   }
   if (cookSteps === 0 && !values.cookTonight.some((row) => rowIsTouched.cookTonight(row))) {

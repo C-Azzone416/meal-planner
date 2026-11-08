@@ -5,7 +5,7 @@ import { StateCard } from '../components/StateCard'
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
 import { formatDuration } from '../planner/format'
 import { usePlanner } from '../planner/store'
-import { DRAFT_GUESS_KEYS, type Draft, type DraftGuessKey } from '../planner/types'
+import { DRAFT_GUESS_KEYS, type DeepReadonly, type Draft, type DraftGuessKey } from '../planner/types'
 import '../styles/recipes.css'
 import { recipePath } from './recipePath'
 
@@ -17,7 +17,7 @@ const GUESS_LABELS: Record<DraftGuessKey, string> = {
   storage: 'STORAGE',
 }
 
-function guessValue(draft: Draft, key: DraftGuessKey): string {
+function guessValue(draft: DeepReadonly<Draft>, key: DraftGuessKey): string {
   switch (key) {
     case 'activeMinutes':
       return `${draft.activeMinutes} min`
@@ -37,12 +37,12 @@ function guessValue(draft: Draft, key: DraftGuessKey): string {
 export function DraftsPage() {
   const planner = usePlanner()
   const navigate = useNavigate()
-  const [discarding, setDiscarding] = useState<Draft | null>(null)
+  const [discarding, setDiscarding] = useState<DeepReadonly<Draft> | null>(null)
   const [message, setMessage] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
   const { drafts } = planner
 
-  const approve = (draft: Draft) => {
+  const approve = (draft: DeepReadonly<Draft>) => {
     const id = planner.approveDraft(draft.id)
     if (id) navigate(recipePath(id), { state: { saved: true } })
   }

@@ -26,11 +26,13 @@ import {
   type ShoppingList,
 } from './derive'
 import { uniqueId } from './keys'
-import { defaultStorage, loadState, saveState, type StorageLike } from './persist'
+import { deepFreeze } from './immutable'
+import { accountStorageKey, defaultStorage, LEGACY_NOTICE, loadState, saveState, STORAGE_KEY, type StorageLike } from './persist'
 import { seedFrom } from './plan'
 import { type DraftPatch, type PlannerAction, reducer } from './reducer'
 import {
   type DayIndex,
+  type DeepReadonly,
   type Draft,
   type DraftGuessKey,
   type HouseRules,
@@ -50,9 +52,9 @@ export interface PlannerActions {
    * unique even across several calls in the same tick. Returns '' (and sets `status`) only if the recipe was
    * rejected because `defaultServings` is not a positive number.
    */
-  addRecipe(recipe: NewRecipe): string
+  addRecipe(recipe: DeepReadonly<NewRecipe>): string
   /** Replace a saved recipe by id. If it is on this week's plan, `status` says shopping/prep were updated. */
-  updateRecipe(recipe: Recipe): void
+  updateRecipe(recipe: DeepReadonly<Recipe>): void
 
   // — Drafts (agent-created; separate from recipes until approved) —
   /** Turn a draft into a saved recipe. Returns the new recipe id, or null if some guesses are still unconfirmed. */
@@ -60,7 +62,7 @@ export interface PlannerActions {
   discardDraft(draftId: string): void
   setDraftConfirmed(draftId: string, key: DraftGuessKey, confirmed: boolean): void
   /** Edit draft fields; bumps its revision and clears the confirmations those fields affect. */
-  updateDraft(draftId: string, patch: DraftPatch): void
+  updateDraft(draftId: string, patch: DeepReadonly<DraftPatch>): void
 
   // — Plan —
   /** Plan my week: fill open nights up to the dinner target. Never touches planned/skipped nights. */
@@ -104,6 +106,8 @@ export interface PlannerActions {
   dismissResetNotice(): void
   /** Discard everything and reseed. Pages must confirm first. */
   resetPreviewData(): void
+  /** Retry a failed browser save without changing planner data. */
+  retryPersistence(): void
 }
 
 /**
@@ -111,31 +115,36 @@ export interface PlannerActions {
  * so change it only through the actions.
  */
 export interface PlannerData {
-  readonly recipes: readonly Recipe[]
-  readonly drafts: readonly Draft[]
-  readonly plan: Readonly<PlannerState['plan']>
-  readonly houseRules: Readonly<HouseRules>
-  readonly progress: Readonly<PlannerState['progress']>
+  /** Transient Cook checklist lifetime; replaced on reset and provider/account remount. */
+  readonly cookProgressScope: object
+  readonly recipes: DeepReadonly<Recipe[]>
+  readonly drafts: DeepReadonly<Draft[]>
+  readonly plan: DeepReadonly<PlannerState['plan']>
+  readonly houseRules: DeepReadonly<HouseRules>
+  readonly progress: DeepReadonly<PlannerState['progress']>
   /** Pending Surprise me suggestion, if any. */
-  readonly proposal: SurpriseProposal | null
+  readonly proposal: DeepReadonly<SurpriseProposal> | null
   /** Present after a plan-changing action until the next change/undo. `seq` changes on every new change. */
   readonly undoInfo: { readonly message: string; readonly seq: number } | null
   /** Latest refusal/info/success message from an action (render with role="status"). */
-  readonly status: StatusMessage | null
+  readonly status: DeepReadonly<StatusMessage> | null
   /** Set when stored data was unreadable and the preview was reseeded. */
   readonly resetNotice: string | null
+  readonly persistenceStatus: 'saved' | 'unsaved'
+  readonly persistenceNotice: string | null
+  readonly legacyNotice: string | null
 
-  readonly shopping: ShoppingList
-  readonly prep: PrepPlan
-  readonly pantry: readonly PantryItem[]
-  readonly summary: PlanSummary
+  readonly shopping: DeepReadonly<ShoppingList>
+  readonly prep: DeepReadonly<PrepPlan>
+  readonly pantry: DeepReadonly<PantryItem[]>
+  readonly summary: DeepReadonly<PlanSummary>
   /** Prep-timing warnings per night, e.g. "Marinade keeps 1 day — prep it Wednesday instead". */
-  readonly nightWarnings: Readonly<Record<DayIndex, readonly string[]>>
+  readonly nightWarnings: DeepReadonly<Record<DayIndex, readonly string[]>>
 
-  getRecipe(id: string | undefined): Readonly<Recipe> | undefined
-  getDraft(id: string | undefined): Readonly<Draft> | undefined
+  getRecipe(id: string | undefined): DeepReadonly<Recipe> | undefined
+  getDraft(id: string | undefined): DeepReadonly<Draft> | undefined
   /** Whole raw state, for tests and advanced use. Prefer the fields above. */
-  readonly state: Readonly<PlannerState>
+  readonly state: DeepReadonly<PlannerState>
 }
 
 export type PlannerApi = PlannerData & PlannerActions
@@ -148,15 +157,29 @@ export interface PlannerProviderProps {
   children: ReactNode
   /** Defaults to window.localStorage (null if unavailable). Pass `null` to disable persistence. */
   storage?: StorageLike | null
+  /** Required in the authenticated app. Remounts immediately when the account changes. */
+  accountId?: string
   /** Default random source for fillWeek/proposeSurprise. Defaults to Math.random. */
   random?: Rng
 }
 
-export function PlannerProvider({ children, storage, random = Math.random }: PlannerProviderProps) {
+export function PlannerProvider(props: PlannerProviderProps) {
+  return <PlannerStore key={props.accountId ?? 'test-preview'} {...props} />
+}
+
+function PlannerStore({ children, storage, accountId, random = Math.random }: PlannerProviderProps) {
   const [store] = useState<StorageLike | null>(() => (storage === undefined ? defaultStorage() : storage))
-  const [boot] = useState(() => loadState(store))
+  const storageKey = accountId === undefined ? STORAGE_KEY : accountStorageKey(accountId)
+  const [boot] = useState(() => loadState(store, storageKey))
+  const [legacyNotice] = useState(() => {
+    try { return accountId !== undefined && store?.getItem(STORAGE_KEY) !== null && store ? LEGACY_NOTICE : null } catch { return null }
+  })
+  const [persistenceStatus, setPersistenceStatus] = useState<'saved' | 'unsaved'>('unsaved')
+  const [saveAttempt, setSaveAttempt] = useState(0)
+  const [readBlocked, setReadBlocked] = useState(boot.readFailed ?? false)
   const [state, dispatch] = useReducer(reducer, boot.state)
   const [resetNotice, setResetNotice] = useState<string | null>(boot.resetNotice)
+  const [cookProgressScope, setCookProgressScope] = useState<object>(() => ({}))
 
   // Latest state for actions that return a value (ids); updated after each commit.
   const latest = useRef(state)
@@ -166,8 +189,22 @@ export function PlannerProvider({ children, storage, random = Math.random }: Pla
 
   const { recipes, drafts, plan, progress, pantryLow, houseRules } = state
   useEffect(() => {
-    saveState(store, { recipes, drafts, plan, progress, pantryLow, houseRules })
-  }, [store, recipes, drafts, plan, progress, pantryLow, houseRules])
+    // A failed initial read might hide existing data. Never overwrite that unknown snapshot.
+    let blocked = readBlocked
+    if (blocked) {
+      try {
+        if (store?.getItem(storageKey) === null) blocked = false
+      } catch { /* keep blocked */ }
+    }
+    const saved = !blocked && saveState(store, { recipes, drafts, plan, progress, pantryLow, houseRules }, storageKey)
+    // Report the synchronous external storage result, rather than optimistic save claims.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setReadBlocked(blocked)
+    setPersistenceStatus(saved ? 'saved' : 'unsaved')
+  }, [store, storageKey, recipes, drafts, plan, progress, pantryLow, houseRules, saveAttempt, readBlocked])
+  const persistenceNotice = persistenceStatus === 'saved' ? null : readBlocked
+    ? 'Browser data could not be read. Changes are not saved. Enable browser storage and reload to recover existing data; unsaved changes will be lost.'
+    : 'Changes are not saved. Browser storage may be disabled or full. Keep this page open and retry after freeing space or enabling storage.'
 
   const randomRef = useRef(random)
   useEffect(() => {
@@ -177,10 +214,11 @@ export function PlannerProvider({ children, storage, random = Math.random }: Pla
   const actions = useMemo<PlannerActions>(() => {
     // Apply each action to `latest` immediately (the reducer is pure) so that actions returning ids
     // see the effect of earlier calls made in the same tick; then hand it to React.
-    const send = (action: PlannerAction) => {
+    const send = (action: DeepReadonly<PlannerAction>) => {
       // Snapshot first: whatever the caller does to its object afterwards must not change what commits,
       // neither in the immediate reducer call nor when React replays the action.
-      const snapshot = structuredClone(action)
+      // The copy is owned by the reducer; no caller-owned readonly references escape.
+      const snapshot = structuredClone(action) as PlannerAction
       latest.current = reducer(latest.current, snapshot)
       dispatch(snapshot)
     }
@@ -223,7 +261,9 @@ export function PlannerProvider({ children, storage, random = Math.random }: Pla
       dismissUndo: () => send({ type: 'undo/dismiss' }),
       clearStatus: () => send({ type: 'status/clear' }),
       dismissResetNotice: () => setResetNotice(null),
+      retryPersistence: () => setSaveAttempt((attempt) => attempt + 1),
       resetPreviewData() {
+        setCookProgressScope({})
         send({ type: 'reset' })
         setResetNotice(null)
       },
@@ -250,7 +290,8 @@ export function PlannerProvider({ children, storage, random = Math.random }: Pla
     [state.undo],
   )
   const data = useMemo<PlannerData>(
-    () => ({
+    () => deepFreeze({
+      cookProgressScope,
       recipes,
       drafts,
       plan,
@@ -260,6 +301,9 @@ export function PlannerProvider({ children, storage, random = Math.random }: Pla
       undoInfo,
       status: state.status,
       resetNotice,
+      persistenceStatus,
+      persistenceNotice,
+      legacyNotice,
       shopping,
       prep,
       pantry,
@@ -269,7 +313,7 @@ export function PlannerProvider({ children, storage, random = Math.random }: Pla
       getDraft: (id) => drafts.find((draft) => draft.id === id),
       state,
     }),
-    [recipes, drafts, plan, houseRules, progress, state, undoInfo, resetNotice, shopping, prep, pantry, summary, nightWarnings],
+    [cookProgressScope, recipes, drafts, plan, houseRules, progress, state, undoInfo, resetNotice, persistenceStatus, persistenceNotice, legacyNotice, shopping, prep, pantry, summary, nightWarnings],
   )
   const api = useMemo<PlannerApi>(() => ({ ...actions, ...data }), [actions, data])
 

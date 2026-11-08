@@ -7,6 +7,11 @@ import { createSeedState } from './seed'
 import { AISLES, DRAFT_GUESS_KEYS, type PlannerState } from './types'
 
 export const STORAGE_KEY = 'mealplanner.preview.v1'
+/** Provider user id, not email: account renames keep their own data. Legacy data has no proven owner. */
+export function accountStorageKey(accountId: string): string {
+  return `${STORAGE_KEY}.account.${encodeURIComponent(accountId)}`
+}
+export const LEGACY_NOTICE = 'Older browser data has no recorded account owner. It is preserved but has not been loaded into this account.'
 /** Bumped to 2 when key encoding changed (old progress keys would silently orphan). The storage key name is unchanged. */
 export const STORAGE_VERSION = 2
 export const RESET_NOTICE = 'We reset the preview data because it could not be read.'
@@ -33,6 +38,7 @@ export interface LoadResult {
   state: PlannerState
   /** Set when stored data existed but could not be used. */
   resetNotice: string | null
+  readFailed?: boolean
 }
 
 /** Browser storage if usable (access can throw in private modes), else null. */
@@ -44,13 +50,13 @@ export function defaultStorage(): StorageLike | null {
   }
 }
 
-export function loadState(storage: StorageLike | null): LoadResult {
+export function loadState(storage: StorageLike | null, key = STORAGE_KEY): LoadResult {
   if (!storage) return { state: createSeedState(), resetNotice: null }
   let raw: string | null
   try {
-    raw = storage.getItem(STORAGE_KEY)
+    raw = storage.getItem(key)
   } catch {
-    return { state: createSeedState(), resetNotice: null }
+    return { state: createSeedState(), resetNotice: null, readFailed: true }
   }
   if (raw === null) return { state: createSeedState(), resetNotice: null }
   const parsed = parsePersisted(raw)
@@ -58,12 +64,14 @@ export function loadState(storage: StorageLike | null): LoadResult {
   return { state: { ...createSeedState(), ...parsed }, resetNotice: null }
 }
 
-export function saveState(storage: StorageLike | null, state: PersistedState): void {
-  if (!storage) return
+export function saveState(storage: StorageLike | null, state: PersistedState, key = STORAGE_KEY): boolean {
+  if (!storage) return false
   try {
-    storage.setItem(STORAGE_KEY, serialize(state))
+    storage.setItem(key, serialize(state))
+    return true
   } catch {
-    // Quota exceeded or storage disabled: the app keeps working in memory.
+    // Quota exceeded or storage disabled: the app keeps working in memory, visibly unsaved.
+    return false
   }
 }
 

@@ -6,6 +6,7 @@ import { StateCard } from '../components/StateCard'
 import { formatDuration } from '../planner/format'
 import { usePlanner } from '../planner/store'
 import { DAY_NAMES, DAY_SHORT_NAMES, type DayIndex, type Night } from '../planner/types'
+import { recipePath } from './recipePath'
 import '../styles/week.css'
 
 const mealColors = ['rust', 'green', 'gold'] as const
@@ -88,7 +89,7 @@ function NightDetail({ night }: { night: Night }) {
   return (
     <section className="paper-card week-night-detail" aria-labelledby="night-detail-title">
       <h2 id="night-detail-title">{DAY_NAMES[day]} dinner</h2>
-      {recipe && <Link className="week-recipe-link" to={`/recipes/${encodeURIComponent(recipe.id)}`}>{recipe.title} →</Link>}
+      {recipe && <Link className="week-recipe-link" to={recipePath(recipe.id)}>{recipe.title} →</Link>}
       {night.status === 'open' && <p>Open night</p>}
       {night.status === 'skipped' && <p>Skipped · no cooking</p>}
       <div className="week-night-controls">

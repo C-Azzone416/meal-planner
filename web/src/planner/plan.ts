@@ -11,6 +11,7 @@ import { DEFAULT_PLAN_DAYS } from './seed'
 import {
   DAY_NAMES,
   type DayIndex,
+  type DeepReadonly,
   type Night,
   type PlannerState,
   type Recipe,
@@ -128,7 +129,7 @@ const OPEN = (day: DayIndex): Night => ({ day, status: 'open', pinned: false })
  * The order in which open nights get dinners (Plan my week, Add to week): Mon/Wed/Thu first when open, then the
  * remaining open nights earliest-first with the prep day last. Only `open` nights are returned.
  */
-export function fillOrder(plan: Pick<WeekPlan, 'nights'>, prepDay: DayIndex): DayIndex[] {
+export function fillOrder(plan: DeepReadonly<Pick<WeekPlan, 'nights'>>, prepDay: DayIndex): DayIndex[] {
   const open = plan.nights.filter((night) => night.status === 'open').map((night) => night.day)
   const preferred = DEFAULT_PLAN_DAYS.filter((day) => open.includes(day))
   const rest = open

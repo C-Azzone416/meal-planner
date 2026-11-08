@@ -5,7 +5,6 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { AppRoutes } from './App'
 import { AuthProvider } from './auth/AuthProvider'
 import type { AuthService, AuthUser } from './auth/service'
-import { PlannerProvider } from './planner/store'
 
 // One route is made to crash so we can see the per-route boundary keep the shell alive.
 vi.mock('./pages/ShoppingPage', () => ({
@@ -29,7 +28,7 @@ function renderApp(path: string) {
       path: '*',
       element: (
         <AuthProvider serviceFactory={() => Promise.resolve(service)}>
-          <PlannerProvider storage={null}><AppRoutes /></PlannerProvider>
+          <AppRoutes />
         </AuthProvider>
       ),
     }],
@@ -41,6 +40,7 @@ function renderApp(path: string) {
 
 afterEach(() => {
   cleanup()
+  localStorage.clear()
   vi.restoreAllMocks()
 })
 
@@ -72,12 +72,12 @@ test('moves focus to the page heading after navigating, but not on first load', 
 test('shows the offline banner inside the signed-in shell and hides it again when back online', async () => {
   const onLine = vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(false)
   renderApp('/week')
-  expect((await screen.findByText('You’re offline. Changes are saved in this browser.')).getAttribute('role')).toBe('status')
+  expect((await screen.findByText('You’re offline. This app uses browser-only storage; check the save status before leaving.')).getAttribute('role')).toBe('status')
   act(() => {
     onLine.mockReturnValue(true)
     window.dispatchEvent(new Event('online'))
   })
-  expect(screen.queryByText('You’re offline. Changes are saved in this browser.')).toBeNull()
+  expect(screen.queryByText('You’re offline. This app uses browser-only storage; check the save status before leaving.')).toBeNull()
 })
 
 test('an unknown recipe is a "Recipe not found" page with a way back, inside the shell', async () => {
@@ -123,7 +123,7 @@ test('the loading skeleton has an explicit width, so the centring auth-state gri
       path: '*',
       element: (
         <AuthProvider serviceFactory={() => new Promise(() => undefined)}>
-          <PlannerProvider storage={null}><AppRoutes /></PlannerProvider>
+          <AppRoutes />
         </AuthProvider>
       ),
     }],
@@ -148,7 +148,7 @@ test('adding a recipe to the week replaces the stale "Saved." with the new statu
           setPassword: vi.fn(),
           signOut: vi.fn(),
         })}>
-          <PlannerProvider storage={null}><AppRoutes /></PlannerProvider>
+          <AppRoutes />
         </AuthProvider>
       ),
     }],
@@ -177,7 +177,7 @@ test('after the session ends, focus lands on the sign-in heading (RouteFocus sur
       path: '*',
       element: (
         <AuthProvider serviceFactory={() => Promise.resolve(service)}>
-          <PlannerProvider storage={null}><AppRoutes /></PlannerProvider>
+          <AppRoutes />
         </AuthProvider>
       ),
     }],
@@ -185,6 +185,7 @@ test('after the session ends, focus lands on the sign-in heading (RouteFocus sur
   )
   render(<RouterProvider router={router} />)
   await screen.findByRole('heading', { name: 'house rules' })
+  await act(async () => {}) // Flush the signed-in effect before simulating browser focus.
   service.getSession.mockResolvedValue(null)
   act(() => { window.dispatchEvent(new Event('focus')) })
   const heading = await screen.findByRole('heading', { name: 'what’s for dinner?' })

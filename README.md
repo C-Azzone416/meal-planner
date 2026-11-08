@@ -1,8 +1,8 @@
 # Meal Planner
 
-Meal Planner is a planned web application for reducing the effort required to cook varied dinners at home. The repository now includes a navigable, responsive UI preview and a fail-closed authentication boundary. The preview uses clearly labeled sample data; planning changes are not persisted yet.
+Meal Planner is a planned web application for reducing the effort required to cook varied dinners at home. The repository now includes a navigable, responsive UI preview and a fail-closed authentication boundary. The UI starts with clearly labeled sample data. Recipe and planning changes are saved only in this browser, separately for each authenticated account; there is no hosted sync or backup.
 
-> **Preview status:** The repository has CI workflows, hosted health and authentication functions, a React UI preview, a `mealplanner` CLI (`version`, plus read-only `draft validate/list/show`), and a stdio `mealplanner-mcp` server for local recipe drafts. The UI covers the planned views and uses invitation-only email-and-password authentication when its provider is configured. Existing invited accounts set or recover a password with a short-lived email code. There is no persisted recipe planning, hosted draft save, database schema, or migration yet.
+> **Preview status:** The repository has CI workflows, hosted health and authentication functions, a React UI preview, a `mealplanner` CLI (`version`, plus read-only `draft validate/list/show`), and a stdio `mealplanner-mcp` server for local recipe drafts. The UI covers the planned views and uses invitation-only email-and-password authentication when its provider is configured. Existing invited accounts set or recover a password with a short-lived email code. There is no hosted recipe planning, hosted draft save, database schema, or migration yet. Browser-local planning is not a database-backed service.
 
 ## Product direction
 
@@ -39,7 +39,7 @@ Setup for Codex CLI and Claude Code, the privacy boundary, and the verification 
 
 ## Current boundaries
 
-The current UI is an interaction and navigation preview, not a functional meal-planning system. In particular, the repository does not yet include:
+The current UI supports browser-local recipe editing and meal planning, with shopping, prep and cooking views. Browser clearing or device loss can lose that data; it does not sync between browsers. Failed saves show an unsaved warning and a retry action. Legacy browser data without an account owner is preserved separately and is not automatically imported into an authenticated account. In particular, the repository does not yet include:
 
 - persisted recipe, planning, or feedback operations in the hosted API;
 - database tables, SQL, migrations, or seed data;

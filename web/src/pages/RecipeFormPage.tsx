@@ -4,7 +4,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog'
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
 import { joinList } from '../planner/format'
 import { usePlanner } from '../planner/store'
-import { AISLES, DAY_NAMES, type Recipe } from '../planner/types'
+import { AISLES, DAY_NAMES, type DeepReadonly, type Recipe } from '../planner/types'
 import '../styles/recipes.css'
 import { RecipeNotFound } from './RecipeDetailPage'
 import { recipePath } from './recipePath'
@@ -92,7 +92,7 @@ function RowShell({ section, noun, rowId, index, count, onMove, onRemove, childr
   </li>
 }
 
-function RecipeForm({ recipe }: { recipe?: Recipe }) {
+function RecipeForm({ recipe }: { recipe?: DeepReadonly<Recipe> }) {
   const planner = usePlanner()
   const { clearStatus } = planner
   const navigate = useNavigate()

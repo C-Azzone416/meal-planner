@@ -8,7 +8,8 @@ import { usePlanner } from '../planner/store'
 import { DAY_NAMES } from '../planner/types'
 import '../styles/week.css'
 
-const completedCookSteps = new Map<string, ReadonlySet<string>>()
+// Transient progress belongs to one signed-in provider lifetime, not the browser module.
+const cookProgress = new WeakMap<object, Map<string, ReadonlySet<string>>>()
 const measuredUnits = new Set(['cup', 'lb', 'oz', 'tbsp', 'tsp', 'quart', 'gallon', 'g', 'kg', 'ml', 'l'])
 
 function roundCookQuantity(quantity: number, unit: string): number {
@@ -25,9 +26,10 @@ function formatCookTimer(seconds: number): string {
 
 export function CookPage() {
   const [searchParams] = useSearchParams()
-  const { plan, getRecipe } = usePlanner()
+  const { plan, getRecipe, cookProgressScope } = usePlanner()
   const heading = useRef<HTMLHeadingElement>(null)
-  const [completedSteps, setCompletedSteps] = useState(() => new Map(completedCookSteps))
+  const [, setRevision] = useState(0)
+  const completedSteps = cookProgress.get(cookProgressScope)
   const requestedDay = searchParams.get('day')
   const planned = plan.nights.filter((night) => night.status === 'planned')
   const today = new Date().getDay()
@@ -58,7 +60,7 @@ export function CookPage() {
   const factor = servings / recipe.defaultServings
   const isFallback = requestedDay === null && night.day !== today
   const dinnerKey = `${night.day}:${recipe.id}`
-  const completed = completedSteps.get(dinnerKey)
+  const completed = completedSteps?.get(dinnerKey)
   const phases = [
     {
       id: 'prep-tonight',
@@ -84,13 +86,15 @@ export function CookPage() {
   const nextStep = phases.flatMap(({ steps }) => steps).find(({ id }) => !completed?.has(id))
 
   function setStepDone(stepId: string, done: boolean) {
+    const completedCookSteps = cookProgress.get(cookProgressScope) ?? new Map<string, ReadonlySet<string>>()
     const next = new Set(completedCookSteps.get(dinnerKey))
     if (done) next.add(stepId)
     else next.delete(stepId)
 
     if (next.size > 0) completedCookSteps.set(dinnerKey, next)
     else completedCookSteps.delete(dinnerKey)
-    setCompletedSteps(new Map(completedCookSteps))
+    cookProgress.set(cookProgressScope, completedCookSteps)
+    setRevision((revision) => revision + 1)
   }
 
   return (

@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AppRoutes } from './App'
 import { AuthProvider } from './auth/AuthProvider'
-import { PlannerProvider } from './planner/store'
 import {
   AuthCodeVerificationError,
   AuthCredentialsError,
+  AuthNetworkError,
   type AuthService,
   type AuthUser,
 } from './auth/service'
@@ -33,15 +33,13 @@ function renderRoute(path: string, service: AuthService | null) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <AuthProvider serviceFactory={serviceFactory}>
-        <PlannerProvider storage={null}>
-          <AppRoutes />
-        </PlannerProvider>
+        <AppRoutes />
       </AuthProvider>
     </MemoryRouter>,
   )
 }
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); window.localStorage.clear(); vi.useRealTimers() })
 
 test('redirects a signed-out direct URL to sign in', async () => {
   renderRoute('/recipes', makeService(null))
@@ -51,7 +49,7 @@ test('redirects a signed-out direct URL to sign in', async () => {
 test('renders protected sample views and working navigation', async () => {
   renderRoute('/week', makeService(user))
   expect(await screen.findByRole('heading', { name: 'this week’s dinners' })).toBeTruthy()
-  expect(screen.getByText('Preview data · saved in this browser only')).toBeTruthy()
+  expect(await screen.findByText('Preview data · saved in this browser only')).toBeTruthy()
 
   fireEvent.click(screen.getAllByRole('link', { name: 'Recipes' })[0])
   expect(await screen.findByRole('heading', { name: 'our recipes' })).toBeTruthy()
@@ -69,7 +67,7 @@ test('updates a house-rule preview choice without claiming persistence', async (
   const choice = await screen.findByRole('button', { name: 'One person does it all' })
   fireEvent.click(choice)
   expect(choice.getAttribute('aria-pressed')).toBe('true')
-  expect(screen.getByText('Preview data · saved in this browser only')).toBeTruthy()
+  expect(await screen.findByText('Preview data · saved in this browser only')).toBeTruthy()
 })
 
 test.each([
@@ -133,6 +131,7 @@ const privateProjectCodeNotice = 'If this email has access, we’ll send a code.
 test.each(['allowed@example.test', 'unapproved@example.test'])(
   'shows the same private-project notice after requesting and resending a code for %s',
   async (email) => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
     const service = makeService(null)
     renderRoute('/sign-in', service)
 
@@ -148,6 +147,8 @@ test.each(['allowed@example.test', 'unapproved@example.test'])(
     expect(service.signInWithPassword).not.toHaveBeenCalled()
 
     fireEvent.change(screen.getByLabelText('Password code'), { target: { value: '123456' } })
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Email me a new password code' }).disabled).toBe(true)
+    act(() => { vi.advanceTimersByTime(60_000) })
     fireEvent.click(screen.getByRole('button', { name: 'Email me a new password code' }))
     await waitFor(() => expect(service.sendPasswordResetCode).toHaveBeenCalledTimes(2))
     await waitFor(() => expect((screen.getByLabelText('Password code') as HTMLInputElement).value).toBe(''))
@@ -157,6 +158,7 @@ test.each(['allowed@example.test', 'unapproved@example.test'])(
 )
 
 test('keeps the notice generic after returning to sign in and changing email', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
   const service = makeService(null)
   renderRoute('/sign-in', service)
 
@@ -173,6 +175,8 @@ test('keeps the notice generic after returning to sign in and changing email', a
   expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('')
   fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'unapproved@example.test' } })
   fireEvent.click(screen.getByRole('button', { name: 'Set or reset password' }))
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Email my password code' }).disabled).toBe(true)
+  act(() => { vi.advanceTimersByTime(60_000) })
   fireEvent.click(screen.getByRole('button', { name: 'Email my password code' }))
 
   expect(await screen.findByText(privateProjectCodeNotice)).toBeTruthy()
@@ -182,16 +186,16 @@ test('keeps the notice generic after returning to sign in and changing email', a
   }
 })
 
-test('does not show the code-entry notice when the request fails', async () => {
+test('does not show the code-entry notice for a true transport failure', async () => {
   const service = makeService(null)
-  vi.mocked(service.sendPasswordResetCode).mockRejectedValue(new Error('private provider detail'))
+  vi.mocked(service.sendPasswordResetCode).mockRejectedValue(new AuthNetworkError())
   renderRoute('/sign-in', service)
 
   fireEvent.click(await screen.findByRole('button', { name: 'Set or reset password' }))
   fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'allowed@example.test' } })
   fireEvent.click(screen.getByRole('button', { name: 'Email my password code' }))
 
-  expect((await screen.findByRole('alert')).textContent).toBe('We could not send a password code. Check the address and try again.')
+  expect((await screen.findByRole('alert')).textContent).toBe('We couldn’t reach the server. Try again.')
   expect(screen.queryByText(privateProjectCodeNotice)).toBeNull()
   expect(screen.queryByLabelText('Password code')).toBeNull()
   expect(screen.getByRole('button', { name: 'Email my password code' }).hasAttribute('disabled')).toBe(false)

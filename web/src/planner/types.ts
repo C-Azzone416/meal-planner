@@ -232,8 +232,10 @@ export interface PlannerState {
 }
 
 /** Recursively read-only version of a type, for code that wants to treat store data as immutable. */
-export type DeepReadonly<T> = T extends (infer U)[]
-  ? readonly DeepReadonly<U>[]
+export type DeepReadonly<T> = T extends (...args: never[]) => unknown
+  ? T
+  : T extends readonly (infer U)[]
+    ? readonly DeepReadonly<U>[]
   : T extends object
     ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
     : T
