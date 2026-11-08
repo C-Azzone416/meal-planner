@@ -39,6 +39,7 @@ jobs:
         run: |
           bash .github/scripts/classify_test.sh
           bash .github/scripts/gate_test.sh
+          node --test tools/framebriar-ci/*.test.mjs
           bash tools/deploy/check-pulled-env_test.sh
           bash tools/deploy/safe-extract_test.sh
           bash tools/deploy/materialize-output_test.sh
