@@ -280,6 +280,8 @@ jobs:
       && !contains(needs.*.result, 'cancelled') }}
     permissions:
       contents: read
+      actions: read
+      pull-requests: read
     uses: ./.github/workflows/preview.yml
     with:
       sha: ${{ github.sha }}

@@ -123,3 +123,13 @@ test('public Preview and rollback retain their ordinary build path',()=>{
  assert.equal(steps.filter(b=>b.includes('name: Vercel build (preview)')&&!b.includes("steps.dependency.outputs.private == 'false'")).length,0)
  assert.equal(steps.filter(b=>b.includes('PREBUILD_REQUIRED:')&&!b.includes("steps.dependency.outputs.private == 'true'")).length,0)
 })
+
+test('reusable Preview caller grants its required read-only evidence permissions',()=>{
+ const caller=fs.readFileSync('.github/workflows/ci.yml','utf8').split('\n  preview:\n')[1].split('\n  required:\n')[0]
+ const callee=fs.readFileSync('.github/workflows/preview.yml','utf8')
+ for(const permission of ['contents','actions','pull-requests']) {
+  assert.match(caller,new RegExp(`^      ${permission}: read$`,'m'))
+  assert.match(callee,new RegExp(`^ {2,6}${permission}: read$`,'m'))
+ }
+ assert.doesNotMatch(caller,/permissions: write-all|: write\b/)
+})
