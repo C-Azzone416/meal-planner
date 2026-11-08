@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react'
+import type { ReactNode, Ref } from 'react'
+import { usePlanner } from '../planner/store'
 import { PawMagnet } from './Magnet'
 
 export function FridgePanel({ children, className = '', paw }: { children: ReactNode; className?: string; paw?: 'green' | 'rust' | 'gold' | 'purple' | 'cream' }) {
@@ -11,10 +12,21 @@ export function FridgePanel({ children, className = '', paw }: { children: React
   )
 }
 
-export function PaperTitle({ words }: { words: string[] }) {
-  return <h1 className="paper-title" aria-label={words.join(' ')}>{words.map((word) => <span key={word}>{word}</span>)}</h1>
+export function PaperTitle({ words, headingRef }: { words: string[]; headingRef?: Ref<HTMLHeadingElement> }) {
+  return <h1 className="paper-title" aria-label={words.join(' ')} ref={headingRef} tabIndex={headingRef ? -1 : undefined}>{words.map((word) => <span key={word}>{word}</span>)}</h1>
 }
 
 export function PreviewNotice() {
-  return <p className="preview-notice">Sample preview · changes on this screen reset when you reload.</p>
+  const { resetNotice, dismissResetNotice, persistenceStatus } = usePlanner()
+  return (
+    <>
+      <p className="preview-notice">{persistenceStatus === 'saved' ? 'Preview data · saved in this browser only' : 'Preview data · changes not saved'}</p>
+      {resetNotice && (
+        <div className="reset-notice" role="status">
+          <span>{resetNotice}</span>
+          <button type="button" onClick={dismissResetNotice}>Dismiss</button>
+        </div>
+      )}
+    </>
+  )
 }

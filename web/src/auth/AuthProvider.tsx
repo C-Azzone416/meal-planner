@@ -20,6 +20,11 @@ interface AuthContextValue {
   status: AuthStatus
   user: AuthUser | null
   message: string | null
+  /** One-off, non-error message for the sign-in screen ("You're signed out.", "Your session ended. Sign in again."). */
+  notice: string | null
+  clearNotice(): void
+  /** Call when any request reports the session is gone (e.g. a future API 401). */
+  expireSession(): void
   signInWithPassword(email: string, password: string): Promise<void>
   sendPasswordResetCode(email: string): Promise<void>
   setPassword(email: string, code: string, password: string): Promise<void>
@@ -28,6 +33,11 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
+
+export const SIGNED_OUT_NOTICE = 'You\'re signed out.'
+export const SESSION_ENDED_NOTICE = 'Your session ended. Sign in again.'
+/** How often a signed-in session is re-checked (also on focus / tab becoming visible). */
+export const SESSION_RECHECK_MS = 5 * 60 * 1000
 
 export interface AuthProviderProps {
   children: ReactNode
@@ -42,6 +52,7 @@ export function AuthProvider({
   const [status, setStatus] = useState<AuthStatus>('loading')
   const [user, setUser] = useState<AuthUser | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
@@ -88,6 +99,7 @@ export function AuthProvider({
       setMessage(null)
       const nextUser = await service.signInWithPassword(email, password)
       setUser(nextUser)
+      setNotice(null)
       setStatus('signed-in')
     },
     [service],
@@ -108,16 +120,61 @@ export function AuthProvider({
       setMessage(null)
       const nextUser = await service.setPassword(email, code, password)
       setUser(nextUser)
+      setNotice(null)
       setStatus('signed-in')
     },
     [service],
   )
 
   const signOut = useCallback(async () => {
-    if (service) await service.signOut()
+    // Hide account data immediately, including when the remote sign-out fails.
     setUser(null)
+    setNotice(null)
+    setMessage(null)
     setStatus(service ? 'signed-out' : 'unavailable')
+    if (service) {
+      try { await service.signOut(); setNotice(SIGNED_OUT_NOTICE) } catch {
+        setMessage('Account data is hidden for now. Remote sign-out could not be confirmed, so reloading may reopen your session. Reconnect, sign in again, then sign out to retry.')
+      }
+    }
   }, [service])
+
+  const expireSession = useCallback(() => {
+    setUser(null)
+    setNotice(SESSION_ENDED_NOTICE)
+    setStatus((current) => (current === 'signed-in' ? 'signed-out' : current))
+  }, [])
+
+  const clearNotice = useCallback(() => setNotice(null), [])
+
+  // While signed in, notice a session that ended elsewhere (other tab, expiry, revoked) and send the
+  // person to sign-in; the route guard remembers the page so they return to it afterwards.
+  useEffect(() => {
+    if (status !== 'signed-in' || !service) return undefined
+    let active = true
+    const check = () => {
+      service
+        .getSession()
+        .then((session) => {
+          if (active && (!session || !session.emailVerified || session.id !== user?.id)) expireSession()
+        })
+        .catch(() => {
+          // A failed check (offline, server hiccup) is not proof the session ended: stay signed in.
+        })
+    }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') check()
+    }
+    const interval = window.setInterval(check, SESSION_RECHECK_MS)
+    window.addEventListener('focus', check)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      active = false
+      window.clearInterval(interval)
+      window.removeEventListener('focus', check)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [expireSession, service, status, user?.id])
 
   const retry = useCallback(() => {
     setStatus('loading')
@@ -130,6 +187,9 @@ export function AuthProvider({
       status,
       user,
       message,
+      notice,
+      clearNotice,
+      expireSession,
       signInWithPassword,
       sendPasswordResetCode,
       setPassword,
@@ -138,6 +198,9 @@ export function AuthProvider({
     }),
     [
       message,
+      notice,
+      clearNotice,
+      expireSession,
       retry,
       sendPasswordResetCode,
       setPassword,
@@ -155,4 +218,10 @@ export function useAuth(): AuthContextValue {
   const value = useContext(AuthContext)
   if (!value) throw new Error('useAuth must be used inside AuthProvider')
   return value
+}
+
+/** Notice for the sign-in screen; safe outside an AuthProvider (returns no notice). */
+export function useAuthNotice(): { notice: string | null; clearNotice: () => void } {
+  const value = useContext(AuthContext)
+  return { notice: value?.notice ?? null, clearNotice: value?.clearNotice ?? (() => undefined) }
 }
