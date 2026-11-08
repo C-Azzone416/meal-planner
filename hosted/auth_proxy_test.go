@@ -1,9 +1,11 @@
 package hosted
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -313,5 +315,96 @@ func TestAuthProxyPreservesRawQueryAndFiltersPath(t *testing.T) {
 	got := authProxyUpstreamQuery("path=get-session&redirect=https%3A%2F%2Fmeal.invalid%2Fa%2Bb&flag")
 	if got != "redirect=https%3A%2F%2Fmeal.invalid%2Fa%2Bb&flag" {
 		t.Fatalf("query = %q", got)
+	}
+}
+
+// All identities and provider responses in these regression cases are synthetic.
+func TestAuthProxyRejectsAmbiguousEmailPayloads(t *testing.T) {
+	payloads := []string{
+		`{"email":"blocked@example.invalid","Email":"allowed@example.invalid"}`,
+		`{"Email":"allowed@example.invalid","email":"blocked@example.invalid"}`,
+		`{"email":"allowed@example.invalid","EMAIL":"allowed@example.invalid"}`,
+		`{"Email":"allowed@example.invalid"}`,
+		`{"email":"blocked@example.invalid","email":"allowed@example.invalid"}`,
+		`{"email":"allowed@example.invalid","email":"blocked@example.invalid"}`,
+		`{"email":"allowed@example.invalid","email":"allowed@example.invalid"}`,
+		`{"email":"blocked@example.invalid","\u0065mail":"allowed@example.invalid"}`,
+		`{"email":"blocked@example.invalid"}`,
+		`{"email":null}`, `{"email":42}`, `{"email":[]}`, `{"email":{}}`,
+		`{}`, `null`, `[]`, `"allowed@example.invalid"`,
+		`{"nested":{"email":"allowed@example.invalid"}}`,
+		`{"email":"allowed@example.invalid"} {}`,
+		`{"email":"allowed@example.invalid",}`,
+	}
+	for path := range authProxyEmailRoutes {
+		for _, body := range payloads {
+			t.Run(path+"/"+body, func(t *testing.T) {
+				calls := 0
+				config := AuthProxyConfig{
+					BaseURL:          "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
+					ExpectedEndpoint: testEndpointID,
+					AllowedEmail:     "allowed@example.invalid",
+					Client: authProxyDoer(func(*http.Request) (*http.Response, error) {
+						calls++
+						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+					}),
+				}
+				req := httptest.NewRequest(http.MethodPost, "https://meal.invalid/api/auth-proxy?path="+path, strings.NewReader(body))
+				rec := httptest.NewRecorder()
+				AuthProxy(config).ServeHTTP(rec, req)
+				if calls != 0 {
+					t.Fatalf("provider called %d times for rejected payload", calls)
+				}
+				expected := authProxyBlockedEmailResponses[path]
+				if authProxySilentEmailRoutes[path] {
+					expected = authProxyBlockedResponse{http.StatusOK, `{"success":true}`}
+				}
+				if rec.Code != expected.Status || rec.Body.String() != expected.Body {
+					t.Fatalf("non-generic rejection: %d %s", rec.Code, rec.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestAuthProxyForwardsCanonicalEmailAndSDKFields(t *testing.T) {
+	for path := range authProxyEmailRoutes {
+		for _, emailKey := range []string{`email`, `\u0065mail`} {
+			t.Run(path+"/"+emailKey, func(t *testing.T) {
+				body := `{"` + emailKey + `":"  ALLOWED@example.invalid  ","password":"synthetic-password","otp":"123456","rememberMe":false,"callbackURL":"/week","metadata":{"email":"nested@example.invalid","number":9007199254740993}}`
+				calls := 0
+				config := AuthProxyConfig{
+					BaseURL:          "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
+					ExpectedEndpoint: testEndpointID,
+					AllowedEmail:     " allowed@example.invalid ",
+					Client: authProxyDoer(func(request *http.Request) (*http.Response, error) {
+						calls++
+						forwarded, err := io.ReadAll(request.Body)
+						if err != nil {
+							t.Fatal(err)
+						}
+						var got, want map[string]json.RawMessage
+						if err := json.Unmarshal(forwarded, &got); err != nil {
+							t.Fatal(err)
+						}
+						if err := json.Unmarshal([]byte(body), &want); err != nil {
+							t.Fatal(err)
+						}
+						want["email"] = json.RawMessage(`"allowed@example.invalid"`)
+						if !reflect.DeepEqual(got, want) {
+							t.Fatalf("forwarded payload = %s", forwarded)
+						}
+						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"success":true}`))}, nil
+					}),
+				}
+				req := httptest.NewRequest(http.MethodPost, "https://meal.invalid/api/auth-proxy?path="+path, strings.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				rec := httptest.NewRecorder()
+				AuthProxy(config).ServeHTTP(rec, req)
+				if calls != 1 || rec.Code != http.StatusOK {
+					t.Fatalf("calls/status = %d/%d", calls, rec.Code)
+				}
+			})
+		}
 	}
 }

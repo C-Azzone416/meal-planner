@@ -7,7 +7,7 @@ import '../styles/states.css'
 export const RESEND_SECONDS = 60
 
 /** Identical for every address, so it never reveals whether an account exists. */
-export const CODE_SENT_MESSAGE = 'If that address can sign in, we sent a code.'
+export const CODE_SENT_MESSAGE = 'If this email has access, we’ll send a code. This is a private project; contact the owner to request access.'
 
 type SignInMode = 'sign-in' | 'reset-email' | 'set-password'
 
@@ -166,7 +166,7 @@ export function SignInPage({
             <form onSubmit={(event) => void savePassword(event)}>
               <h2>choose your password</h2>
               {codeRequested && <p className="form-message" role="status">{CODE_SENT_MESSAGE}</p>}
-              <p>Enter the code from your email, then choose a new password.</p>
+              <p>If you receive a code, enter it below and choose a new password.</p>
               <label>
                 Password code
                 <input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value)} placeholder="6-digit code" minLength={6} maxLength={6} required />
