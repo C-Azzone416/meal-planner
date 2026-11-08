@@ -1,5 +1,7 @@
 # Local preparation: owner-reviewed Framebriar CI
 
+This document describes the bootstrap baseline. The current local wiring revision and its explicit remaining blockers are described in [framebriar-ci-wiring.md](framebriar-ci-wiring.md); it remains unpublished/unactivated pending review.
+
 This dependency-free bootstrap was prepared against the current main baseline, before the private SDK feature. It adds a manual workflow and offline policy tests; it does not provision anything, run a workflow, enable feedback, change owner exemptions, replace a mandatory check or unblock the feature PR by skipping tests.
 
 ## Implemented preparatory path

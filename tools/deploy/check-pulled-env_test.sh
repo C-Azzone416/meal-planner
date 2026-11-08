@@ -46,7 +46,7 @@ VERCEL_GIT_COMMIT_SHA=""
 VERCEL_URL=""
 EOF
 expect 0 vercel-only "$work/vercel-only/.env.preview.local"
-check "vercel-only: reports no extra system vars" has vercel-only "allowed system vars present (non-VERCEL_): none"
+check "vercel-only: reports no extra exact vars" has vercel-only "allowed exact vars present (non-VERCEL_): none"
 
 # Allowlisted exact names pass and are named on a pass.
 fixture system/.env.preview.local << EOF
@@ -55,7 +55,7 @@ CI=1
 VERCEL_OIDC_TOKEN="$secret"
 EOF
 expect 0 system "$work/system/.env.preview.local"
-check "system: names VERCEL and CI" has system "allowed system vars present (non-VERCEL_): VERCEL, CI"
+check "system: names VERCEL and CI" has system "allowed exact vars present (non-VERCEL_): VERCEL, CI"
 
 # An app variable fails and its NAME (only) is reported.
 fixture app/.env.preview.local << EOF
@@ -170,6 +170,18 @@ for l in 2 3 4 5; do check "b64: line $l unparseable" has b64 "line $l: unparsea
 check "b64: uppercase base64 not printed" lacks b64 "$b64"
 check "b64: no name printed" lacks b64 "unexpected variable name"
 
+# An uppercase-only line ending in a single `=` is a valid name with an empty value, so it is reported as a name
+# (documented in the script header).
+printf 'ABCDEF=\n' > "$work/upper-eq.env"
+expect 1 upper-eq "$work/upper-eq.env"
+check "upper-eq: reported as a name" has upper-eq "unexpected variable name ABCDEF"
+
+# Linear scan: a large file must finish quickly (the old head-trimming loop was quadratic).
+{ printf 'VERCEL_ENV=preview\n'; for ((i = 0; i < 20000; i++)); do printf 'VERCEL_X%s="v"\n' "$i"; done; } > "$work/big.env"
+SECONDS=0
+expect 0 big "$work/big.env"
+check "big: 20000 lines in under 20s" test "$SECONDS" -lt 20
+
 # F2: a lone CR is a line break to dotenv, so it must not hide a second assignment.
 printf 'VERCEL_ENV=preview\rDATABASE_URL=%s\n' "$secret" > "$work/lone-cr.env"
 expect 1 lone-cr "$work/lone-cr.env"
@@ -180,7 +192,7 @@ expect 1 lone-cr-quoted "$work/lone-cr-quoted.env"
 # NUL bytes fail closed.
 printf 'VERCEL_ENV=preview\0\nVERCEL_URL=%s\n' "$secret" > "$work/nul.env"
 expect 1 nul "$work/nul.env"
-check "nul: reported" has nul "contains NUL bytes"
+check "nul: reported" has nul "contains NUL bytes or changed while being read"
 
 # F3: a .env* entry that is a symlink or not a regular file fails closed, as does a symlinked argument.
 mkdir -p "$work/links/.vercel" "$work/links/.vercel/.env.d"
@@ -224,6 +236,145 @@ EOF
 expect 0 build-settings "$work/build-settings/.env.preview.local"
 check "build-settings: 8 variables" has build-settings "8 variable(s)"
 check "build-settings: names the allowed ones" has build-settings "present (non-VERCEL_): NX_DAEMON, TURBO_CACHE, TURBO_DOWNLOAD_LOCAL_ENABLED, TURBO_REMOTE_ONLY, TURBO_RUN_SUMMARY, VERCEL"
+
+# Preview auth runtime settings: the three exact names must appear once as a complete, internally consistent set.
+auth_base=https://ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth
+auth_endpoint=ep-example-123
+auth_email=preview.user+test@example.invalid
+fixture auth/.env.preview.local << EOF
+# Created by Vercel CLI
+AUTH_ALLOWED_EMAIL="$auth_email"
+NEON_AUTH_BASE_URL="$auth_base"
+NEON_AUTH_ENDPOINT_ID="$auth_endpoint"
+VERCEL_ENV="preview"
+VERCEL_OIDC_TOKEN="eyJ.$secret.sig"
+EOF
+expect 0 auth "$work/auth/.env.preview.local"
+check "auth: names settings without values" has auth "AUTH_ALLOWED_EMAIL, NEON_AUTH_BASE_URL, NEON_AUTH_ENDPOINT_ID"
+check "auth: does not print hostname" lacks auth "ep-example-123"
+check "auth: does not print email" lacks auth "preview.user"
+
+# Preview/Production Secret values are write-only, so vercel@65.9.0 emits this exact non-secret placeholder.
+fixture auth-secret/.env.preview.local << EOF
+AUTH_ALLOWED_EMAIL="[SENSITIVE]"
+NEON_AUTH_BASE_URL="[SENSITIVE]"
+NEON_AUTH_ENDPOINT_ID="[SENSITIVE]"
+VERCEL_ENV="preview"
+EOF
+expect 0 auth-secret "$work/auth-secret/.env.preview.local"
+check "auth-secret: complete placeholder trio passes" has auth-secret "4 variable(s)"
+
+# Config and Secret types may be mixed; compare endpoint IDs only when both literal values are available.
+fixture auth-mixed/.env.preview.local << EOF
+AUTH_ALLOWED_EMAIL="[SENSITIVE]"
+NEON_AUTH_BASE_URL="$auth_base"
+NEON_AUTH_ENDPOINT_ID="[SENSITIVE]"
+EOF
+expect 0 auth-mixed "$work/auth-mixed/.env.preview.local"
+check "auth-mixed: does not print literal endpoint" lacks auth-mixed "$auth_endpoint"
+fixture auth-mixed-reverse/.env.preview.local << EOF
+AUTH_ALLOWED_EMAIL="[SENSITIVE]"
+NEON_AUTH_BASE_URL="[SENSITIVE]"
+NEON_AUTH_ENDPOINT_ID="$auth_endpoint"
+EOF
+expect 0 auth-mixed-reverse "$work/auth-mixed-reverse/.env.preview.local"
+check "auth-mixed-reverse: does not print literal endpoint" lacks auth-mixed-reverse "$auth_endpoint"
+
+for missing_name in NEON_AUTH_BASE_URL NEON_AUTH_ENDPOINT_ID AUTH_ALLOWED_EMAIL; do
+  : > "$work/auth-partial.env"
+  [[ $missing_name == NEON_AUTH_BASE_URL ]] || printf 'NEON_AUTH_BASE_URL="%s"\n' "$auth_base" >> "$work/auth-partial.env"
+  [[ $missing_name == NEON_AUTH_ENDPOINT_ID ]] || printf 'NEON_AUTH_ENDPOINT_ID="%s"\n' "$auth_endpoint" >> "$work/auth-partial.env"
+  [[ $missing_name == AUTH_ALLOWED_EMAIL ]] || printf 'AUTH_ALLOWED_EMAIL="%s"\n' "$auth_email" >> "$work/auth-partial.env"
+  expect 1 "auth-missing-$missing_name" "$work/auth-partial.env"
+  check "auth-missing-$missing_name: complete set required" has "auth-missing-$missing_name" "must appear exactly once as a complete set"
+done
+
+fixture auth-secret-partial/.env << EOF
+NEON_AUTH_BASE_URL="[SENSITIVE]"
+NEON_AUTH_ENDPOINT_ID="[SENSITIVE]"
+EOF
+expect 1 auth-secret-partial "$work/auth-secret-partial/.env"
+check "auth-secret-partial: complete set required" has auth-secret-partial "must appear exactly once as a complete set"
+
+fixture auth-duplicate/.env << EOF
+NEON_AUTH_BASE_URL="$auth_base"
+NEON_AUTH_BASE_URL="$auth_base"
+NEON_AUTH_ENDPOINT_ID="$auth_endpoint"
+AUTH_ALLOWED_EMAIL="$auth_email"
+EOF
+expect 1 auth-duplicate "$work/auth-duplicate/.env"
+check "auth-duplicate: rejected without a value" has auth-duplicate "must appear exactly once as a complete set"
+
+fixture auth-mismatch/.env << EOF
+NEON_AUTH_BASE_URL="$auth_base"
+NEON_AUTH_ENDPOINT_ID="ep-other-456"
+AUTH_ALLOWED_EMAIL="$auth_email"
+EOF
+expect 1 auth-mismatch "$work/auth-mismatch/.env"
+check "auth-mismatch: rejected without either endpoint" has auth-mismatch "identify different endpoints"
+check "auth-mismatch: base endpoint not printed" lacks auth-mismatch "$auth_endpoint"
+check "auth-mismatch: configured endpoint not printed" lacks auth-mismatch "ep-other-456"
+
+bad_auth_value() { # bad_auth_value <case> <NAME> <value>: replace one value in an otherwise complete auth set
+  local case_name=$1 setting=$2 invalid=$3 base=$auth_base endpoint=$auth_endpoint email=$auth_email
+  case $setting in
+    NEON_AUTH_BASE_URL) base=$invalid ;;
+    NEON_AUTH_ENDPOINT_ID) endpoint=$invalid ;;
+    AUTH_ALLOWED_EMAIL) email=$invalid ;;
+  esac
+  printf 'NEON_AUTH_BASE_URL="%s"\nNEON_AUTH_ENDPOINT_ID="%s"\nAUTH_ALLOWED_EMAIL="%s"\n' "$base" "$endpoint" "$email" > "$work/$case_name.env"
+  expect 1 "$case_name" "$work/$case_name.env"
+  check "$case_name: names only the invalid setting" has "$case_name" "$setting has an unexpected value"
+  if [[ -n $invalid ]]; then
+    check "$case_name: does not print the invalid value" lacks "$case_name" "$invalid"
+  fi
+}
+
+bad_auth_value auth-base-http NEON_AUTH_BASE_URL 'http://ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth'
+bad_auth_value auth-base-userinfo NEON_AUTH_BASE_URL 'https://user@ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth'
+bad_auth_value auth-base-wrong-host NEON_AUTH_BASE_URL 'https://ep-example-123.neonauth.example.invalid/neondb/auth'
+bad_auth_value auth-base-wrong-path NEON_AUTH_BASE_URL 'https://ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/auth'
+bad_auth_value auth-base-query NEON_AUTH_BASE_URL 'https://ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth?x=1'
+bad_auth_value auth-base-fragment NEON_AUTH_BASE_URL 'https://ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth#x'
+bad_auth_value auth-base-slash NEON_AUTH_BASE_URL 'https://ep-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth/'
+bad_auth_value auth-base-upper NEON_AUTH_BASE_URL 'https://EP-example-123.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth'
+bad_auth_value auth-base-placeholder-near-miss NEON_AUTH_BASE_URL '[SENSITIVE ]'
+bad_auth_value auth-endpoint-upper NEON_AUTH_ENDPOINT_ID 'EP-example-123'
+bad_auth_value auth-endpoint-punctuation NEON_AUTH_ENDPOINT_ID 'ep-example_123'
+bad_auth_value auth-endpoint-long NEON_AUTH_ENDPOINT_ID "ep-$(printf 'a%.0s' {1..61})"
+bad_auth_value auth-endpoint-placeholder-near-miss NEON_AUTH_ENDPOINT_ID '[sensitive]'
+bad_auth_value auth-email-upper AUTH_ALLOWED_EMAIL 'Preview.User@example.invalid'
+bad_auth_value auth-email-space AUTH_ALLOWED_EMAIL 'preview user@example.invalid'
+bad_auth_value auth-email-two-at AUTH_ALLOWED_EMAIL 'preview@@example.invalid'
+bad_auth_value auth-email-no-dot AUTH_ALLOWED_EMAIL 'preview@example'
+bad_auth_value auth-email-leading-hyphen AUTH_ALLOWED_EMAIL 'preview@-example.invalid'
+bad_auth_value auth-email-trailing-hyphen AUTH_ALLOWED_EMAIL 'preview@example-.invalid'
+bad_auth_value auth-email-leading-dot AUTH_ALLOWED_EMAIL '.preview@example.invalid'
+bad_auth_value auth-email-trailing-dot AUTH_ALLOWED_EMAIL 'preview.@example.invalid'
+bad_auth_value auth-email-two-dots AUTH_ALLOWED_EMAIL 'preview..user@example.invalid'
+bad_auth_value auth-email-local-long AUTH_ALLOWED_EMAIL "$(printf 'a%.0s' {1..65})@example.invalid"
+bad_auth_value auth-email-total-long AUTH_ALLOWED_EMAIL "a@$(printf 'b%.0s' {1..247}).invalid"
+bad_auth_value auth-email-placeholder-near-miss AUTH_ALLOWED_EMAIL '[SENSITIVE][SENSITIVE]'
+bad_auth_value auth-email-empty AUTH_ALLOWED_EMAIL ''
+
+fixture auth-multiline/.env << EOF
+NEON_AUTH_BASE_URL="$auth_base
+"
+NEON_AUTH_ENDPOINT_ID="$auth_endpoint"
+AUTH_ALLOWED_EMAIL="$auth_email"
+EOF
+expect 1 auth-multiline "$work/auth-multiline/.env"
+check "auth-multiline: rejected by name" has auth-multiline "NEON_AUTH_BASE_URL has an unexpected value"
+
+fixture auth-lookalikes/.env << EOF
+NEON_AUTH_BASE_URI="$secret"
+NEON_AUTH_ENDPOINT="$secret"
+AUTH_ALLOWED_EMAILS="$secret"
+EOF
+expect 1 auth-lookalikes "$work/auth-lookalikes/.env"
+for n in NEON_AUTH_BASE_URI NEON_AUTH_ENDPOINT AUTH_ALLOWED_EMAILS; do
+  check "auth-lookalikes: $n flagged" has auth-lookalikes "unexpected variable name $n"
+done
 
 # Every allowed value, unquoted, double-quoted and single-quoted.
 for v in true false 1 0; do
@@ -319,6 +470,49 @@ printf 'NX_DAEMON=false\0\n' > "$work/setting-nul.env"
 expect 1 setting-nul "$work/setting-nul.env"
 printf 'NX_DAEMON="false"\r\nTURBO_REMOTE_ONLY=true\r\n' > "$work/setting-crlf.env"
 expect 0 setting-crlf "$work/setting-crlf.env"
+
+# Framebriar public config is allowlisted, runtime credentials only as redacted Secrets.
+fixture framebriar/.env << EOF
+FRAMEBRIAR_ENABLED="0"
+FRAMEBRIAR_ENVIRONMENT="preview"
+FRAMEBRIAR_ALLOWED_ORIGIN="https://preview.example.test"
+FRAMEBRIAR_APP_ID="meal-planner-preview"
+FRAMEBRIAR_BUILD_SHA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+FRAMEBRIAR_SCREENSHOTS="0"
+FRAMEBRIAR_DATABASE_URL="[SENSITIVE]"
+FRAMEBRIAR_CREDENTIAL_KEYS="[SENSITIVE]"
+MEAL_RECIPES_DATABASE_URL="[SENSITIVE]"
+EOF
+expect 0 framebriar "$work/framebriar/.env"
+fixture framebriar-secret/.env << EOF
+FRAMEBRIAR_DATABASE_URL="$secret"
+FRAMEBRIAR_CREDENTIAL_KEYS="$secret"
+FRAMEBRIAR_PACKAGE_READ_TOKEN="$secret"
+EOF
+expect 1 framebriar-secret "$work/framebriar-secret/.env"
+check "framebriar-secret: no secret output" lacks framebriar-secret "$secret"
+fixture framebriar-bad/.env << EOF
+FRAMEBRIAR_ENABLED="true"
+FRAMEBRIAR_ALLOWED_ORIGIN="https://*.example.test"
+FRAMEBRIAR_BUILD_SHA="dev"
+EOF
+expect 1 framebriar-bad "$work/framebriar-bad/.env"
+# Recipe DB credentials are runtime-only Secrets, not Config or build inputs.
+fixture recipe-secret/.env << EOF
+MEAL_RECIPES_DATABASE_URL="[SENSITIVE]"
+EOF
+expect 0 recipe-secret "$work/recipe-secret/.env"
+fixture recipe-literal/.env << EOF
+MEAL_RECIPES_DATABASE_URL="postgres://u:$secret@db/x?sslmode=verify-full"
+EOF
+expect 1 recipe-literal "$work/recipe-literal/.env"
+check "recipe-literal: names only" has recipe-literal "MEAL_RECIPES_DATABASE_URL has an unexpected value"
+check "recipe-literal: no secret" lacks recipe-literal "$secret"
+fixture recipe-lookalike/.env << EOF
+VITE_MEAL_RECIPES_DATABASE_URL="[SENSITIVE]"
+MEAL_RECIPES_DATABASE_URL_EXTRA="[SENSITIVE]"
+EOF
+expect 1 recipe-lookalike "$work/recipe-lookalike/.env"
 
 # Usage and I/O errors exit 2.
 expect 2 missing "$work/does-not-exist"

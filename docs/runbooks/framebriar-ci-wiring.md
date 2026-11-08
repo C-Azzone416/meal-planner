@@ -1,0 +1,47 @@
+# Local wiring preparation: reviewed frontend evidence and disabled Preview prebuild
+
+This revision prepares `codex/framebriar-ci-wiring`, based on bootstrap `21c3203`, for publication and review. Publication does not configure, dispatch or deploy the new path. The published bootstrap subsequently reached main through its merge commit; that older main revision does not contain this wiring. Do not use its SHA as if it authorized the new workflow. The original feature worktree and branch remain unchanged.
+
+## What changes, and what does not
+
+- Existing CI `web` preserves ordinary npm/lint/typecheck/unit/build checks for manifests without the private Framebriar dependency. For the private feature it instead requires complete trusted exact-SHA frontend evidence. It neither skips coverage nor receives a package reader. The `required` aggregate, hosted/local Go, contracts and integration checks remain intact. Backend-only changes also select the full-stack web gate.
+- `FRAMEBRIAR_TRUSTED_WORKFLOW_SHA` must be an explicitly approved full SHA of current main containing this reviewed verifier/workflow. The CI job checks out verification code at that pin, not from the target. Missing/stale pins fail. Main movement requires review and a deliberate pin update; no automatic trust expansion.
+- Trusted dispatch `subject=pr` requires an open same-repository PR, exact head and actual current base head. A GitHub comparison must prove the current base is an ancestor of the tested head. This preserves the source-tree coverage of ordinary synthetic-merge CI; recording base identity alone is insufficient. Merge/rebase the current base into the PR before a fresh approved run if necessary.
+- Trusted dispatch `subject=develop` requires the exact current develop head and an empty PR input. Evidence uses a distinct subject/identity. A PR-head receipt is never reused as evidence for a merge commit. Newer dispatch/rerun failures remain blocking under the documented chronology policy.
+- Main-only package installation is still the single owner-approved environment boundary. Only fixed trusted install code gets the new package reader; copied inert manifests, ignored lifecycle scripts, isolated npm config/cache and fresh credential-free test steps remain.
+- Production deployment workflows/settings are not enabled or changed by this wiring. Private-dependency push-to-main evidence is not implemented: it fails explicitly, rather than silently treating develop evidence as Production/release CI. A future release needs its own reviewed extension.
+
+## Optional Preview prebuild and consumption
+
+Only develop mode may request `prebuild=true`. The workflow has a separate Preview pull job copied from the existing deployment split: the Vercel token is used before repository checkout, pulled env files are validated/deleted, and only public project metadata leaves that job. It does not share the package-reader job. Existing Vercel project/org IDs identify the intended project; no new identifiers are invented.
+
+After exact-source frontend/browser/artifact tests, the package-reader-free build steps run the trusted migration-readiness guard before prebuilding. They generate immutable Go/frontend provenance from the requested SHA and build **Preview feedback disabled, screenshots disabled**. No enablement flag is accepted from the caller. Materialization makes function files self-contained. Only `.vercel/output` and `.vercel/project.json` are archived. The source/build runner checks the output before uploading an immutable named artifact.
+
+A clean reporter runner then downloads the compiled output without executing it. `seal-prebuild.mjs` checks the real tar checksum, safe entry boundaries, self-contained function configuration, exact project/org, exact Preview SHA/app metadata and actual JavaScript/server provenance. Raw node_modules, dotenv/npm configuration, map files and inline/external JavaScript or CSS source-map directives are rejected. Normal compiled browser bundles necessarily include SDK runtime code; this is not a promise that a browser bundle hides its implementation. No raw private package/cache is exported.
+
+The clean reporter binds tar checksum and artifact ID/digest/name to the metadata evidence. Ordinary web verification validates that identity when present. For a manifest containing the private dependency, Preview's build job now requires that evidence, downloads the exact cross-run artifact ID, repeats sealing and repackages the identical bytes for the existing deploy path. The deploy job remains unchanged: checksum, safe extraction, materialization check, fresh CLI installation, step-only deployment credential, exact source metadata, smoke tests and stable-alias safeguards stay in place. An absent prebuild for the private dependency is an explicit Preview failure, not permission to run an unprotected private install. Exact regular package/lock manifests select the route. Targets without Framebriar retain the existing ordinary public build, original migration guard and materialization path; they do not require the new trusted pin/evidence. This preserves unrelated public-dependency work and rollback after SDK removal. The existing public migration guard is preserved, not presented as new live database readiness verification.
+
+The workflow must complete before ordinary CI consumes its evidence. This avoids waiting for CI from inside the same unfinished run. After the approved develop test/prebuild completes, rerun the affected push CI; web validates evidence and Preview consumes that prebuild. No deployment is launched by this local preparation.
+
+## Current migration and enablement blockers are deliberate
+
+The existing source-presence guard still blocks any target containing `migrations/`, `hosted/migrations/` or legacy `db/migrations/` entries until a separately reviewed target-specific readiness mechanism exists. The feature has real schemas, so **its prebuild currently stops here even when package access succeeds**. This wiring adds no readiness boolean, hash-only assertion, credential shortcut or automatic migration. Owner-verified schema/privilege/checksum evidence must be integrated through a separately reviewed gate; do not remove this blocker merely to get green CI.
+
+Artifacts are deliberately feedback-off. Runtime storage/key setup, the registered exact origin, approved Preview enablement and synthetic receipt remain separate completion steps. Production stays off. These limitations prevent claiming that code-only preparation has finished live setup.
+
+## Integration and rollout checkpoints
+
+1. Review this isolated diff and negative tests independently. Ordinary baseline CI remains public-dependency-only, so this can be reviewed as a dependency-free main change. No new required-check context or second contributor is needed.
+2. After authorized publication/merge, record the resulting main merge SHA and explicitly approve/update `FRAMEBRIAR_TRUSTED_WORKFLOW_SHA`. The already-approved environment and package credential setup are separate operations; this code does not perform them.
+3. Bring the wiring into the feature and reconcile its old `tools/feedback/workflows.test.mjs` assumptions about direct-reader CI/Preview installs. Those feature tests currently describe the old architecture and must assert the new trusted evidence path instead. Do not overwrite current auth/privacy/storage changes while resolving shared workflow/tool files. The feature worktree was not edited here.
+4. Merge the current target base into the feature, run the owner-approved PR subject and rerun ordinary PR CI. All frontend coverage must be present in the trusted run; backend/contracts/integration still run normally.
+5. After separately authorized merge to develop, run the exact new merge SHA in develop mode. For `prebuild=true`, first complete the independently verified migration-readiness gate. Require a new run for a changed SHA/base/pin, never reuse the PR receipt.
+6. Rerun push CI to verify evidence and consume the sealed disabled Preview prebuild. Perform separately approved runtime setup/enablement and receipt checks only after their own prerequisites. Rebuilding disabled bytes does not activate feedback.
+
+An older develop commit is rejected after the branch moves; this is intentionally conservative and differs from the older “every historical develop push deploys” behavior. The selected current exact-SHA run is the path forward, not weakening the stale-head check.
+
+## Offline test scope
+
+Tests cover distinct subjects, current-base ancestry, moved/stale heads, wrong pins, merge-SHA reuse, newer failed/pending runs, malformed provenance, missing/colliding artifacts, wrong prebuild SHA/target/identity/digest and real tar checksum/project/source-map/config rejection. GNU tar fixtures are used for the existing deploy extractor. Workflow lint and existing names-only/migration guards remain checked.
+
+These tests do not exercise a real Vercel prebuild, a live cross-run artifact download, the new protected workflow, actual provider migration readiness or live report delivery. Request independent review before publication; do not infer activation authorization from local passing tests.

@@ -113,24 +113,119 @@ jobs:
           if-no-files-found: error
 
   build:
-    name: Deploy / preview-build
+    name: Deploy / verify reviewed Preview prebuild
     needs: pull
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 15
     permissions:
       contents: read
+      actions: read
+      pull-requests: read
     outputs:
-      output_sha256: ${{ steps.pack.outputs.output_sha256 }}
+      output_sha256: ${{ steps.dependency.outputs.private == 'true' && steps.pack.outputs.output_sha256 || steps.public-pack.outputs.output_sha256 }}
     env:
+      SHA: ${{ inputs.sha }}
+      TARGET_SHA: ${{ inputs.sha }}
+      SUBJECT: develop
+      TRUSTED_WORKFLOW_SHA: ${{ vars.FRAMEBRIAR_TRUSTED_WORKFLOW_SHA }}
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
-      SHA: ${{ inputs.sha }}
     steps:
+      - name: Validate exact target before dependency selection
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+      - name: Inspect exact target manifests without executing source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          sparse-checkout: |
+            web/package.json
+            web/package-lock.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+          path: .target-manifests
+      - name: Classify locked private dependency with fixed workflow code
+        id: dependency
+        run: |
+          set -euo pipefail
+          [[ "$(git -C .target-manifests rev-parse HEAD)" == "$SHA" ]] || exit 1
+          for file in web/package.json web/package-lock.json; do
+            [[ "$(git -C .target-manifests ls-tree HEAD "$file" | cut -d' ' -f1)" == 100644 ]] || exit 1
+          done
+          # shellcheck disable=SC2016
+          node --input-type=module -e 'import fs from "node:fs"; const p=JSON.parse(fs.readFileSync(".target-manifests/web/package.json"));const l=JSON.parse(fs.readFileSync(".target-manifests/web/package-lock.json"));const direct=[p.dependencies,p.devDependencies,p.optionalDependencies].some(d=>Object.hasOwn(d??{},"@masra91/framebriar"));const locked=Object.keys(l.packages??{}).some(n=>n.endsWith("node_modules/@masra91/framebriar"));fs.appendFileSync(process.env.GITHUB_OUTPUT,`private=${direct||locked}\n`)'
+      - name: Validate exact target and explicit trusted revision
+        if: steps.dependency.outputs.private == 'true'
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ && "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Exact target and approved trusted workflow revision are required'; exit 1; }
+      - name: Check out trusted verification code only
+        if: steps.dependency.outputs.private == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ vars.FRAMEBRIAR_TRUSTED_WORKFLOW_SHA }}
+          sparse-checkout: tools
+          persist-credentials: false
+          path: trusted
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.dependency.outputs.private == 'true'
+        with:
+          node-version: '26'
+      - name: Require current develop evidence with sealed Preview artifact
+        if: steps.dependency.outputs.private == 'true'
+        id: evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREBUILD_REQUIRED: '1'
+          PREBUILD_METADATA_PATH: ${{ runner.temp }}/expected-prebuild.json
+        run: node trusted/tools/framebriar-ci/bridge.mjs
+      - name: Download exact reviewed artifact by ID
+        if: steps.dependency.outputs.private == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ steps.evidence.outputs.artifact_id }}
+          run-id: ${{ steps.evidence.outputs.run_id }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/reviewed-prebuild
+      - name: Reverify bytes and preserved deploy boundaries
+        if: steps.dependency.outputs.private == 'true'
+        env:
+          PREBUILD_DIRECTORY: ${{ runner.temp }}/reviewed-prebuild
+          EXPECTED_PREBUILD_JSON: ${{ runner.temp }}/expected-prebuild.json
+          SEALED_PREBUILD_JSON: ${{ runner.temp }}/verified-prebuild.json
+        run: node trusted/tools/framebriar-ci/seal-prebuild.mjs
+      - name: Package verified bytes for existing deployment guards
+        if: steps.dependency.outputs.private == 'true'
+        id: pack
+        env:
+          EXPECTED: ${{ steps.evidence.outputs.tar_sha256 }}
+          REVIEWED_RUN: ${{ steps.evidence.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/out"
+          cp "$RUNNER_TEMP/reviewed-prebuild/build-output.tar" "$RUNNER_TEMP/out/build-output.tar"
+          actual=$(sha256sum "$RUNNER_TEMP/out/build-output.tar" | cut -d' ' -f1)
+          [[ "$actual" == "$EXPECTED" ]] || { echo '::error::Reviewed prebuild checksum changed'; exit 1; }
+          echo "output_sha256=$actual" >> "$GITHUB_OUTPUT"
+          jq -n --arg sha "$SHA" --arg target preview --arg workflow "$TRUSTED_WORKFLOW_SHA" --arg run "$REVIEWED_RUN" --arg hash "$actual" \
+            '{source_sha:$sha,target:$target,trusted_workflow_sha:$workflow,reviewed_run_id:$run,build_output_tar_sha256:$hash}' > "$RUNNER_TEMP/out/manifest.json"
+      - name: Upload verified build output
+        if: steps.dependency.outputs.private == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: preview-build-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/out/build-output.tar
+            ${{ runner.temp }}/out/manifest.json
+          retention-days: 7
+          if-no-files-found: error
       - name: Validate SHA input
+        if: steps.dependency.outputs.private == 'false'
         run: |
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha must be a full 40-character lowercase hex SHA"; exit 1; }
 
       - name: Check out exact SHA
+        if: steps.dependency.outputs.private == 'false'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.sha }}
@@ -138,27 +233,30 @@ jobs:
           persist-credentials: false
 
       - name: Confirm checkout is the requested SHA
+        if: steps.dependency.outputs.private == 'false'
         run: |
           head=$(git rev-parse HEAD)
           [[ "$head" == "$SHA" ]] || { echo "::error::checked out $head, expected $SHA"; exit 1; }
 
-      # Schema migrations are intentionally skipped: there is no database schema yet. This guard fails
+      # Preserve the existing public-build migration guard; no migrations run here. This guard fails
       # loudly if migrations appear before a runner is wired. When one exists, run the reviewed
       # forward-only migration in its own job before `deploy`, using only the Preview migrator
       # credential from the `preview` environment.
-      - name: Migrate Preview database (skipped, no schema yet)
-        if: ${{ hashFiles('db/migrations/**') != '' }}
+      - name: Preserve public-build migration gate
+        if: ${{ steps.dependency.outputs.private == 'false' && (hashFiles('db/migrations/**') != '') }}
         run: |
           echo "::error::migrations found under db/migrations but no migration runner is wired yet"
           exit 1
 
       - name: Download pull data
+        if: steps.dependency.outputs.private == 'false'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: preview-pull-${{ inputs.sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/pull
 
       - name: Restore .vercel/project.json
+        if: steps.dependency.outputs.private == 'false'
         run: tar -xf "$RUNNER_TEMP/pull/pull.tar" --no-same-owner
 
       # The pull artifact deliberately carries no env files (they hold a live OIDC token). `vercel build` looks
@@ -167,11 +265,13 @@ jobs:
       # The project has no build-time env vars (the pull job's guard enforces that). Not verified against a live
       # build: if `vercel build` rejects it, revisit the design rather than ship env values through an artifact.
       - name: Write placeholder env file
+        if: steps.dependency.outputs.private == 'false'
         run: |
           printf '# Placeholder written by the build job; pulled env values are never handed between jobs.\nVERCEL_ENV=preview\n' > .vercel/.env.preview.local
 
       # No VERCEL_TOKEN anywhere in this job: the build runs project install/build commands.
       - name: Vercel build (preview)
+        if: steps.dependency.outputs.private == 'false'
         run: npx --yes "vercel@${VERCEL_CLI_VERSION}" build --target=preview --yes
 
       # `vercel build` leaves some files (the compiled Go binary lives in the runner's /tmp) outside the function
@@ -179,6 +279,7 @@ jobs:
       # copy them in before packaging and drop the map (see docs/runbooks/hosted-deploy.md). The script comes from
       # the commit that defines this workflow, checked out after the build and next to no token.
       - name: Check out materialize script only
+        if: steps.dependency.outputs.private == 'false'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
@@ -189,10 +290,12 @@ jobs:
           path: .deploy-tools
 
       - name: Make build output self-contained
+        if: steps.dependency.outputs.private == 'false'
         run: .deploy-tools/tools/deploy/materialize-output.sh .
 
       - name: Package build output and record checksum
-        id: pack
+        if: steps.dependency.outputs.private == 'false'
+        id: public-pack
         run: |
           mkdir -p "$RUNNER_TEMP/out"
           tar -cf "$RUNNER_TEMP/out/build-output.tar" .vercel/output .vercel/project.json
@@ -215,6 +318,7 @@ jobs:
 
       # Only the build output tarball and manifest are uploaded; never the pulled env files.
       - name: Upload build output
+        if: steps.dependency.outputs.private == 'false'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: preview-build-${{ inputs.sha }}-${{ github.run_attempt }}

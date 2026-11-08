@@ -1,12 +1,22 @@
 name: Framebriar reviewed CI (informational)
-run-name: Reviewed PR ${{ inputs.pr }} at ${{ inputs.sha }}
+run-name: ${{ inputs.subject == 'develop' && format('Reviewed develop at {0}', inputs.sha) || format('Reviewed PR {0} at {1}', inputs.pr, inputs.sha) }}
 on:
   workflow_dispatch:
     inputs:
-      pr:
-        description: Same-repository open PR number
-        type: string
+      subject:
+        description: Reviewed PR head or exact merged develop head
+        type: choice
+        options: [pr, develop]
+        default: pr
         required: true
+      prebuild:
+        description: Prepare disabled Preview artifact (develop only; migration gate must pass)
+        type: boolean
+        default: false
+      pr:
+        description: Same-repository open PR number (leave empty for develop)
+        type: string
+        required: false
       sha:
         description: Exact current PR head SHA approved for private SDK access
         type: string
@@ -17,12 +27,19 @@ on:
         required: true
 permissions: {}
 concurrency:
-  group: framebriar-reviewed-${{ inputs.pr }}
+  group: framebriar-reviewed-${{ inputs.subject }}-${{ inputs.pr }}
   cancel-in-progress: false
 defaults:
   run:
     shell: bash
 env:
+  VERCEL_CLI_VERSION: 65.9.0
+  VERCEL_TELEMETRY_DISABLED: "1"
+  NO_UPDATE_NOTIFIER: "1"
+  VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+  PREBUILD_REQUESTED: ${{ inputs.prebuild }}
+  SUBJECT: ${{ inputs.subject }}
   TARGET_SHA: ${{ inputs.sha }}
   PR_NUMBER: ${{ inputs.pr }}
   APPROVED_WORKFLOW_SHA: ${{ inputs.workflow_sha }}
@@ -56,9 +73,77 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node trusted/tools/framebriar-ci/verify.mjs
 
+  pull-preview:
+    needs: validate
+    if: inputs.subject == 'develop' && inputs.prebuild
+    name: Deploy / preview-pull
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: preview
+    permissions: {}
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+    steps:
+      # No token here: this downloads the pinned CLI (and runs its install scripts) into the npx cache.
+      - name: Prefetch pinned Vercel CLI
+        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" --version
+
+      # The only token step. Nothing is checked out yet, so no repository code is present while the token is.
+      - name: Vercel pull (preview)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" pull --yes --environment=preview
+
+      # The guard script is the only repository code in this job: one file from the commit that defines this
+      # workflow (github.workflow_sha, never inputs.sha), checked out only after the token step has finished, so
+      # it never runs next to VERCEL_TOKEN. Same trust boundary as safe-extract.sh in the deploy job.
+      - name: Check out env guard script only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: tools/deploy/check-pulled-env.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          path: .env-guard
+
+      # `vercel pull` writes .vercel/.env.<target>.local, including a live VERCEL_OIDC_TOKEN (valid ~12 hours),
+      # and anyone can read this public repository's Actions artifacts. So the env files NEVER leave this job.
+      # This guard fails if a name or value is outside the docs-cited system/build/runtime allowlist, or a line
+      # cannot be parsed. The approved auth trio is checked for shape and consistency. A failure means this env
+      # handoff design must be revisited (the build job cannot receive values through an artifact). Names and line
+      # numbers are printed, values never. A failing find (e.g. no .vercel directory) fails the job. The env files
+      # are deleted afterwards, pass or fail; always() so that holds even if the checkout above failed.
+      - name: Guard - validate pulled env names and values, then delete them
+        if: always()
+        run: |
+          set -euo pipefail
+          trap 'find .vercel -type f -name ".env*" -delete || true' EXIT
+          .env-guard/tools/deploy/check-pulled-env.sh .vercel
+
+      # Only project.json (project/org IDs and the pulled project settings `vercel build` reads) is shipped.
+      # Anything else under .vercel (README.txt, env files) is left behind; file names are logged, never contents.
+      - name: Package .vercel/project.json only
+        run: |
+          set -euo pipefail
+          [[ -f .vercel/project.json ]] || { echo "::error::vercel pull did not write .vercel/project.json"; exit 1; }
+          echo "left behind (not uploaded):"; find .vercel -type f ! -name project.json || { echo "::error::find failed"; exit 1; }
+          tar -cf pull.tar .vercel/project.json
+
+      # pull.tar holds only .vercel/project.json; env files never leave the pull job.
+      - name: Upload pull data
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reviewed-preview-pull-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: pull.tar
+          retention-days: 1
+          if-no-files-found: error
+
   frontend:
     name: Owner-approved frontend checks
-    needs: validate
+    needs: [validate, pull-preview]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && (needs.pull-preview.result == 'success' || needs.pull-preview.result == 'skipped') }}
     environment: framebriar-ci
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -154,7 +239,49 @@ jobs:
           set -euo pipefail
           npm run --prefix web test:browser
           bash tools/feedback/check-targets.sh
-      # No output/artifact upload from this target-controlled runner.
+      - name: Require actual migration readiness before any prebuild
+        if: inputs.prebuild
+        working-directory: target
+        run: bash ../trusted/tools/deploy/check-migration-readiness.sh .
+      - name: Download public Preview project metadata only
+        if: inputs.prebuild
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: reviewed-preview-pull-${{ inputs.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/reviewed-pull
+      - name: Prepare immutable disabled Preview target
+        if: inputs.prebuild
+        working-directory: target
+        env:
+          FRAMEBRIAR_ENABLED: "0"
+          FRAMEBRIAR_ENVIRONMENT: preview
+          FRAMEBRIAR_APP_ID: meal-planner-preview
+          FRAMEBRIAR_BUILD_SHA: ${{ inputs.sha }}
+          FRAMEBRIAR_SCREENSHOTS: "0"
+        run: |
+          set -euo pipefail
+          tar -xf "$RUNNER_TEMP/reviewed-pull/pull.tar" --no-same-owner
+          printf '# No runtime credentials in build files.\nVERCEL_ENV=preview\n' > .vercel/.env.preview.local
+          node ../trusted/tools/framebriar-ci/artifact-tools/prepare-build.mjs
+          npx --yes "vercel@${VERCEL_CLI_VERSION}" build --target=preview --yes
+          bash ../trusted/tools/deploy/materialize-output.sh .
+          mkdir -p "$RUNNER_TEMP/reviewed-prebuild"
+          tar -cf "$RUNNER_TEMP/reviewed-prebuild/build-output.tar" .vercel/output .vercel/project.json
+      - name: Reject unsafe prebuild output before upload
+        if: inputs.prebuild
+        env:
+          PREBUILD_DIRECTORY: ${{ runner.temp }}/reviewed-prebuild
+          SEALED_PREBUILD_JSON: ${{ runner.temp }}/prebuild-untrusted-seal.json
+        run: node trusted/tools/framebriar-ci/seal-prebuild.mjs
+      - name: Upload compiled Preview output only
+        if: inputs.prebuild
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: framebriar-preview-output-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/reviewed-prebuild/build-output.tar
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: false
 
   evidence:
     name: Publish informational exact-SHA evidence
@@ -182,8 +309,22 @@ jobs:
           EXPECTED_PACKAGE_HASH: ${{ needs.validate.outputs.package_sha256 }}
           EXPECTED_LOCK_HASH: ${{ needs.validate.outputs.lock_sha256 }}
         run: node trusted/tools/framebriar-ci/verify.mjs
+      - name: Download prebuild into clean evidence runner
+        if: inputs.prebuild
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: framebriar-preview-output-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/reviewed-prebuild
+      - name: Independently seal disabled Preview bytes
+        if: inputs.prebuild
+        env:
+          PREBUILD_DIRECTORY: ${{ runner.temp }}/reviewed-prebuild
+          SEALED_PREBUILD_JSON: ${{ runner.temp }}/prebuild-seal.json
+        run: node trusted/tools/framebriar-ci/seal-prebuild.mjs
       - name: Report trusted run evidence without replacing mandatory CI
         env:
+          GH_TOKEN: ${{ github.token }}
+          SEALED_PREBUILD_JSON: ${{ runner.temp }}/prebuild-seal.json
           VALIDATE_RESULT: ${{ needs.validate.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           SOURCE_SHA: ${{ needs.validate.outputs.sha }}

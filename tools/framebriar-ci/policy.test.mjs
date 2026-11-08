@@ -38,7 +38,7 @@ test('workflow keeps reader in fixed install before target checkout and clean re
  assert.doesNotMatch(report,/path: target|secrets\.|checks: write|statuses: write/)
  assert.match(report,/overwrite: false/)
  assert.doesNotMatch(w,/pull_request_target|cache: npm/)
- assert.equal((w.match(/uses: actions\/upload-artifact/g)||[]).length,1)
+ assert.equal((w.match(/uses: actions\/upload-artifact/g)||[]).length,3)
 })
 
 test('artifact collision cannot pass if clean reporter upload fails', () => {
@@ -72,4 +72,54 @@ test('registry ports and noncanonical private tarball paths are rejected',()=>{
  for(const resolved of [sdk.resolved.replace('github.com/','github.com:8443/'), sdk.resolved+'/extra']) {
   assert.throws(()=>validateManifests(pkg,JSON.stringify({packages:{'':{dependencies:deps},'node_modules/@masra91/framebriar':{...sdk,resolved}}})))
  }
+})
+test('develop source binds exact merged branch head, never PR reuse',()=>{
+ const s=source();s.input.subject='develop';s.input.pr='';s.base={name:'develop',commit:{sha:headSha}}
+ const result=checkSource(s);assert.equal(result.subject,'develop');assert.equal(result.pr,0);assert.equal(result.base_sha,headSha)
+ s.base.commit.sha=baseSha;assert.throws(()=>checkSource(s))
+ s.base.commit.sha=headSha;s.input.pr='54';assert.throws(()=>checkSource(s))
+})
+test('private web selection requires pinned evidence and does not replace mandatory gate',()=>{
+ const w=fs.readFileSync('.github/workflows/ci.yml','utf8')
+ const web=w.split('\n  web:\n')[1].split('\n  hosted-go:\n')[0]
+ assert.match(web,/Require exact-SHA reviewed frontend evidence/)
+ assert.match(web,/vars.FRAMEBRIAR_TRUSTED_WORKFLOW_SHA/)
+ assert.match(web,/node .trusted-evidence\/tools\/framebriar-ci\/bridge.mjs/)
+ assert.doesNotMatch(web,/FRAMEBRIAR_PACKAGE_READ_TOKEN|NODE_AUTH_TOKEN|continue-on-error/)
+ assert.match(w,/needs: \[affected, web, hosted-go, local-go, contracts, integration, preview\]/)
+ assert.match(web,/No Production fallback|no Production fallback/)
+})
+
+test('prebuild migration block and existing deployment protections remain',()=>{
+ const w=fs.readFileSync('.github/workflows/framebriar-reviewed-ci.yml','utf8')
+ assert.match(w,/bash \.\.\/trusted\/tools\/deploy\/check-migration-readiness.sh \./)
+ assert.match(w,/FRAMEBRIAR_ENABLED: "0"/)
+ assert.match(w,/FRAMEBRIAR_SCREENSHOTS: "0"/)
+ const preview=fs.readFileSync('.github/workflows/preview.yml','utf8')
+ const deploy=preview.split('\n  deploy:\n')[1]
+ assert.match(preview,/PREBUILD_REQUIRED: '1'/)
+ assert.match(preview,/artifact-ids: \$\{\{ steps.evidence.outputs.artifact_id \}\}/)
+ assert.match(deploy,/safe-extract.sh/)
+ assert.match(deploy,/materialize-output.sh --check/)
+ assert.match(deploy,/EXPECTED_OUTPUT_SHA256/)
+ assert.match(deploy,/deploy --prebuilt --target=preview/)
+ const build=preview.split('\n  build:\n')[1].split('\n  deploy:\n')[0]
+ assert.doesNotMatch(build,/secrets\./)
+ for(const block of build.split(/(?=^      - )/m).filter(b=>b.includes("steps.dependency.outputs.private == 'true'"))) assert.doesNotMatch(block,/npm ci|vercel@.*build/)
+})
+
+test('public Preview and rollback retain their ordinary build path',()=>{
+ const workflow=fs.readFileSync('.github/workflows/preview.yml','utf8')
+ const build=workflow.split('\n  build:\n')[1].split('\n  deploy:\n')[0]
+ assert.match(build,/ref: \$\{\{ inputs.sha \}\}/)
+ assert.match(build,/ls-tree HEAD/)
+ assert.match(build,/direct\|\|locked/)
+ const steps=build.split(/(?=^      - )/m)
+ const ordinary=steps.filter(b=>b.includes("steps.dependency.outputs.private == 'false'"))
+ assert.ok(ordinary.some(b=>b.includes('name: Vercel build (preview)')))
+ assert.ok(ordinary.some(b=>b.includes('id: public-pack')))
+ assert.ok(ordinary.some(b=>b.includes("hashFiles('db/migrations/**')")))
+ assert.ok(ordinary.some(b=>b.includes('materialize-output.sh .')))
+ assert.equal(steps.filter(b=>b.includes('name: Vercel build (preview)')&&!b.includes("steps.dependency.outputs.private == 'false'")).length,0)
+ assert.equal(steps.filter(b=>b.includes('PREBUILD_REQUIRED:')&&!b.includes("steps.dependency.outputs.private == 'true'")).length,0)
 })

@@ -5,7 +5,8 @@ export const sha256 = value => createHash('sha256').update(value).digest('hex')
 const sha = value => assert.match(value ?? '', /^[a-f0-9]{40}$/, 'Full lowercase SHA required')
 export function validateSource(input, repo, pr, main, run, base) {
   sha(input.sha); sha(input.workflowSha); sha(input.approvedWorkflowSha)
-  assert.match(input.pr ?? '', /^[1-9][0-9]*$/, 'PR number required')
+  const subject=input.subject ?? 'pr'
+  assert.ok(['pr','develop'].includes(subject),'Unsupported subject')
   assert.equal(repo.full_name, input.repository)
   assert.equal(repo.owner.type, 'User', 'This policy is for a sole-owner personal repository')
   assert.equal(input.actor, repo.owner.login, 'Only the owner may dispatch')
@@ -20,6 +21,12 @@ export function validateSource(input, repo, pr, main, run, base) {
   assert.equal(run.path, workflowPath)
   assert.equal(run.repository.full_name, input.repository)
   assert.equal(run.actor.login, repo.owner.login)
+  if(subject==='develop') {
+    assert.equal(input.pr ?? '', '', 'Develop subject must not reuse PR identity')
+    assert.equal(base.name,'develop'); assert.equal(base.commit.sha,input.sha,'Develop head moved')
+    return {subject,sha:input.sha,workflow_sha:input.workflowSha,pr:0,base:'develop',base_sha:input.sha}
+  }
+  assert.match(input.pr ?? '', /^[1-9][0-9]*$/, 'PR number required')
   assert.equal(pr.number, Number(input.pr))
   assert.equal(pr.state, 'open')
   assert.equal(pr.head.repo?.full_name, input.repository, 'Fork PRs are not eligible')
@@ -28,7 +35,7 @@ export function validateSource(input, repo, pr, main, run, base) {
   assert.equal(pr.head.sha, input.sha, 'PR head moved; approval is not transferable')
   assert.equal(base.name, pr.base.ref)
   sha(base.commit.sha)
-  return { sha: input.sha, workflow_sha: input.workflowSha, pr: pr.number, base: pr.base.ref, base_sha: base.commit.sha }
+  return { subject, sha: input.sha, workflow_sha: input.workflowSha, pr: pr.number, base: pr.base.ref, base_sha: base.commit.sha }
 }
 export function validateEnvironment(environment, branches, ownerId) {
   assert.equal(environment.name, 'framebriar-ci')
@@ -74,11 +81,15 @@ export function validateResults(results, evidence) {
 }
 
 // Pure verification for a future no-secret PR gate. Check names alone are never evidence.
-export function validateBridge({repository, owner, pr, currentBase, trustedWorkflowSha, run, jobs, artifact, evidence}) {
+export function validateBridge({repository, owner, pr, currentBase, trustedWorkflowSha, run, jobs, artifact, evidence, subject='pr'}) {
   sha(trustedWorkflowSha)
-  assert.equal(pr.state, 'open')
-  assert.equal(pr.head.repo?.full_name, repository)
-  assert.equal(pr.base.repo?.full_name, repository)
+  assert.ok(['pr','develop'].includes(subject))
+  assert.equal(evidence.subject ?? 'pr',subject,'Subject mismatch')
+  if(subject==='pr') {
+    assert.equal(pr.state, 'open')
+    assert.equal(pr.head.repo?.full_name, repository)
+    assert.equal(pr.base.repo?.full_name, repository)
+  }
   assert.equal(run.event, 'workflow_dispatch')
   assert.equal(run.path, workflowPath)
   assert.equal(run.repository.full_name, repository)
@@ -104,9 +115,15 @@ export function validateBridge({repository, owner, pr, currentBase, trustedWorkf
   assert.ok(Number.isFinite(created) && created >= started && created <= completed, 'Artifact must originate during clean reporter execution')
   assert.equal(evidence.repository, repository)
   assert.equal(evidence.run_id, String(run.id)); assert.equal(evidence.run_attempt, String(run.run_attempt))
-  assert.equal(evidence.pr, pr.number)
-  assert.equal(evidence.sha, pr.head.sha, 'Frontend evidence is for a different PR head')
-  assert.equal(currentBase.name, pr.base.ref)
+  if(subject==='pr') {
+    assert.equal(evidence.pr, pr.number)
+    assert.equal(evidence.sha, pr.head.sha, 'Frontend evidence is for a different PR head')
+    assert.equal(currentBase.name, pr.base.ref)
+  } else {
+    assert.equal(evidence.pr,0)
+    assert.equal(currentBase.name,'develop')
+    assert.equal(evidence.sha,currentBase.commit.sha,'Develop head moved')
+  }
   sha(currentBase.commit.sha)
   assert.equal(evidence.base_sha, currentBase.commit.sha, 'Base moved; rerun against current context')
   assert.equal(evidence.workflow_sha, trustedWorkflowSha)
@@ -127,4 +144,11 @@ export function manifestEntries(tree) {
     sha(matches[0].sha)
     return matches[0]
   })
+}
+
+export function validateIncludedBase(comparison, baseSha, headSha) {
+  sha(baseSha);sha(headSha)
+  assert.ok(['ahead','identical'].includes(comparison.status),'PR must incorporate current base')
+  assert.equal(comparison.merge_base_commit?.sha,baseSha,'Current base is not in reviewed head')
+  assert.equal(comparison.base_commit?.sha,baseSha)
 }
