@@ -30,10 +30,15 @@ test('rejects missing source and symlinked migration directory', () => fixture(r
   fs.symlinkSync(root, path.join(root, 'migrations'))
   assert.equal(run(root).status, 2)
 }))
-test('reviewed prebuild applies migration guard before packaging/upload',()=>{
+test('reviewed prebuild checks immutable source on clean validation and reporting runners',()=>{
  const workflow=fs.readFileSync('.github/workflows/framebriar-reviewed-ci.yml','utf8')
- const body=workflow.split('\n  frontend:\n')[1].split('\n  evidence:\n')[0]
- assert.ok(body.indexOf('check-migration-readiness.sh')<body.indexOf('build --target=preview'))
- assert.ok(body.indexOf('check-migration-readiness.sh')<body.indexOf('Upload compiled Preview output'))
- assert.doesNotMatch(body,/continue-on-error/)
+ const validate=workflow.split('\n  validate:\n')[1].split('\n  pull-preview:\n')[0]
+ const frontend=workflow.split('\n  frontend:\n')[1].split('\n  evidence:\n')[0]
+ const reporter=workflow.split('\n  evidence:\n')[1]
+ assert.match(validate,/node trusted\/tools\/framebriar-ci\/verify\.mjs/)
+ assert.ok(frontend.indexOf('node trusted/tools/framebriar-ci/verify.mjs')<frontend.indexOf('npm run --prefix web'))
+ assert.doesNotMatch(frontend,/check-migration-readiness.sh/)
+ assert.ok(reporter.indexOf('node trusted/tools/framebriar-ci/verify.mjs')<reporter.indexOf('seal-prebuild.mjs'))
+ assert.match(reporter,/READINESS_JSON: \$\{\{ runner.temp \}\}\/migration-readiness.json/)
+ assert.doesNotMatch(workflow,/continue-on-error/)
 })

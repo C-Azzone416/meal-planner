@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { migrationReadiness } from './migration-policy.mjs'
 import path from 'node:path'
 import { validateSource, validateEnvironment, validateManifests, manifestEntries, validateIncludedBase } from './policy.mjs'
 const input = {subject:process.env.SUBJECT ?? 'pr',sha:process.env.TARGET_SHA, pr:process.env.PR_NUMBER, workflowSha:process.env.GITHUB_WORKFLOW_SHA, approvedWorkflowSha:process.env.APPROVED_WORKFLOW_SHA, repository:process.env.GITHUB_REPOSITORY, actor:process.env.GITHUB_ACTOR, triggeringActor:process.env.GITHUB_TRIGGERING_ACTOR, event:process.env.GITHUB_EVENT_NAME, ref:process.env.GITHUB_REF, workflowRef:process.env.GITHUB_WORKFLOW_REF}
@@ -21,6 +22,12 @@ try {
   const commit = await get(`git/commits/${input.sha}`)
   if (!/^[a-f0-9]{40}$/.test(commit.tree?.sha ?? '')) throw new Error('Missing source tree')
   const tree = await get(`git/trees/${commit.tree.sha}?recursive=1`)
+  // Runs in validate before target scripts, again after approval, and on the
+  // separate clean evidence runner. Never inspect the writable target checkout.
+  if (process.env.PREBUILD_REQUESTED === 'true') {
+    const readiness = migrationReadiness(tree, input.sha, commit.tree.sha)
+    if (process.env.READINESS_JSON) fs.writeFileSync(process.env.READINESS_JSON, JSON.stringify(readiness) + '\n')
+  }
   const entries = manifestEntries(tree)
   const [pkg, lock] = await Promise.all(entries.map(entry => get(`git/blobs/${entry.sha}`)))
   for (const item of [pkg,lock]) if(item.encoding !== 'base64') throw new Error('Manifest must be a base64 blob')

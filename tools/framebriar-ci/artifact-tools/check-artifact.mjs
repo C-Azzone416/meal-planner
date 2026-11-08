@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import assert from 'node:assert/strict'
 import { publicConfig } from './config.mjs'
+import { inspectAsset } from './asset-policy.mjs'
 const root = process.argv[2] ?? 'web/dist'
 const expected = publicConfig(process.env)
 assert.match(expected.buildSha, /^[0-9a-f]{40}$/, 'Explicit expected deployment SHA is required')
@@ -15,12 +16,7 @@ function walk(dir) {
     assert.ok(!entry.isSymbolicLink(), 'Artifact must not contain symlinks')
     if (entry.isDirectory()) walk(file)
     else {
-      const text = fs.readFileSync(file).toString('utf8')
-      // Reject every source-map directive, including inline JS/CSS maps and legacy @ forms.
-      // Fail closed even for external URLs: accepted deployment assets must ship no source maps.
-      assert.ok(!/sourceMappingURL\s*=/i.test(text), 'Source-map directive in artifact')
-      // Known synthetic markers and credential formats; names are not secret values.
-      assert.ok(!/FRAMEBRIAR_FAKE_SERVICE|FRAMEBRIAR_TEST_SECRET|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|-----BEGIN (?:RSA |EC )?PRIVATE KEY-----/.test(text), 'Forbidden credential or fixture marker in artifact')
+      const text = inspectAsset(file, fs.readFileSync(file))
       if (/\.m?js$/.test(file)) scripts += text
     }
   }

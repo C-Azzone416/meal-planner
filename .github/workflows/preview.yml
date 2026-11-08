@@ -144,6 +144,14 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
           path: .target-manifests
+      - name: Check out fixed dependency classifier only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: tools/framebriar-ci/classify-dependency.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+          path: .dependency-policy
       - name: Classify locked private dependency with fixed workflow code
         id: dependency
         run: |
@@ -152,8 +160,7 @@ jobs:
           for file in web/package.json web/package-lock.json; do
             [[ "$(git -C .target-manifests ls-tree HEAD "$file" | cut -d' ' -f1)" == 100644 ]] || exit 1
           done
-          # shellcheck disable=SC2016
-          node --input-type=module -e 'import fs from "node:fs"; const p=JSON.parse(fs.readFileSync(".target-manifests/web/package.json"));const l=JSON.parse(fs.readFileSync(".target-manifests/web/package-lock.json"));const direct=[p.dependencies,p.devDependencies,p.optionalDependencies].some(d=>Object.hasOwn(d??{},"@masra91/framebriar"));const locked=Object.keys(l.packages??{}).some(n=>n.endsWith("node_modules/@masra91/framebriar"));fs.appendFileSync(process.env.GITHUB_OUTPUT,`private=${direct||locked}\n`)'
+          node .dependency-policy/tools/framebriar-ci/classify-dependency.mjs .target-manifests
       - name: Validate exact target and explicit trusted revision
         if: steps.dependency.outputs.private == 'true'
         run: |

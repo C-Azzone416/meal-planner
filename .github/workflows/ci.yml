@@ -117,11 +117,17 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: web/.nvmrc
+      - name: Check out fixed dependency classifier only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: tools/framebriar-ci/classify-dependency.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+          path: .dependency-policy
       - name: Select ordinary or reviewed private-dependency checks
         id: dependency
-        run: |
-          # shellcheck disable=SC2016
-          node --input-type=module -e 'import fs from "node:fs"; const p=JSON.parse(fs.readFileSync("web/package.json")); fs.appendFileSync(process.env.GITHUB_OUTPUT, `private=${Object.hasOwn(p.dependencies ?? {}, "@masra91/framebriar")}\n`)'
+        run: node .dependency-policy/tools/framebriar-ci/classify-dependency.mjs .
       - name: Validate explicit trusted workflow pin
         if: steps.dependency.outputs.private == 'true'
         env:

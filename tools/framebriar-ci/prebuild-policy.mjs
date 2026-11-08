@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
+import { validateReadiness } from './migration-policy.mjs'
 export function validatePrebuild(value,sha,runId,attempt,artifacts) {
-  assert.deepEqual(Object.keys(value).sort(),['artifact_id','artifact_digest','artifact_name','tar_sha256','source_sha','target','enabled','screenshots'].sort())
+  assert.deepEqual(Object.keys(value).sort(),['migration_readiness','artifact_id','artifact_digest','artifact_name','tar_sha256','source_sha','target','enabled','screenshots'].sort())
   assert.ok(Number.isSafeInteger(value.artifact_id)&&value.artifact_id>0)
+  validateReadiness(value.migration_readiness,sha)
   assert.equal(value.source_sha,sha);assert.equal(value.target,'preview')
   assert.equal(value.enabled,false);assert.equal(value.screenshots,false)
   assert.match(value.tar_sha256,/^[a-f0-9]{64}$/)

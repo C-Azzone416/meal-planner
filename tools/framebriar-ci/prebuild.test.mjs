@@ -6,8 +6,9 @@ import path from 'node:path'
 import {execFileSync,spawnSync} from 'node:child_process'
 import {validatePrebuild} from './prebuild-policy.mjs'
 import {sha256} from './policy.mjs'
+import {gzipSync,brotliCompressSync,deflateSync} from 'node:zlib'
 const sha='a'.repeat(40),hash='b'.repeat(64)
-const metadata=()=>({source_sha:sha,target:'preview',enabled:false,screenshots:false,tar_sha256:hash,artifact_id:5,artifact_digest:`sha256:${hash}`,artifact_name:'framebriar-preview-output-12-1'})
+const metadata=()=>({migration_readiness:{source_sha:sha,tree_sha:sha,policy:'no-migration-sources-v1'},source_sha:sha,target:'preview',enabled:false,screenshots:false,tar_sha256:hash,artifact_id:5,artifact_digest:`sha256:${hash}`,artifact_name:'framebriar-preview-output-12-1'})
 const artifacts=()=>[{id:5,name:'framebriar-preview-output-12-1',digest:`sha256:${hash}`,expired:false,size_in_bytes:100,workflow_run:{id:12}}]
 test('prebuild requires exact target SHA, artifact identity and disabled capability',()=>{
  validatePrebuild(metadata(),sha,12,1,artifacts())
@@ -64,3 +65,46 @@ test('sealer rejects inline and external JS/CSS source-map directives in real ar
   ['external.css','/*# sourceMappingURL = original.css.map */'],
  ]) fixture(f=>{fs.writeFileSync(path.join(f.source,'.vercel/output/static',name),directive);f.pack();assert.notEqual(f.run().status,0,name)})
 })
+
+const inlineMap = '/*# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ== */'
+test('pre-upload artifact check and clean seal reject compressed assets even without deployment',()=>{
+ for(const [name,bytes] of [
+  ['style.css.gz',gzipSync(inlineMap)], ['style.css.br',brotliCompressSync(inlineMap)],
+  ['sdk.tgz',gzipSync('raw package archive')], ['renamed.css',gzipSync(inlineMap)],
+  ['renamed.deflate',deflateSync(inlineMap)], ['extensionless',deflateSync(inlineMap)],
+  ['style.MAP',Buffer.from('{}')],
+ ]) fixture(f=>{
+  const staticRoot=path.join(f.source,'.vercel/output/static')
+  fs.writeFileSync(path.join(staticRoot,name),bytes)
+  const env={...f.env,FRAMEBRIAR_BUILD_SHA:sha,FRAMEBRIAR_ENVIRONMENT:'preview',FRAMEBRIAR_APP_ID:'meal-planner-preview',FRAMEBRIAR_ENABLED:'0',FRAMEBRIAR_SCREENSHOTS:'0',FRAMEBRIAR_ALLOWED_ORIGIN:''}
+  const check=spawnSync(process.execPath,['tools/framebriar-ci/artifact-tools/check-artifact.mjs',staticRoot],{env,encoding:'utf8'})
+  assert.notEqual(check.status,0,`artifact checker accepted ${name}`)
+  f.pack();assert.notEqual(f.run().status,0,`clean seal accepted ${name}`)
+  assert.equal(fs.existsSync(f.env.SEALED_PREBUILD_JSON),false)
+ })
+})
+test('clean seal scans function assets and rejects encoded rewritten routes',()=>{
+ fixture(f=>{
+  fs.writeFileSync(path.join(f.source,'.vercel/output/functions/api/feedback/status.func/helper.js'),inlineMap)
+  f.pack();assert.notEqual(f.run().status,0)
+ })
+ for(const encoding of ['gzip','br','deflate']) fixture(f=>{
+  // An extensionless Brotli/deflate asset must not evade the guard by being
+  // reached through a Vercel route rather than a conventional .br/.gz filename.
+  fs.writeFileSync(path.join(f.source,'.vercel/output/static/opaque'),brotliCompressSync(inlineMap))
+  fs.writeFileSync(path.join(f.source,'.vercel/output/config.json'),JSON.stringify({version:3,routes:[{src:'/style.css',dest:'/opaque',headers:{'CoNtEnT-EnCoDiNg':encoding}}]}))
+  f.pack();assert.notEqual(f.run().status,0,encoding)
+ })
+ fixture(f=>{
+  fs.writeFileSync(path.join(f.source,'.vercel/output/config.json'),JSON.stringify({headers:[{source:'/style.css',headers:[{key:'Content-Encoding',value:'br'}]}]}))
+  f.pack();assert.notEqual(f.run().status,0)
+ })
+})
+
+test('clean seal rejects private SDK manifests outside node_modules',()=>fixture(f=>{
+ const vendor=path.join(f.source,'.vercel/output/static/vendor/sdk')
+ fs.mkdirSync(vendor,{recursive:true})
+ fs.writeFileSync(path.join(vendor,'package.json'),JSON.stringify({name:'@masra91/framebriar',version:'0.4.1'}))
+ fs.writeFileSync(path.join(vendor,'index.js'),'export const secret=1')
+ f.pack();assert.notEqual(f.run().status,0)
+}))

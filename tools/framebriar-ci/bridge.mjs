@@ -1,5 +1,6 @@
 // Unwired read-only verifier. No package credentials or target code execution.
 import assert from 'node:assert/strict'
+import { migrationReadiness } from './migration-policy.mjs'
 import fs from 'node:fs'
 import {validatePrebuild} from './prebuild-policy.mjs'
 import { spawnSync } from 'node:child_process'
@@ -180,7 +181,10 @@ export async function verifyEvidence({repository,prNumber,targetSha,trustedWorkf
   // Bind reported manifest hashes to the target's actual inert regular blobs.
   const commit=await client.json(`git/commits/${targetSha}`)
   sha(commit.tree?.sha)
-  const entries=manifestEntries(await client.json(`git/trees/${commit.tree.sha}?recursive=1`))
+  const tree=await client.json(`git/trees/${commit.tree.sha}?recursive=1`)
+  if(evidence.prebuild) assert.deepEqual(evidence.prebuild.migration_readiness,
+    migrationReadiness(tree,targetSha,commit.tree.sha),'Immutable migration readiness changed')
+  const entries=manifestEntries(tree)
   const blobs=[]
   for(const entry of entries) {
     const blob=await client.json(`git/blobs/${entry.sha}`)

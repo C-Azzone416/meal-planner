@@ -239,10 +239,6 @@ jobs:
           set -euo pipefail
           npm run --prefix web test:browser
           bash tools/feedback/check-targets.sh
-      - name: Require actual migration readiness before any prebuild
-        if: inputs.prebuild
-        working-directory: target
-        run: bash ../trusted/tools/deploy/check-migration-readiness.sh .
       - name: Download public Preview project metadata only
         if: inputs.prebuild
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -302,9 +298,10 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '26'
-      - name: Reject stale source before publishing evidence
+      - name: Reject stale source and independently check committed migration readiness
         env:
           GH_TOKEN: ${{ github.token }}
+          READINESS_JSON: ${{ runner.temp }}/migration-readiness.json
           EXPECTED_BASE_SHA: ${{ needs.validate.outputs.base_sha }}
           EXPECTED_PACKAGE_HASH: ${{ needs.validate.outputs.package_sha256 }}
           EXPECTED_LOCK_HASH: ${{ needs.validate.outputs.lock_sha256 }}
@@ -324,6 +321,7 @@ jobs:
       - name: Report trusted run evidence without replacing mandatory CI
         env:
           GH_TOKEN: ${{ github.token }}
+          READINESS_JSON: ${{ runner.temp }}/migration-readiness.json
           SEALED_PREBUILD_JSON: ${{ runner.temp }}/prebuild-seal.json
           VALIDATE_RESULT: ${{ needs.validate.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}

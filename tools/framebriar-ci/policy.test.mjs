@@ -92,7 +92,8 @@ test('private web selection requires pinned evidence and does not replace mandat
 
 test('prebuild migration block and existing deployment protections remain',()=>{
  const w=fs.readFileSync('.github/workflows/framebriar-reviewed-ci.yml','utf8')
- assert.match(w,/bash \.\.\/trusted\/tools\/deploy\/check-migration-readiness.sh \./)
+ assert.match(w,/Reject stale source and independently check committed migration readiness/)
+ assert.match(w,/READINESS_JSON:/)
  assert.match(w,/FRAMEBRIAR_ENABLED: "0"/)
  assert.match(w,/FRAMEBRIAR_SCREENSHOTS: "0"/)
  const preview=fs.readFileSync('.github/workflows/preview.yml','utf8')
@@ -113,7 +114,7 @@ test('public Preview and rollback retain their ordinary build path',()=>{
  const build=workflow.split('\n  build:\n')[1].split('\n  deploy:\n')[0]
  assert.match(build,/ref: \$\{\{ inputs.sha \}\}/)
  assert.match(build,/ls-tree HEAD/)
- assert.match(build,/direct\|\|locked/)
+ assert.match(build,/classify-dependency.mjs .target-manifests/)
  const steps=build.split(/(?=^      - )/m)
  const ordinary=steps.filter(b=>b.includes("steps.dependency.outputs.private == 'false'"))
  assert.ok(ordinary.some(b=>b.includes('name: Vercel build (preview)')))
