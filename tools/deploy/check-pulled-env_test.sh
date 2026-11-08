@@ -481,6 +481,7 @@ FRAMEBRIAR_BUILD_SHA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 FRAMEBRIAR_SCREENSHOTS="0"
 FRAMEBRIAR_DATABASE_URL="[SENSITIVE]"
 FRAMEBRIAR_CREDENTIAL_KEYS="[SENSITIVE]"
+MEAL_RECIPES_DATABASE_URL="[SENSITIVE]"
 EOF
 expect 0 framebriar "$work/framebriar/.env"
 fixture framebriar-secret/.env << EOF
@@ -496,6 +497,22 @@ FRAMEBRIAR_ALLOWED_ORIGIN="https://*.example.test"
 FRAMEBRIAR_BUILD_SHA="dev"
 EOF
 expect 1 framebriar-bad "$work/framebriar-bad/.env"
+# Recipe DB credentials are runtime-only Secrets, not Config or build inputs.
+fixture recipe-secret/.env << EOF
+MEAL_RECIPES_DATABASE_URL="[SENSITIVE]"
+EOF
+expect 0 recipe-secret "$work/recipe-secret/.env"
+fixture recipe-literal/.env << EOF
+MEAL_RECIPES_DATABASE_URL="postgres://u:$secret@db/x?sslmode=verify-full"
+EOF
+expect 1 recipe-literal "$work/recipe-literal/.env"
+check "recipe-literal: names only" has recipe-literal "MEAL_RECIPES_DATABASE_URL has an unexpected value"
+check "recipe-literal: no secret" lacks recipe-literal "$secret"
+fixture recipe-lookalike/.env << EOF
+VITE_MEAL_RECIPES_DATABASE_URL="[SENSITIVE]"
+MEAL_RECIPES_DATABASE_URL_EXTRA="[SENSITIVE]"
+EOF
+expect 1 recipe-lookalike "$work/recipe-lookalike/.env"
 
 # Usage and I/O errors exit 2.
 expect 2 missing "$work/does-not-exist"

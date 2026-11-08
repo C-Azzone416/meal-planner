@@ -1,12 +1,22 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
+
+// Keep the existing browser-preview regression suite isolated. hosted-recipes.test.tsx
+// exercises the authenticated database boundary and durability/failure behavior.
+vi.mock('./recipes/RemoteRecipes', () => ({
+  AccountRecipes: ({ children }: { children: import('react').ReactNode }) => children,
+  useRemoteRecipes: () => null,
+  RecipeLoadNotice: () => null,
+}))
+
 import { AppRoutes } from './App'
 import { AuthProvider } from './auth/AuthProvider'
 import {
   AuthCodeVerificationError,
   AuthCredentialsError,
+  AuthNetworkError,
   type AuthService,
   type AuthUser,
 } from './auth/service'
@@ -39,7 +49,7 @@ function renderRoute(path: string, service: AuthService | null) {
   )
 }
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); window.localStorage.clear(); vi.useRealTimers() })
 
 test('redirects a signed-out direct URL to sign in', async () => {
   renderRoute('/recipes', makeService(null))
@@ -49,7 +59,7 @@ test('redirects a signed-out direct URL to sign in', async () => {
 test('renders protected sample views and working navigation', async () => {
   renderRoute('/week', makeService(user))
   expect(await screen.findByRole('heading', { name: 'this week’s dinners' })).toBeTruthy()
-  expect(screen.getByText('Sample preview · changes on this screen reset when you reload.')).toBeTruthy()
+  expect(await screen.findByText('Preview data · saved in this browser only')).toBeTruthy()
 
   fireEvent.click(screen.getAllByRole('link', { name: 'Recipes' })[0])
   expect(await screen.findByRole('heading', { name: 'our recipes' })).toBeTruthy()
@@ -57,7 +67,8 @@ test('renders protected sample views and working navigation', async () => {
 
 test('opens the cook view from the planned Thursday meal', async () => {
   renderRoute('/week', makeService(user))
-  fireEvent.click(await screen.findByRole('link', { name: 'Cook tonight →' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Thursday' }))
+  fireEvent.click(screen.getByRole('link', { name: 'Cook tonight →', description: 'Thursday' }))
   expect(await screen.findByRole('heading', { name: 'Seared salmon, lemon-herb orzo' })).toBeTruthy()
 })
 
@@ -66,7 +77,7 @@ test('updates a house-rule preview choice without claiming persistence', async (
   const choice = await screen.findByRole('button', { name: 'One person does it all' })
   fireEvent.click(choice)
   expect(choice.getAttribute('aria-pressed')).toBe('true')
-  expect(screen.getByText('Sample preview · changes on this screen reset when you reload.')).toBeTruthy()
+  expect(await screen.findByText('Preview data · saved in this browser only')).toBeTruthy()
 })
 
 test.each([
@@ -75,7 +86,7 @@ test.each([
   ['/prep', 'sunday prep'],
   ['/shopping', 'shopping list'],
   ['/drafts', 'drafts to review'],
-  ['/cook', 'Seared salmon, lemon-herb orzo'],
+  ['/cook?day=4', 'Seared salmon, lemon-herb orzo'],
   ['/house-rules', 'house rules'],
 ])('renders the protected direct route %s', async (path, heading) => {
   renderRoute(path, makeService(user))
@@ -105,7 +116,7 @@ test('sets the first password for an existing invited account', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Email my password code' }))
 
   expect(await screen.findByRole('heading', { name: 'choose your password' })).toBeTruthy()
-  expect(screen.getByText('Enter the code from your email, then choose a new password.')).toBeTruthy()
+  expect(screen.getByText('If you receive a code, enter it below and choose a new password.')).toBeTruthy()
   expect(service.sendPasswordResetCode).toHaveBeenCalledWith('allowed@example.test')
 
   fireEvent.change(screen.getByLabelText('Password code'), { target: { value: '123456' } })
@@ -125,6 +136,81 @@ test('uses privacy-safe copy when requesting a password code', async () => {
   expect(screen.getByText('We’ll email a password code if this invited account exists.')).toBeTruthy()
 })
 
+const privateProjectCodeNotice = 'If this email has access, we’ll send a code. This is a private project; contact the owner to request access.'
+
+test.each(['allowed@example.test', 'unapproved@example.test'])(
+  'shows the same private-project notice after requesting and resending a code for %s',
+  async (email) => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    const service = makeService(null)
+    renderRoute('/sign-in', service)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Set or reset password' }))
+    expect(screen.queryByText(privateProjectCodeNotice)).toBeNull()
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: email } })
+    fireEvent.click(screen.getByRole('button', { name: 'Email my password code' }))
+
+    expect(await screen.findByText(privateProjectCodeNotice)).toBeTruthy()
+    expect(screen.getByText('If you receive a code, enter it below and choose a new password.')).toBeTruthy()
+    expect(service.sendPasswordResetCode).toHaveBeenCalledWith(email)
+    expect(service.setPassword).not.toHaveBeenCalled()
+    expect(service.signInWithPassword).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByLabelText('Password code'), { target: { value: '123456' } })
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Email me a new password code' }).disabled).toBe(true)
+    act(() => { vi.advanceTimersByTime(60_000) })
+    fireEvent.click(screen.getByRole('button', { name: 'Email me a new password code' }))
+    await waitFor(() => expect(service.sendPasswordResetCode).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect((screen.getByLabelText('Password code') as HTMLInputElement).value).toBe(''))
+    expect(screen.getByText(privateProjectCodeNotice)).toBeTruthy()
+    expect(service.sendPasswordResetCode).toHaveBeenLastCalledWith(email)
+  },
+)
+
+test('keeps the notice generic after returning to sign in and changing email', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+  const service = makeService(null)
+  renderRoute('/sign-in', service)
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Set or reset password' }))
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'allowed@example.test' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Email my password code' }))
+  await screen.findByText(privateProjectCodeNotice)
+  fireEvent.change(screen.getByLabelText('Password code'), { target: { value: '123456' } })
+  fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'private-password' } })
+  fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'private-password' } })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Back to sign in' }))
+  expect(screen.queryByText(privateProjectCodeNotice)).toBeNull()
+  expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('')
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'unapproved@example.test' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set or reset password' }))
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Email my password code' }).disabled).toBe(true)
+  act(() => { vi.advanceTimersByTime(60_000) })
+  fireEvent.click(screen.getByRole('button', { name: 'Email my password code' }))
+
+  expect(await screen.findByText(privateProjectCodeNotice)).toBeTruthy()
+  expect(service.sendPasswordResetCode).toHaveBeenLastCalledWith('unapproved@example.test')
+  for (const label of ['Password code', 'New password', 'Confirm password']) {
+    expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe('')
+  }
+})
+
+test('does not show the code-entry notice for a true transport failure', async () => {
+  const service = makeService(null)
+  vi.mocked(service.sendPasswordResetCode).mockRejectedValue(new AuthNetworkError())
+  renderRoute('/sign-in', service)
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Set or reset password' }))
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'allowed@example.test' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Email my password code' }))
+
+  expect((await screen.findByRole('alert')).textContent).toBe('We couldn’t reach the server. Try again.')
+  expect(screen.queryByText(privateProjectCodeNotice)).toBeNull()
+  expect(screen.queryByLabelText('Password code')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Email my password code' }).hasAttribute('disabled')).toBe(false)
+})
+
 test('reports an invalid password code without exposing provider details', async () => {
   const service = makeService(null)
   vi.mocked(service.setPassword).mockRejectedValue(new AuthCodeVerificationError())
@@ -138,7 +224,7 @@ test('reports an invalid password code without exposing provider details', async
   fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'private-password' } })
   fireEvent.click(screen.getByRole('button', { name: 'Save password & open my fridge' }))
 
-  expect((await screen.findByRole('alert')).textContent).toBe('That code is invalid or expired. Request a new code and try again.')
+  expect((await screen.findByRole('alert')).textContent).toBe('That code is invalid or expired. Request a new code.')
 })
 
 test('reports invalid password credentials without exposing provider details', async () => {
@@ -185,4 +271,24 @@ test('signs out and returns to the sign-in screen', async () => {
 
   await waitFor(() => expect(service.signOut).toHaveBeenCalled())
   expect(await screen.findByRole('heading', { name: 'what’s for dinner?' })).toBeTruthy()
+})
+
+test('resets preview data only after confirming in the app dialog', async () => {
+  renderRoute('/house-rules', makeService(user))
+  fireEvent.click(await screen.findByRole('button', { name: 'Reset preview data' }))
+
+  const dialog = await screen.findByRole('alertdialog', { name: 'Reset preview data?' })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Keep my data' }))
+  expect(screen.queryByRole('alertdialog')).toBeNull()
+  expect(screen.queryByText('Preview data was reset.')).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Reset preview data' }))
+  fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Reset data' }))
+  expect((await screen.findByText('Preview data was reset.')).getAttribute('role')).toBe('status')
+})
+
+test('house-rule steppers are labelled groups', async () => {
+  renderRoute('/house-rules', makeService(user))
+  const group = await screen.findByRole('group', { name: 'dinners' })
+  expect(within(group).getByRole('button', { name: 'Increase dinners' })).toBeTruthy()
 })

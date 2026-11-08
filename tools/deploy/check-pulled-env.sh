@@ -38,6 +38,10 @@
 # checks below; the deployed runtime and fail-closed application config are responsible for validating Secret values.
 # Framebriar exact settings: docs/runbooks/framebriar.md and issue #52. No
 # FRAMEBRIAR_* prefix allowlist; package reader credentials are not runtime settings.
+# MEAL_RECIPES_DATABASE_URL is a server-only database credential and MUST be a Vercel Secret.
+# Only the exact write-only [SENSITIVE] marker is accepted on pull, never a literal DSN.
+# The same Vercel Secret behavior cited above applies; no value goes into build artifacts.
+# The Go runtime validates verified TLS and bounds connections. See docs/runbooks/recipes.md.
 # Add an exact name only with a citation; no prefix families other than VERCEL_.
 # Allowlisted names other than VERCEL_* are printed on a pass too, so the log shows which names were present, never values.
 #
@@ -63,7 +67,7 @@
 set -euo pipefail
 export LC_ALL=C # byte semantics, so ${#var} counts bytes for the NUL check
 
-allowed_exact=" VERCEL CI NX_DAEMON TURBO_CACHE TURBO_DOWNLOAD_LOCAL_ENABLED TURBO_REMOTE_ONLY TURBO_RUN_SUMMARY NEON_AUTH_BASE_URL NEON_AUTH_ENDPOINT_ID AUTH_ALLOWED_EMAIL FRAMEBRIAR_ENABLED FRAMEBRIAR_ENVIRONMENT FRAMEBRIAR_ALLOWED_ORIGIN FRAMEBRIAR_APP_ID FRAMEBRIAR_BUILD_SHA FRAMEBRIAR_SCREENSHOTS FRAMEBRIAR_DATABASE_URL FRAMEBRIAR_CREDENTIAL_KEYS "
+allowed_exact=" VERCEL CI NX_DAEMON TURBO_CACHE TURBO_DOWNLOAD_LOCAL_ENABLED TURBO_REMOTE_ONLY TURBO_RUN_SUMMARY NEON_AUTH_BASE_URL NEON_AUTH_ENDPOINT_ID AUTH_ALLOWED_EMAIL FRAMEBRIAR_ENABLED FRAMEBRIAR_ENVIRONMENT FRAMEBRIAR_ALLOWED_ORIGIN FRAMEBRIAR_APP_ID FRAMEBRIAR_BUILD_SHA FRAMEBRIAR_SCREENSHOTS FRAMEBRIAR_DATABASE_URL FRAMEBRIAR_CREDENTIAL_KEYS MEAL_RECIPES_DATABASE_URL "
 turbo_cache_re='^(local|remote):(rw|r|w)?(,(local|remote):(rw|r|w)?)*$'
 neon_auth_base_re='^https://(ep-[a-z0-9]+(-[a-z0-9]+)*)\.neonauth\.c-[0-9]+\.[a-z0-9]+(-[a-z0-9]+)*\.aws\.neon\.tech/neondb/auth$'
 neon_endpoint_re='^ep-[a-z0-9]+(-[a-z0-9]+)*$'
@@ -109,6 +113,7 @@ check_file() {
       FRAMEBRIAR_DATABASE_URL|FRAMEBRIAR_CREDENTIAL_KEYS) [[ $2 == "$secret_placeholder" ]] ;;
       NEON_AUTH_BASE_URL) [[ $2 == "$secret_placeholder" || (${#2} -le 255 && $2 =~ $neon_auth_base_re) ]] ;;
       NEON_AUTH_ENDPOINT_ID) [[ $2 == "$secret_placeholder" || (${#2} -le 63 && $2 =~ $neon_endpoint_re) ]] ;;
+      MEAL_RECIPES_DATABASE_URL) [[ $2 == "$secret_placeholder" ]] ;;
       AUTH_ALLOWED_EMAIL)
         email_local=${2%@*}
         [[ $2 == "$secret_placeholder" || (${#2} -le 254 && ${#email_local} -le 64 && $2 =~ $allowed_email_re) ]]

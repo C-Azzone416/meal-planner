@@ -203,15 +203,10 @@ jobs:
           head=$(git rev-parse HEAD)
           [[ "$head" == "$SHA" ]] || { echo "::error::checked out $head, expected $SHA"; exit 1; }
 
-      # Schema migrations are intentionally skipped: there is no database schema yet. This guard fails
-      # loudly if migrations appear before a runner is wired. When one exists, apply only reviewed,
-      # forward-compatible migrations in their own job before `deploy`, through the direct Production
-      # migrator connection (production environment secret).
-      - name: Migrate Production database (skipped, no schema yet)
-        if: ${{ hashFiles('db/migrations/**') != '' }}
-        run: |
-          echo "::error::migrations found under db/migrations but no migration runner is wired yet"
-          exit 1
+      # Source files do not prove the target database has been migrated.
+      # No migrator credential or automatic migration belongs in this build job.
+      - name: Verify manual migration readiness
+        run: bash tools/deploy/check-migration-readiness.sh .
 
       - name: Download pull data
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2

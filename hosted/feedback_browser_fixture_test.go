@@ -64,13 +64,13 @@ func TestFeedbackBrowserServer(t *testing.T) {
 		run("pg_ctl", "-D", data, "-m", "fast", "-w", "stop")
 		t.Log("Temporary fixture PostgreSQL stopped")
 	}()
-	store, err := newFeedbackSQLStore("postgres:///postgres?host=" + root + "&port=55484&user=feedback_test&sslmode=disable")
+	store, err := feedbackTestSQLStore("postgres:///postgres?host=" + root + "&port=55484&user=feedback_test&sslmode=disable")
 	if err != nil {
 		t.Fatal(err)
 	}
 	sqlStore := store.(*feedbackSQLStore)
 	defer sqlStore.db.Close()
-	migration, err := os.ReadFile("../migrations/001_framebriar.sql")
+	migration, err := os.ReadFile("../migrations/002_framebriar.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -28,12 +28,14 @@ type feedbackConfig struct {
 }
 
 func feedbackConfiguration() (feedbackConfig, error) {
-	c := feedbackConfig{Enabled: os.Getenv("FRAMEBRIAR_ENABLED") == "1", Screenshots: os.Getenv("FRAMEBRIAR_SCREENSHOTS") == "1", Environment: os.Getenv("FRAMEBRIAR_ENVIRONMENT"), Origin: os.Getenv("FRAMEBRIAR_ALLOWED_ORIGIN"), App: os.Getenv("FRAMEBRIAR_APP_ID"), SHA: os.Getenv("FRAMEBRIAR_BUILD_SHA"), Database: os.Getenv("FRAMEBRIAR_DATABASE_URL")}
+	c := feedbackConfig{Enabled: os.Getenv("FRAMEBRIAR_ENABLED") == "1", Screenshots: os.Getenv("FRAMEBRIAR_SCREENSHOTS") == "1", Environment: os.Getenv("FRAMEBRIAR_ENVIRONMENT"), Origin: os.Getenv("FRAMEBRIAR_ALLOWED_ORIGIN"), App: os.Getenv("FRAMEBRIAR_APP_ID"), Database: os.Getenv("FRAMEBRIAR_DATABASE_URL")}
 	if !c.Enabled {
 		return c, nil
 	}
-	if c.SHA != feedbackBuildSHA || c.Environment != feedbackBuildEnvironment || c.App != feedbackBuildApp {
-		return c, feedbackUnavailable
+	var buildErr error
+	c.SHA, buildErr = feedbackRuntimeBuildSHA(os.Getenv("FRAMEBRIAR_BUILD_SHA"), c.Environment, c.App, feedbackBuildSHA, feedbackBuildEnvironment, feedbackBuildApp)
+	if buildErr != nil {
+		return c, buildErr
 	}
 	expected := map[string]string{"preview": "meal-planner-preview", "production": "meal-planner"}[c.Environment]
 	u, e := url.Parse(c.Origin)
@@ -68,6 +70,15 @@ func feedbackConfiguration() (feedbackConfig, error) {
 		return c, feedbackUnavailable
 	}
 	return c, nil
+}
+
+// Runtime provenance comes from the immutable generated build, never a mutable
+// deployment setting. A legacy runtime SHA, when present, must still agree.
+func feedbackRuntimeBuildSHA(runtimeSHA, environment, app, buildSHA, buildEnvironment, buildApp string) (string, error) {
+	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(buildSHA) || environment != buildEnvironment || app != buildApp || (runtimeSHA != "" && runtimeSHA != buildSHA) {
+		return "", feedbackUnavailable
+	}
+	return buildSHA, nil
 }
 
 type feedbackService struct {

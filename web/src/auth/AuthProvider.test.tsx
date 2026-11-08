@@ -18,6 +18,8 @@ function Probe() {
   return (
     <>
       <p>{auth.status}</p>
+      <button onClick={auth.expireSession}>Expire from recipe request</button>
+      <button onClick={() => void auth.signOut()}>Sign out directly</button>
       <button onClick={() => void auth.getToken().catch(() => {})}>
         Check feedback token
       </button>
@@ -33,13 +35,11 @@ test.each([
     const ended = vi.fn()
     window.addEventListener('feedback-session-ended', ended)
     const service: AuthService = {
-      getSession: vi
-        .fn()
-        .mockResolvedValue({
-          id: 'one',
-          email: 'test@example.test',
-          emailVerified: true,
-        }),
+      getSession: vi.fn().mockResolvedValue({
+        id: 'one',
+        email: 'test@example.test',
+        emailVerified: true,
+      }),
       getToken: vi.fn().mockRejectedValue(error),
       signInWithPassword: vi.fn(),
       sendPasswordResetCode: vi.fn(),
@@ -56,6 +56,38 @@ test.each([
     await waitFor(() => expect(service.getToken).toHaveBeenCalledOnce())
     await screen.findByText(status)
     expect(ended).toHaveBeenCalledTimes(count)
+    window.removeEventListener('feedback-session-ended', ended)
+  },
+)
+
+test.each(['Expire from recipe request', 'Sign out directly'])(
+  '%s clears feedback alongside recipe account data',
+  async (action) => {
+    const ended = vi.fn()
+    window.addEventListener('feedback-session-ended', ended)
+    const service: AuthService = {
+      getSession: vi
+        .fn()
+        .mockResolvedValue({
+          id: 'one',
+          email: 'test@example.test',
+          emailVerified: true,
+        }),
+      getAccessToken: vi.fn().mockResolvedValue('token'),
+      signInWithPassword: vi.fn(),
+      sendPasswordResetCode: vi.fn(),
+      setPassword: vi.fn(),
+      signOut: vi.fn().mockResolvedValue(undefined),
+    }
+    render(
+      <AuthProvider serviceFactory={async () => service}>
+        <Probe />
+      </AuthProvider>,
+    )
+    await screen.findByText('signed-in')
+    fireEvent.click(screen.getByText(action))
+    await screen.findByText('signed-out')
+    expect(ended).toHaveBeenCalledOnce()
     window.removeEventListener('feedback-session-ended', ended)
   },
 )

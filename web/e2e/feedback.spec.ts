@@ -3,6 +3,9 @@ import { test, expect, type Page } from '@playwright/test'
 test.beforeEach(async ({ page }) => {
   // Browser fixtures never contact external fonts, auth or Framebriar.
   await page.route('https://**', route => route.abort())
+  // The merged shell loads real account recipes. Feedback fixtures isolate that
+  // unrelated read without calling a live recipe database.
+  await page.route('**/api/recipes?*', route => route.fulfill({ json: { recipes: [], nextCursor: null } }))
 })
 
 const sha = '1234567890123456789012345678901234567890'

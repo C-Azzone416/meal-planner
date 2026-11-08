@@ -1,68 +1,82 @@
-# Proposed protected Framebriar CI
+# Proposed sole-owner protected Framebriar CI
 
-Design only. No environment, credential, permission, reviewer, workflow or required-check change is authorized or performed by this document. The existing implementation retains push-only reader scope. Do not expose the reader to pull-request workflows, use `pull_request_target`, or grant this public repository broad package access through `GITHUB_TOKEN` as a shortcut.
+Design only. No environment, credential, permission, workflow, launch or required-check change is performed or authorized by this document. Preserve the existing push-only reader boundary until the owner explicitly approves a replacement. Do not expose the reader directly to pull-request workflows, use `pull_request_target`, or grant this public repository broad package access through `GITHUB_TOKEN` as a shortcut.
 
-## Verified baseline and blockers
+## Actual rules versus this proposal
 
-Read-only inspection found active rulesets rather than classic branch protection. Main requires the GitHub Actions `required` check with strict up-to-date checking. Main also requires one PR approval, dismisses stale approvals and resolves review threads, but does not require code-owner approval and permits an administrator PR-only bypass of the review rule. Develop requires a PR and resolved threads but zero approvals and no required status checks, with the same review bypass. Both branches block force-push and deletion. Existing deployment environments have no reviewer or branch restrictions. Workflow default token permissions are read-only; Actions is enabled.
+Read-only inspection confirms the existing owner/admin exemption is already configured: main and develop review rules allow administrators to bypass through a pull request. Develop requires zero approvals; main's normal one-approval requirement has the administrator PR-only exemption. Preserve that exemption. Main's strict `required` CI check has no bypass, and both branches prohibit deletion and force-push. These checks are separate from approval count.
 
-GitHub Free supports the relevant environment protection features for this public repository. Only one repository collaborator was found, with no outstanding collaborator invitations. **An independent reviewer must be selected and given the minimum appropriate access before a prevent-self-review gate can operate.** Do not silently turn off self-review prevention or reuse an unprotected deployment environment.
+The existing Preview/Production environments have no required-reviewer rules or branch restrictions. `framebriar-ci` does not yet exist. A previous draft proposed an independent reviewer and prevent-self-review; **that was an unimplemented design choice, not a GitHub requirement or a missing owner exemption**. The current sole-owner arrangement does not require inviting another contributor.
 
-The private package reader is absent. An unauthenticated package fetch returns 401. The proposed workflow cannot run until approved access exists. Package-owner permission to give the selected reader principal access has not been verified.
+GitHub Free supports environment reviewers and deployment-branch restrictions for this public repository. The package reader remains absent and unauthenticated package installation returns 401. Package access and a trusted test path remain blockers distinct from review exemptions.
 
-## Credential and destination
+## Proposed owner approval boundary
+
+Create a dedicated GitHub Actions environment named **`framebriar-ci`**, only after explicit approval:
+
+- Required reviewer: the existing repository owner, Caroline, selected using the verified GitHub account in the actual setup operation. Do not publish personal account details or provider IDs in this document.
+- `prevent_self_review=false`: the owner can approve a run she dispatched. This is intentional for a sole-owner repository, not an independent-human review claim.
+- `can_admins_bypass=false`: require the explicit environment approval interaction rather than a bypass operation. This environment-only setting must not remove the existing branch ruleset owner exemption.
+- Deployment branch policy: selected **branch exactly `main`**, no tags or wildcard branches. The workflow executes from main even when its separately validated input SHA identifies a feature PR commit.
+- No Vercel deployment token, database credential, enrollment key or invitation in this environment.
+
+The trusted main workflow, the exact source SHA and the package dependency changes must be inspected before approval. The owner is the trusted principal who can maintain main; this design does not attempt to protect the owner from her own deliberate edits. If additional contributors gain write access, revisit the trust model before granting them access to the gate.
+
+## Exact package credential proposal
 
 - Provider: GitHub Packages npm registry, `https://npm.pkg.github.com`.
-- Package: `@masra91/framebriar`, exact version `0.4.1`, using the reviewed lockfile integrity.
-- Credential: GitHub **personal access token (classic)** with `read:packages` only. Do not request `repo`, `write:packages`, `delete:packages`, workflow or administration scopes without separately verified necessity and approval. Fine-grained PAT support must not be assumed for this registry.
-- Principal: an owner-approved existing package reader with Read permission on this package. Prefer a principal whose package access is narrowly limited. A classic PAT is not intrinsically restricted to one package: it can read other packages that its principal is entitled to read. State that scope before provisioning. Creating a dedicated account, granting access or creating the token is a separate approval, not part of design preparation.
-- Destination: new GitHub Actions environment **`framebriar-ci`**, secret **`FRAMEBRIAR_PACKAGE_READ_TOKEN`**. Never a repository secret, Vercel variable, local persistent npmrc, artifact or cache. No public variable is required.
-- Runtime transmission: map to `NODE_AUTH_TOKEN` only during the isolated install step. Do not place the token in an npm command argument. The registry receives the credential solely to download the approved package.
-- Lifetime: choose an owner-approved short expiry, document rotation ownership and test replacement before revoking the previous token. Do not generate or transmit a credential until the exact principal, scope and destination are approved.
+- Package: `@masra91/framebriar`, pinned `0.4.1` and reviewed lockfile integrity.
+- Credential: GitHub **personal access token (classic)**, scope **`read:packages` only**. No `repo`, `write:packages`, `delete:packages`, workflow or administration scope without separately verified necessity and approval. Fine-grained PAT compatibility must not be assumed for this registry.
+- Principal: an owner-approved existing reader with Read permission on this package. Confirm the package owner's permission and entitlement privately. A classic PAT can read other packages accessible to its principal; it is not intrinsically limited to this one package. Prefer the narrowest existing principal. Creating an account or granting new access needs separate approval.
+- Sole destination: environment `framebriar-ci`, secret **`FRAMEBRIAR_PACKAGE_READ_TOKEN`**. Not a repository secret, persistent local npmrc, Vercel setting, cache or artifact.
+- Installation mapping: `NODE_AUTH_TOKEN` in only the isolated install step, never in command arguments. Registry credential transmission is only for the approved package download.
+- Expiry: owner-approved short lifetime with named rotation responsibility. Confirm principal, scope, destination and expiry at credential creation/transmission time; this design is not that approval.
 
-GitHub's npm registry documentation explicitly supports a classic PAT with at least `read:packages` for packages associated with other private repositories. npm supports granular package permissions; these docs do not establish a need for broad source-repository access. If the package's actual permission model prevents this narrow reader, stop and obtain evidence rather than adding `repo` scope.
+Official npm registry guidance supports a classic PAT with at least `read:packages` for packages associated with other private repositories. npm supports granular package permissions; the guidance does not justify broad source-repository `repo` scope. If the actual package permissions prevent a narrow reader, stop and collect evidence rather than broadening access.
 
-## Protected environment and branch requirements
+## Trusted workflow outline
 
-Create `framebriar-ci` only after approval, with:
+Proposed `.github/workflows/framebriar-reviewed-ci.yml` accepts `workflow_dispatch` only, with PR number and exact lowercase 40-character SHA. Never interpolate untrusted input into shell source. The trusted workflow lives on main; the target PR must not supply workflow steps, reusable actions or credential-bearing commands.
 
-1. One explicitly selected independent reviewer who has at least repository Read access; identify the actual person privately before configuring. If the owner dispatches a run, that same owner cannot approve it with self-review prevention enabled.
-2. Prevent self-review enabled; administrator protection bypass disabled.
-3. Selected deployment **branch** exactly `main`, not tags, wildcard names or merely “protected branches.” This binds environment use to trusted main workflow code. The input SHA may name a reviewed PR commit but is not the workflow execution ref.
-4. No deployment credentials, runtime database/key secrets or invitations in this environment.
+1. **Validate without the reader.** Require main dispatch. Resolve and record the immutable workflow revision (`github.workflow_sha`), verify it against the approved trusted main revision, and validate the target PR belongs to this repository with an allowed base. Require the supplied SHA to equal the PR's current head; capture base/head identity and the exact manifest hashes. Use only trusted validation code. Show the owner the target SHA, workflow revision and dependency diff before the environment approval.
+2. **Approve explicitly.** The gated job references `framebriar-ci`. The owner approves that exact SHA and workflow revision, including running that source with the private SDK available. Recheck the PR head and source/manifests after approval; a changed head requires a new run/approval, never an automatic substitution.
+3. **Install with fixed trusted code.** Checkout/download exactly the validated source without persisted checkout credentials. Copy only package.json and package-lock.json into a temporary install directory. Generate the fixed scoped registry npmrc, separate empty user/global npm configs, fresh HOME and `env -i`. Run only `npm ci --ignore-scripts` while authenticated, using a temporary cache deleted at exit. No repository-controlled action, lifecycle, build, test or shell script may run beside the reader. Transfer only node_modules back to the worktree, not logs, npmrc or caches.
+4. **Test without credentials.** A fresh step with no reader executes the reviewed lifecycle validation, unit tests, lint/typecheck, disposable Go/PostgreSQL browser fixtures and target/capture artifact checks. Never contact live Framebriar or a live database. Do not upload SDK source, node_modules, npm caches or environment files. Code under test can still read the installed private SDK and potentially disclose it, so explicit exact-SHA approval is essential even after the token disappears. Token isolation alone does not approve arbitrary code.
+5. **Report from a clean trusted runner.** No target checkout, no package-reader environment and no target artifact execution. Use the ephemeral workflow `GITHUB_TOKEN` with only `checks:write` and necessary Actions/PR reads. Verify the trusted workflow/run revision, successful required jobs, immutable head and current PR identity before creating `framebriar-reviewed-web` on that exact SHA. Link the trusted run. A dispatch run's native head SHA is main, not its input SHA, so a green dispatch badge alone cannot satisfy the feature PR gate.
 
-Before supplying the secret, strengthen main/develop review rules in an explicitly approved change: at least one independent approval, stale-review dismissal, code-owner review for `.github/**`, `tools/**` and deployment config, and no administrator bypass of these review requirements. Update CODEOWNERS with the approved available reviewer. Protect CODEOWNERS itself. Keep existing deletion/force-push rules and main strict status-check policy. The current single-collaborator arrangement cannot satisfy these independent review requirements; choose a reviewer first.
+Record only safe evidence: source/workflow SHA, manifest hashes, test counts, target names and outcomes. Avoid logs that dump package files. Production enablement and deployments are not part of this CI gate.
 
-Environment branch restrictions are not enough if an author can merge altered workflow code to main without independent review. Conversely, approving a job does not prove the input code is safe: reviewers must explicitly inspect the exact SHA and dependency changes before releasing package access.
+## Required-check transition and honest limits
 
-## Workflow and immutable evidence
+The existing private-package frontend PR job fails without access. Merely adding a dispatch workflow does not fix that failure. A separately reviewed CI change must split public checks from approved private-dependency frontend checks and wire the aggregate/branch requirements so **a missing approved frontend run cannot produce a mergeable green gate**. Keep main's existing `required` check non-bypassable and its strict up-to-date policy; preserve the owner's PR-only review exemption. Propose `framebriar-reviewed-web` as the additional required frontend check on both main and develop, with the exact final contexts verified before configuration. Do not weaken checks while transitioning.
 
-Proposed file: `.github/workflows/framebriar-reviewed-ci.yml`, event `workflow_dispatch` only, executed from main. Inputs are a PR number and full 40-character lowercase head SHA, supplied through environment variables rather than interpolated shell code.
+GitHub Actions is a shared expected-source identity. Another workflow can emit the same check name, including a PR-controlled workflow; `framebriar-reviewed-web` plus expected source “GitHub Actions” is **not cryptographic proof that the trusted workflow ran**. The owner must verify the linked trusted-main dispatch run, workflow revision and input SHA before merging. A PR that edits workflows/CODEOWNERS or attempts a spoof must not be accepted merely because similarly named checks are green. Preserve trusted validation in main and never treat a claimed target artifact or target-generated status as authorization.
 
-1. **Validate** on a fresh runner with minimal read permissions. Require the dispatch ref to be main and verify the workflow revision is the reviewed main revision. Resolve the PR through GitHub, require the same base repository and approved base branch, match the exact current head SHA, and record the base/head and manifest hashes. No package reader, checkout scripts, code execution or deployment occurs. Put the exact reviewed SHA and dependency diff link in the approval summary. Revalidate after approval to catch a changed PR head.
-2. **Approved build** references `framebriar-ci`. Download/check out the exact validated SHA with checkout credentials not persisted. Copy only package.json and package-lock.json into a temporary install directory. Use the fixed scoped registry npmrc, separate empty user/global npm configs, a new HOME and `env -i`. Authenticate only `npm ci --ignore-scripts`, use a temporary cache and delete it on exit. Transfer only node_modules into the worktree, never the token, npm log/cache or private dependency artifact. A fresh credential-free step performs the reviewed lifecycle validation, tests, lint, typecheck and eight target/capture artifact checks. Do not use repository-controlled actions or scripts while the reader is present. No live Framebriar report or deployment is part of this gate.
-3. **Reporter** on a separate clean runner, no target checkout, no package-reader environment and no target artifacts executed. It has only narrowly scoped `checks: write` plus necessary Actions/PR reads using the ephemeral workflow `GITHUB_TOKEN`. Validate the trusted workflow run, successful required jobs, workflow revision, PR and immutable input SHA. Publish check **`framebriar-reviewed-web`** on that exact head SHA with a link to the trusted run. Reject changed heads, rerun failures and incomplete evidence. A dispatch run's native head SHA is main, so its native green status alone is not PR evidence.
+For a gate that must mechanically resist check-name spoofing without relying on the sole owner's final provenance review, use a separately approved dedicated GitHub App/restricted CI reporter or another supported required-workflow identity mechanism. That entails additional access/setup and must be designed and approved independently; it is not silently included here. Do not advertise the minimal Actions reporter as providing that stronger guarantee.
 
-No node_modules, SDK source, caches or environment files are uploaded. Review and avoid logs that dump private package files. Safe evidence consists of source/workflow SHA, manifest hashes, test counts, target names and pass/fail results. This private-package code becomes available to the approved input code during testing even after the token disappears; the approval is therefore also approval to run that reviewed code with the package present.
+`tools/deploy/verify-ci.sh` must continue to require successful ci.yml push-main evidence for the exact release SHA. A dispatch run is not a substitute. Automatic push/deploy installations currently expect a reader separately; the new environment-only secret does not automatically reach those jobs. Before activation, explicitly design and approve how those trusted builds use the same protected path. Do not duplicate the token into repository scope or add package permissions to fix that gap by inference.
 
-## Required-check transition, not a skip workaround
+## Separate dependency-free bootstrap PR
 
-Propose adding required check `framebriar-reviewed-web` with expected source GitHub Actions to **both main and develop**. Preserve main's existing `required` check; add it to develop as part of the approved gate alignment. Keep strict up-to-date checking so a changed target base requires fresh evidence under the documented policy.
+Do not try to land the blocked feature PR by removing its failing checks. Prepare a small bootstrap PR against the actual current main baseline, with no new private dependency:
 
-Separately refactor PR CI so its `required` aggregate covers all ordinary public-dependency Go/contract/integration/workflow checks while the private-dependency frontend checks are supplied exclusively by the mandatory reviewed check. Never simply skip frontend CI and leave the old green aggregate as the only required check. Push CI remains a distinct exact-main-SHA release gate; `tools/deploy/verify-ci.sh` must continue to require successful ci.yml push-main evidence and must not accept a dispatch run in its place.
+1. Add only the trusted dispatch/validation/reporter code, negative tests for provenance/head changes, and the intended public/private CI transition. Pin actions and the trusted workflow revision contract. Include failure cases for fork PRs, changed heads, missing approvals, forged job results and absent frontend evidence. Keep private execution unavailable until the protected environment exists.
+2. Run the baseline's ordinary dependency-free CI and inspect the exact workflow diff. Merge through the existing owner PR exemption only after existing mandatory CI succeeds; no review-bypass change is needed. Do not activate a gate that cannot yet produce evidence.
+3. In a separately approved configuration operation, create and verify the owner-reviewed environment, main-only branch policy, self-review allowance and disabled environment bypass. Only then approve/provision the exact reader credential.
+4. Run one owner-approved exact feature SHA through the trusted path. Validate clean installation, frontend/browser/artifact results and reporter source/SHA correspondence.
+5. Coordinate required-check activation and the CI split so neither an absent trusted frontend result nor the old permanently blocked private PR install is mistaken for a pass. Verify both an approved success and deliberately missing/mismatched evidence fail-closed behavior before relying on this route for merge.
+6. Finish the separate trusted push/deploy access path and verify release evidence remains exact-SHA. Then resume the feature PR's normal review/merge process. None of these steps deploys or enables Preview implicitly.
 
-Expected-source GitHub Actions is not unique to this reporter: another Actions workflow could emit the same check name. The required independent code-owner review for every workflow change is therefore an essential part of this proposal, not optional hardening. If a stronger isolated check identity is required, use a separately approved dedicated GitHub App/restricted CI reporter instead; that creates additional persistent access and is outside this minimal proposal. Do not claim the Actions check name alone proves trusted provenance.
+This is an implementation outline, not an implemented bootstrap. The exact check transition must be reviewed against current baseline workflows before coding; do not use an unprotected merge window as the solution.
 
-Bootstrap this without a bypass shortcut: prepare a small dependency-free workflow/configuration PR first, run existing checks, review it independently, and coordinate the protected-environment and required-check activation in a recorded owner-approved window. Only then run the feature SHA through the new gate. Do not change required checks until the corresponding trusted check can actually run; do not merge the feature under an absent check. Existing automatic push/deployment installs also need a separately reviewed environment-scoped access plan before repository-scoped reader access is removed or provisioned; this proposal grants none by implication.
+## Approvals still needed
 
-## Exact next decisions
+- Approve the owner-reviewed environment/security configuration described above, without altering branch owner exemptions.
+- Approve credential creation/grant/transmission with verified principal, `read:packages`, expiry and destination `framebriar-ci` / `FRAMEBRIAR_PACKAGE_READ_TOKEN`.
+- Approve the concrete bootstrap workflow/required-check transition and any trusted push/deploy access adjustment after its exact diff and effects are known.
+- Explicitly approve each reviewed SHA's access to the installed private SDK and verify the resulting trusted evidence before merge.
 
-1. Select an independent repository reviewer; approve their minimum access if none is available.
-2. Approve implementing the trusted workflow and CI/check split, plus the explicit main/develop review and required-check changes above.
-3. Identify the existing package-reader principal; confirm package-owner authorization and its Read access. Approve the classic `read:packages` token, expiry and sole destination `framebriar-ci` / `FRAMEBRIAR_PACKAGE_READ_TOKEN` at credential creation/transmission time.
-4. Configure and verify protections before loading the secret, then approve one reviewed exact-SHA test run. Record results without private data.
-
-Until those decisions, preserve the blocked checks and denied PR-secret boundary. Preparation is not a statement that protected CI, private installation or a rollout is complete.
+A general request to complete setup establishes intent, but is not a replacement for required action-time confirmation of new persistent credential access or security-sensitive configuration. No second approver/contributor is required by this proposal.
 
 ## Official references
 

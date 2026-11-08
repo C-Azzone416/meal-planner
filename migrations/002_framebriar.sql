@@ -1,3 +1,5 @@
+-- Standalone Framebriar migration 002; it does not write the recipe-only
+-- meal_planner.schema_migrations ledger. Record this file checksum separately.
 -- Apply independently in Preview and Production, using separate databases and
 -- credentials. The application never runs migrations or provisions storage.
 -- No invitations, raw account identifiers, or feedback payloads belong here.

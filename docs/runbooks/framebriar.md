@@ -6,18 +6,18 @@ Implementation reference for issue #52. The [HTTP/privacy contract](../framebria
 
 Use separate Preview and Production registrations, exact stable HTTPS origins, database roles/storage and encryption key rings. Never borrow travel-packing registrations or secrets. Arbitrary deployment URLs are not allowed origins. No wildcards, paths, query strings or credentials in an origin.
 
-Public build/runtime setting names:
+Public configuration names (build and runtime, except the build-only SHA):
 
 - `FRAMEBRIAR_ENABLED`: `0` (default) or `1`.
 - `FRAMEBRIAR_ENVIRONMENT`: `preview` or `production`.
 - `FRAMEBRIAR_ALLOWED_ORIGIN`: one exact HTTPS origin, independently approved per environment.
 - `FRAMEBRIAR_APP_ID`: `meal-planner-preview` or `meal-planner`, matching the environment.
-- `FRAMEBRIAR_BUILD_SHA`: exact 40-character lowercase deployed commit, explicitly supplied from workflow `inputs.sha`, never ambient Vercel metadata.
+- `FRAMEBRIAR_BUILD_SHA`: build-only exact 40-character lowercase deployed commit, explicitly supplied from workflow `inputs.sha`, never ambient Vercel metadata. Runtime uses immutable generated Go provenance and needs no persisted SHA setting. If a legacy runtime SHA exists, it must match; remove it in a reviewed configuration change before the next release.
 - `FRAMEBRIAR_SCREENSHOTS`: `0` by default, independent `1` opt-in capability. Users still select each screenshot explicitly.
 
 Runtime-only secrets: `FRAMEBRIAR_DATABASE_URL` and `FRAMEBRIAR_CREDENTIAL_KEYS` (JSON object with `current` key ID and `keys` map from IDs to base64-encoded 32-byte keys; see backend validation). Store these as Vercel Secret type, separately in each environment. The pulled-env guard accepts only `[SENSITIVE]` placeholders for these names; literal values fail with names-only diagnostics. Pulled env files are always deleted and never uploaded. No prefix-wide Framebriar allowlist exists.
 
-The Vite build reads only the six public properties in `tools/feedback/config.mjs`, disables automatic `VITE_*` exposure and emits `framebriar-build.json`. Runtime browser origin must equal the compiled origin. Incomplete/mismatched config disables feedback. `prepare-build.mjs` generates public Go provenance constants; the server checks the runtime SHA, environment and app against these immutable values. A default local Go build has empty constants and fails closed. Private database/key material is never generated into source or artifacts.
+The Vite build reads only the six public properties in `tools/feedback/config.mjs`, disables automatic `VITE_*` exposure and emits `framebriar-build.json`. Runtime browser origin must equal the compiled origin. Incomplete/mismatched config disables feedback. `prepare-build.mjs` generates public Go provenance constants; the server uses the immutable SHA and checks runtime environment/app against these values. An optional legacy runtime SHA must agree. A default local Go build has empty constants and fails closed. Private database/key material is never generated into source or artifacts.
 
 ## Package-reader prerequisite and safe installation
 
@@ -37,9 +37,17 @@ After installation, a fresh shell runs `bash tools/feedback/postinstall.sh`. It 
 
 ## Owner-controlled setup and migration gate
 
-Check existing service registrations before proposing new ones. Obtain explicit approval for each environment's registration/origin, least-privilege package reader, runtime storage/key setup and private invitation. Preserve all unrelated apps and settings. Apply only the reviewed forward-compatible `migrations/001_framebriar.sql` migration using the environment's owner-controlled migrator connection. Do not grant schema-management privileges to the runtime role. Migration is intentionally not run by the build job; verify it separately before any approved enablement/deployment. Keep schema changes backward compatible for rollback.
+Preview and Production builds run `tools/deploy/check-migration-readiness.sh` against `migrations/`, `hosted/migrations/` and legacy `db/migrations/`. The present migration sources deliberately block deployment because this workflow has no verified target-specific migration-readiness handoff. This is not a migration runner: no database is contacted and no migration is applied. After the owner verifies the reviewed schema and least-privilege grants, a separate reviewed readiness gate must bind that evidence to the target and migration checksums. Do not remove or bypass this guard to deploy.
+
+Check existing service registrations before proposing new ones. Obtain explicit approval for each environment's registration/origin, least-privilege package reader, runtime storage/key setup and private invitation. Preserve all unrelated apps and settings. Apply only the reviewed forward-compatible `migrations/002_framebriar.sql` migration using the environment's owner-controlled migrator connection. Do not grant schema-management privileges to the runtime role. Migration is intentionally not run by the build job; verify it separately before any approved enablement/deployment. Keep schema changes backward compatible for rollback. The unapplied feedback file is numbered `002` to avoid confusion with `hosted/migrations/001_recipes.sql`; it creates only the feedback table and does not modify the recipe-only `meal_planner.schema_migrations` ledger. Inventory both independently and record the exact feedback file checksum with target-specific readiness evidence.
 
 Enabling Preview requires a reviewed workflow/config change from its current hard-off state, matching runtime config, migration evidence and private enrollment. Production is a separate decision; Preview approval is not Production approval. Do not expand authentication membership as part of enrollment.
+
+## Preview database access proposal
+
+Use a dedicated Framebriar runtime login in the privately verified Preview database, separate from recipe and migration roles. Approve only CONNECT to that database, USAGE on the schema containing `framebriar_enrollments`, and SELECT, INSERT, UPDATE on that one table. Disconnect and account erasure update the encrypted record and generation; runtime DELETE is not required. Do not grant access to recipe/auth tables, schema creation, role management, ownership, BYPASSRLS or broad inherited roles. Verify default/public privileges before considering access narrow. No role or credential is created by this runbook.
+
+Require a provider-supported pooled PostgreSQL URL with `sslmode=verify-full`. Runtime accepts only the optional `sslrootcert` in addition to `sslmode`, and sets a five-second connect timeout itself. Host/user/password overrides, session options and unsupported `channel_binding` parameters are rejected. Statement/lock timeouts remain transaction-local for Neon/PgBouncer compatibility. Store this dedicated URL only in Vercel Preview Secret `FRAMEBRIAR_DATABASE_URL`; independently generate and approve storage of the 32-byte enrollment encryption key ring in Vercel Preview Secret `FRAMEBRIAR_CREDENTIAL_KEYS`. Never reuse the recipe runtime login or Production key ring.
 
 ## Rotation, loss and revocation
 

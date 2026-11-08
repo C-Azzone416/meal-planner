@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -37,10 +38,11 @@ type feedbackSQLStore struct{ db *sql.DB }
 var errFeedbackStorage = errors.New("feedback storage unavailable")
 
 func newFeedbackSQLStore(databaseURL string) (feedbackStore, error) {
-	if databaseURL == "" {
+	dsn, err := feedbackDatabaseURL(databaseURL)
+	if err != nil {
 		return nil, errFeedbackStorage
 	}
-	db, err := sql.Open("postgres", databaseURL)
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, errFeedbackStorage
 	}
@@ -51,6 +53,29 @@ func newFeedbackSQLStore(databaseURL string) (feedbackStore, error) {
 	// No automatic migration or eager network access. The reviewed migration must
 	// be applied by the owner before enabling the feature.
 	return &feedbackSQLStore{db: db}, nil
+}
+
+// feedbackDatabaseURL accepts only a server-held, verified-TLS PostgreSQL URL.
+// Do not allow query parameters to override credentials, destination or TLS, or
+// send unsupported statement/lock settings in a Neon/PgBouncer startup packet.
+func feedbackDatabaseURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u == nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Hostname() == "" || u.User == nil || u.User.Username() == "" || u.Path == "" || u.Path == "/" || u.Fragment != "" {
+		return "", errFeedbackStorage
+	}
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil || q.Get("sslmode") != "verify-full" {
+		return "", errFeedbackStorage
+	}
+	for name, values := range q {
+		if len(values) != 1 || (name != "sslmode" && name != "sslrootcert") {
+			return "", errFeedbackStorage
+		}
+	}
+	q.Set("connect_timeout", "5")
+	q.Set("application_name", "meal-planner-feedback")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
 func feedbackGeneration() (string, error) {

@@ -63,7 +63,7 @@ func TestFeedbackPostgres(t *testing.T) {
 	dsn := u.String()
 	open := func() *feedbackSQLStore {
 		t.Helper()
-		store, err := newFeedbackSQLStore(dsn)
+		store, err := feedbackTestSQLStore(dsn)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,7 +72,7 @@ func TestFeedbackPostgres(t *testing.T) {
 		return s
 	}
 	first, second := open(), open()
-	migration, err := os.ReadFile("../migrations/001_framebriar.sql")
+	migration, err := os.ReadFile("../migrations/002_framebriar.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

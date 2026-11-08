@@ -153,7 +153,9 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
       box.current?.stop()
       const scope = currentScope.current
       void saveSettled.current
-        .then(() => clearKnownScope(scope))
+        .then(() => {
+          if (scope) return clearKnownScope(scope)
+        })
         .catch(() => {})
       setOpen(false)
       setNotes('')
@@ -491,25 +493,35 @@ export function FeedbackAction() {
     </button>
   ) : null
 }
-export function FeedbackSignOut() {
+export function FeedbackSignOut({
+  onSignOut,
+}: { onSignOut?: () => void } = {}) {
   const context = useContext(Context)
   return (
     <button
       className="sign-out-link"
       type="button"
-      onClick={() => void context?.signOut()}
+      onClick={() => {
+        if (context) void context.signOut()
+        else onSignOut?.()
+      }}
     >
       Sign out
     </button>
   )
 }
 export function FeedbackSettings() {
-  const context = useContext(Context),
-    auth = useAuth()
+  const context = useContext(Context)
+  return context && enabled() ? (
+    <ConnectedFeedbackSettings context={context} />
+  ) : null
+}
+
+function ConnectedFeedbackSettings({ context }: { context: Controls }) {
+  const auth = useAuth()
   const [invitation, setInvitation] = useState(''),
     [busy, setBusy] = useState(false),
     [notice, setNotice] = useState('')
-  if (!context || !enabled()) return null
   const act = async (action: 'connect' | 'disconnect') => {
     if (busy) return
     if (
