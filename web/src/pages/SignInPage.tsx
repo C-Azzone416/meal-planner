@@ -1,5 +1,13 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
+import { useAuthNotice } from '../auth/AuthProvider'
 import { PawMagnet } from '../components/Magnet'
+import '../styles/states.css'
+
+/** Seconds before another password code can be requested. */
+export const RESEND_SECONDS = 60
+
+/** Identical for every address, so it never reveals whether an account exists. */
+export const CODE_SENT_MESSAGE = 'If this email has access, we’ll send a code. This is a private project; contact the owner to request access.'
 
 type SignInMode = 'sign-in' | 'reset-email' | 'set-password'
 
@@ -30,6 +38,21 @@ export function SignInPage({
   const [confirmPassword, setConfirmPassword] = useState('')
   const [code, setCode] = useState('')
   const [localError, setLocalError] = useState<string>()
+  const { notice, clearNotice } = useAuthNotice()
+  const [codeRequested, setCodeRequested] = useState(false)
+  const [resendAt, setResendAt] = useState<number | null>(null)
+  const [now, setNow] = useState(() => Date.now())
+  const secondsLeft = resendAt === null ? 0 : Math.max(0, Math.ceil((resendAt - now) / 1000))
+
+  useEffect(() => {
+    if (resendAt === null || Date.now() >= resendAt) return undefined
+    const timer = window.setInterval(() => {
+      const current = Date.now()
+      setNow(current)
+      if (current >= resendAt) window.clearInterval(timer)
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [resendAt])
 
   const clearSecrets = () => {
     setCode('')
@@ -39,8 +62,11 @@ export function SignInPage({
     onClearError()
   }
 
+  const resendHint = secondsLeft > 0 ? `You can request another code in ${secondsLeft} second${secondsLeft === 1 ? '' : 's'}.` : null
+
   const switchMode = (nextMode: SignInMode) => {
     clearSecrets()
+    if (nextMode === 'sign-in') setCodeRequested(false)
     setMode(nextMode)
   }
 
@@ -49,6 +75,7 @@ export function SignInPage({
     setLocalError(undefined)
     try {
       await onSignIn(email, password)
+      clearNotice()
     } catch {
       // The route owns the privacy-safe error copy.
     } finally {
@@ -58,9 +85,14 @@ export function SignInPage({
 
   const requestResetCode = async (event?: FormEvent) => {
     event?.preventDefault()
+    if (secondsLeft > 0) return
     setLocalError(undefined)
     try {
       await onRequestPasswordResetCode(email)
+      const sentAt = Date.now()
+      setNow(sentAt)
+      setResendAt(sentAt + RESEND_SECONDS * 1000)
+      setCodeRequested(true)
       setCode('')
       setMode('set-password')
     } catch {
@@ -98,6 +130,8 @@ export function SignInPage({
         <section className="sign-in-card">
           <PawMagnet />
 
+          {notice && <p className="form-message" role="status">{notice}</p>}
+
           {mode === 'sign-in' && (
             <form onSubmit={(event) => void signIn(event)}>
               <label>
@@ -122,7 +156,8 @@ export function SignInPage({
                 Email
                 <input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required />
               </label>
-              <button className="button button--green full-button" disabled={pending || !available}>{pending ? 'Sending…' : 'Email my password code'}</button>
+              <button className="button button--green full-button" disabled={pending || !available || secondsLeft > 0} aria-describedby={resendHint ? 'resend-hint' : undefined}>{pending ? 'Sending…' : 'Email my password code'}</button>
+              {resendHint && <p className="form-hint" id="resend-hint">{resendHint}</p>}
               <button type="button" className="text-button" disabled={pending} onClick={() => switchMode('sign-in')}>Back to sign in</button>
             </form>
           )}
@@ -130,7 +165,7 @@ export function SignInPage({
           {mode === 'set-password' && (
             <form onSubmit={(event) => void savePassword(event)}>
               <h2>choose your password</h2>
-              <p>If this email has access, we’ll send a code. This is a private project; contact the owner to request access.</p>
+              {codeRequested && <p className="form-message" role="status">{CODE_SENT_MESSAGE}</p>}
               <p>If you receive a code, enter it below and choose a new password.</p>
               <label>
                 Password code
@@ -148,7 +183,8 @@ export function SignInPage({
               <button className="button button--green full-button" disabled={pending || !available}>
                 {pending ? 'Saving…' : 'Save password & open my fridge'}
               </button>
-              <button type="button" className="text-button" disabled={pending || !available} onClick={() => void requestResetCode()}>Email me a new password code</button>
+              <button type="button" className="text-button" disabled={pending || !available || secondsLeft > 0} aria-describedby={resendHint ? 'resend-hint' : undefined} onClick={() => void requestResetCode()}>Email me a new password code</button>
+              {resendHint && <p className="form-hint" id="resend-hint">{resendHint}</p>}
               <button type="button" className="text-button" disabled={pending} onClick={() => switchMode('sign-in')}>Back to sign in</button>
             </form>
           )}

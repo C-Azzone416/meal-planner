@@ -110,6 +110,8 @@ test('password sign-in authorizes with the JWT injected into a fresh real-adapte
     email: 'allowed@example.test',
   })
   expect(authorization).toBe('Bearer signed-api-jwt')
+  await expect(service!.getAccessToken!('user-test')).resolves.toBe('signed-api-jwt')
+  await expect(service!.getAccessToken!('other-account')).resolves.toBeNull()
   expect(providerRequests.some((url) => url.endsWith('/get-session'))).toBe(true)
   expect(providerRequests.some((url) => url.endsWith('/revoke-other-sessions'))).toBe(false)
   expect(providerRequests.some((url) => url.endsWith('/token'))).toBe(false)
@@ -210,4 +212,25 @@ test('sets an existing user password, signs in, and revokes older sessions', asy
     expect(providerRequests.some((url) => url.endsWith(path))).toBe(true)
   }
   expect(providerRequests.some((url) => url.endsWith('/token'))).toBe(false)
+})
+
+test('classifies only unanswered requests as network failures', async () => {
+  const { isNetworkFailure } = await import('./service')
+  expect(isNetworkFailure(new TypeError('Failed to fetch'))).toBe(true)
+  expect(isNetworkFailure({ status: 0 })).toBe(true)
+  expect(isNetworkFailure({ status: 503 })).toBe(false) // the server answered
+  expect(isNetworkFailure({ status: 500, message: 'Failed to fetch' })).toBe(false)
+  expect(isNetworkFailure({ code: 'NETWORK_ERROR' })).toBe(true)
+  expect(isNetworkFailure(new Error('NetworkError when attempting to fetch resource.'))).toBe(true)
+  expect(isNetworkFailure({ status: 400, code: 'USER_NOT_FOUND' })).toBe(false)
+  expect(isNetworkFailure({ status: 429 })).toBe(false)
+  expect(isNetworkFailure(new Error('Unknown email'))).toBe(false)
+  expect(isNetworkFailure(undefined)).toBe(false)
+})
+
+test('real adapter maps an unanswered reset request to an explicit transport outcome', async () => {
+  const { AuthNetworkError } = await import('./service')
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
+  const service = await loadAuthService(fetchResponse({ enabled: true, baseUrl: '/api/auth-proxy' }), 'https://meal.example.test')
+  await expect(service!.sendPasswordResetCode('allowed@example.test')).rejects.toBeInstanceOf(AuthNetworkError)
 })

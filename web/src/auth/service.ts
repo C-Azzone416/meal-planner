@@ -8,6 +8,7 @@ export interface AuthUser {
 
 export interface AuthService {
   getSession(): Promise<AuthUser | null>
+  getAccessToken?(expectedAccountId: string): Promise<string | null>
   signInWithPassword(email: string, password: string): Promise<AuthUser>
   sendPasswordResetCode(email: string): Promise<void>
   setPassword(email: string, code: string, password: string): Promise<AuthUser>
@@ -25,6 +26,14 @@ export class AuthSessionEstablishmentError extends Error {
   constructor() {
     super('The secure sign-in session could not be established.')
     this.name = 'AuthSessionEstablishmentError'
+  }
+}
+
+/** The request never got an answer (offline, DNS, server down). Distinct from "the server said no". */
+export class AuthNetworkError extends Error {
+  constructor() {
+    super('The server could not be reached.')
+    this.name = 'AuthNetworkError'
   }
 }
 
@@ -120,6 +129,21 @@ function isInvalidCredentialsError(error: unknown): boolean {
     || code === 'INVALID_PASSWORD'
     || code === 'USER_NOT_FOUND'
   ))
+}
+
+/**
+ * True only when the request got no answer from the server (fetch threw, browser status 0, explicit network codes).
+ * Any HTTP status, success or error (throttling, 4xx, 5xx), is a server response and is NOT a network failure.
+ */
+export function isNetworkFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const record = error as Record<string, unknown>
+  if (typeof record.status === 'number') return record.status === 0
+  if (error instanceof TypeError) return true
+  const code = nestedString(error, 'code')
+  if (code && /NETWORK|FETCH|OFFLINE|TIMEOUT/i.test(code)) return true
+  const message = nestedString(error, 'message')
+  return Boolean(message && /failed to fetch|network ?error|load failed|networkerror/i.test(message))
 }
 
 function isPasswordPolicyError(error: unknown): boolean {
@@ -233,6 +257,11 @@ export async function loadAuthService(
   }
 
   return {
+    async getAccessToken(expectedAccountId) {
+      const session = await getCurrentSession()
+      if (!session?.user.emailVerified || session.user.id !== expectedAccountId) return null
+      return session.token
+    },
     async getSession() {
       const user = await authorizeUser(await getCurrentSession())
       if (!user) await client.signOut()
@@ -245,7 +274,12 @@ export async function loadAuthService(
 
     async sendPasswordResetCode(email) {
       const error = await authOperationError(() => client.emailOtp.requestPasswordReset({ email }))
-      if (error) throw authError(error, 'Could not send a password reset code.')
+      if (error) {
+        if (isNetworkFailure(error)) throw new AuthNetworkError()
+        // Any answered request has the same public outcome, including provider errors.
+        // Do not pass provider messages upstream for a second network classification.
+        return
+      }
     },
 
     async setPassword(email, code, password) {
