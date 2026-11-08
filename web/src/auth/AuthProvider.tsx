@@ -7,14 +7,15 @@ import {
   useMemo,
   useState,
 } from 'react'
-import { type AuthService, type AuthUser, loadAuthService } from './service'
+import {
+  AuthSessionEstablishmentError,
+  type AuthService,
+  type AuthUser,
+  loadAuthService,
+} from './service'
 
 type AuthStatus =
-  | 'loading'
-  | 'unavailable'
-  | 'signed-out'
-  | 'signed-in'
-  | 'error'
+  'loading' | 'unavailable' | 'signed-out' | 'signed-in' | 'error'
 
 interface AuthContextValue {
   status: AuthStatus
@@ -31,11 +32,12 @@ interface AuthContextValue {
   setPassword(email: string, code: string, password: string): Promise<void>
   signOut(): Promise<void>
   retry(): void
+  getToken(): Promise<string>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-export const SIGNED_OUT_NOTICE = 'You\'re signed out.'
+export const SIGNED_OUT_NOTICE = "You're signed out."
 export const SESSION_ENDED_NOTICE = 'Your session ended. Sign in again.'
 /** How often a signed-in session is re-checked (also on focus / tab becoming visible). */
 export const SESSION_RECHECK_MS = 5 * 60 * 1000
@@ -128,29 +130,40 @@ export function AuthProvider({
   )
 
   const signOut = useCallback(async () => {
+    window.dispatchEvent(new Event('feedback-session-ended'))
     // Hide account data immediately, including when the remote sign-out fails.
     setUser(null)
     setNotice(null)
     setMessage(null)
     setStatus(service ? 'signed-out' : 'unavailable')
     if (service) {
-      try { await service.signOut(); setNotice(SIGNED_OUT_NOTICE) } catch {
-        setMessage('Account data is hidden for now. Remote sign-out could not be confirmed, so reloading may reopen your session. Reconnect, sign in again, then sign out to retry.')
+      try {
+        await service.signOut()
+        setNotice(SIGNED_OUT_NOTICE)
+      } catch {
+        setMessage(
+          'Account data is hidden for now. Remote sign-out could not be confirmed, so reloading may reopen your session. Reconnect, sign in again, then sign out to retry.',
+        )
       }
     }
   }, [service])
 
   const expireSession = useCallback(() => {
+    window.dispatchEvent(new Event('feedback-session-ended'))
     setUser(null)
     setNotice(SESSION_ENDED_NOTICE)
     setStatus((current) => (current === 'signed-in' ? 'signed-out' : current))
   }, [])
 
-  const getAccessToken = useCallback(async (expectedAccountId: string) => {
-    if (status !== 'signed-in' || user?.id !== expectedAccountId) return null
-    if (!service?.getAccessToken) throw new Error('Recipe access is unavailable.')
-    return service.getAccessToken(expectedAccountId)
-  }, [service, status, user?.id])
+  const getAccessToken = useCallback(
+    async (expectedAccountId: string) => {
+      if (status !== 'signed-in' || user?.id !== expectedAccountId) return null
+      if (!service?.getAccessToken)
+        throw new Error('Recipe access is unavailable.')
+      return service.getAccessToken(expectedAccountId)
+    },
+    [service, status, user?.id],
+  )
 
   const clearNotice = useCallback(() => setNotice(null), [])
 
@@ -163,7 +176,11 @@ export function AuthProvider({
       service
         .getSession()
         .then((session) => {
-          if (active && (!session || !session.emailVerified || session.id !== user?.id)) expireSession()
+          if (
+            active &&
+            (!session || !session.emailVerified || session.id !== user?.id)
+          )
+            expireSession()
         })
         .catch(() => {
           // A failed check (offline, server hiccup) is not proof the session ended: stay signed in.
@@ -183,6 +200,22 @@ export function AuthProvider({
     }
   }, [expireSession, service, status, user?.id])
 
+  const getToken = useCallback(async () => {
+    if (!service || !user || status !== 'signed-in')
+      throw new Error('Sign-in required')
+    try {
+      if (service.getToken) return await service.getToken(user.id)
+      if (!service.getAccessToken)
+        throw new Error('Feedback access is unavailable.')
+      const token = await service.getAccessToken(user.id)
+      if (!token) throw new AuthSessionEstablishmentError()
+      return token
+    } catch (error) {
+      if (error instanceof AuthSessionEstablishmentError) expireSession()
+      throw error
+    }
+  }, [expireSession, service, status, user])
+
   const retry = useCallback(() => {
     setStatus('loading')
     setMessage(null)
@@ -192,6 +225,7 @@ export function AuthProvider({
   const value = useMemo<AuthContextValue>(
     () => ({
       status,
+      getToken,
       user,
       message,
       notice,
@@ -206,6 +240,7 @@ export function AuthProvider({
     }),
     [
       message,
+      getToken,
       notice,
       clearNotice,
       expireSession,
@@ -230,7 +265,13 @@ export function useAuth(): AuthContextValue {
 }
 
 /** Notice for the sign-in screen; safe outside an AuthProvider (returns no notice). */
-export function useAuthNotice(): { notice: string | null; clearNotice: () => void } {
+export function useAuthNotice(): {
+  notice: string | null
+  clearNotice: () => void
+} {
   const value = useContext(AuthContext)
-  return { notice: value?.notice ?? null, clearNotice: value?.clearNotice ?? (() => undefined) }
+  return {
+    notice: value?.notice ?? null,
+    clearNotice: value?.clearNotice ?? (() => undefined),
+  }
 }

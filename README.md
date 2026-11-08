@@ -2,7 +2,7 @@
 
 Meal Planner is a planned web application for reducing the effort required to cook varied dinners at home. The repository now includes a navigable, responsive UI preview and a fail-closed authentication boundary. The UI starts with clearly labeled sample data. Manual recipe storage now has an authenticated Neon-backed API and app integration, pending the reviewed migration and runtime setup. Week planning and preview data remain browser-local, separately for each authenticated account.
 
-> **Preview status:** The repository has CI workflows, hosted health and authentication functions, a React UI preview, a `mealplanner` CLI (`version`, plus read-only `draft validate/list/show`), and a stdio `mealplanner-mcp` server for local recipe drafts. The UI covers the planned views and uses invitation-only email-and-password authentication when its provider is configured. Existing invited accounts set or recover a password with a short-lived email code. Hosted manual recipes have a reviewed-migration path; hosted planning and hosted MCP draft submission are not implemented. The app fails closed for hosted saves until the database/runtime configuration is prepared. Browser-local planning is not a database-backed service.
+> **Preview status:** The repository has CI workflows, hosted health and authentication functions, a React UI preview, a `mealplanner` CLI (`version`, plus read-only `draft validate/list/show`), and a stdio `mealplanner-mcp` server for local recipe drafts. The UI covers the planned views and uses invitation-only email-and-password authentication when its provider is configured. Existing invited accounts set or recover a password with a short-lived email code. Hosted manual recipes have a reviewed-migration path; hosted planning and hosted MCP draft submission are not implemented. The app fails closed for hosted saves until the database/runtime configuration is prepared. Browser-local planning is not a database-backed service. Framebriar feedback code and its enrollment migration are included but disabled and not provisioned.
 
 ## Product direction
 
@@ -27,6 +27,7 @@ The application will keep user data private even though the source repository is
 - [Repository layout](docs/repo-layout.md) — component map and check commands for the current skeleton.
 - [Local draft contract](docs/local-draft-contract.md) — the versioned contract for the local recipe-draft slice described below.
 - [Local draft workflow](docs/local-workflow.md) — host setup, privacy boundary, and the verification record for Codex CLI and Claude Code.
+- [Framebriar feedback contract](docs/framebriar-contract.md) — account-safe feedback implementation and synthetic verification; [rollout runbook](docs/runbooks/framebriar.md) and [private-package CI proposal](docs/runbooks/framebriar-ci-design.md). Feedback remains disabled pending owner-controlled setup.
 - [Hosted manual recipes](docs/runbooks/recipes.md) — API, migration, least-privilege runtime configuration and Preview verification gates.
 - [Authentication runbook](docs/runbooks/authentication.md) — environment-specific allowlisting, provider wiring, and verification gates.
 
@@ -42,7 +43,8 @@ Setup for Codex CLI and Claude Code, the privacy boundary, and the verification 
 
 The current UI supports hosted manual recipe add/edit after database setup, plus separately labeled browser-local recipes and meal planning with shopping, prep and cooking views. Browser clearing or device loss can lose that data; it does not sync between browsers. Failed saves show an unsaved warning and a retry action. Legacy browser data without an account owner is preserved separately and is not automatically imported into an authenticated account. In particular, the repository does not yet include:
 
-- hosted planning, feedback or MCP draft operations;
+- hosted planning or MCP draft operations;
+- enabled hosted feedback (the separate, unapplied Framebriar enrollment migration is included);
 - automatic migration execution or real-user seed data;
 - generated application clients;
 - draft create, update, or delete commands in the CLI, or any hosted draft save; or

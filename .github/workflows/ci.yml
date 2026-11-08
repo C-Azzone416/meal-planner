@@ -40,6 +40,7 @@ jobs:
           bash .github/scripts/classify_test.sh
           bash .github/scripts/gate_test.sh
           bash tools/deploy/check-pulled-env_test.sh
+          node --test tools/deploy/check-migration-readiness.test.mjs
           bash tools/deploy/safe-extract_test.sh
           bash tools/deploy/materialize-output_test.sh
           bash tools/deploy/vercel-evidence_test.sh
@@ -102,9 +103,9 @@ jobs:
   web:
     name: web
     needs: affected
-    if: needs.affected.outputs.web == 'true'
+    if: needs.affected.outputs.web == 'true' || needs.affected.outputs.hosted_go == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -112,13 +113,57 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: web/.nvmrc
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - run: npm ci --prefix web
+      - name: Install pinned dependencies without lifecycle scripts
+        env:
+          # Untrusted PR code must never receive a private package reader.
+          NODE_AUTH_TOKEN: ${{ github.event_name == 'push' && secrets.FRAMEBRIAR_PACKAGE_READ_TOKEN || '' }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$NODE_AUTH_TOKEN" ]]; then
+            echo "::error::Private Framebriar package-reader access is required; no credential fallback is permitted"
+            exit 1
+          fi
+          install_root=$(mktemp -d)
+          trap 'rm -rf "$install_root"' EXIT
+          mkdir -p "$install_root/home" "$install_root/project"
+          cp web/package.json web/package-lock.json "$install_root/project/"
+          # Fixed registry config, never the checkout's .npmrc or user config.
+          printf '%s\n' '@masra91:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$install_root/project/.npmrc"
+          : > "$install_root/user.npmrc"
+          : > "$install_root/global.npmrc"
+          # No inherited npm config, HOME credentials, lifecycle scripts or cache.
+          (cd "$install_root/project" && env -i PATH="$PATH" HOME="$install_root/home" NODE_AUTH_TOKEN="$NODE_AUTH_TOKEN" \
+            npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org \
+              --userconfig="$install_root/user.npmrc" --globalconfig="$install_root/global.npmrc" --cache="$install_root/cache")
+          mv "$install_root/project/node_modules" web/node_modules
+      - name: Review lifecycle requirements in a fresh credential-free shell
+        run: bash tools/feedback/postinstall.sh
       - run: npm run --prefix web lint
       - run: npm run --prefix web typecheck
       - run: npm run --prefix web test
-      - run: npm run --prefix web build
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Locate disposable browser-test PostgreSQL tools
+        run: |
+          set -euo pipefail
+          command -v pg_config >/dev/null || { echo "::error::PostgreSQL pg_config is required for the local browser fixture; no provider fallback is allowed"; exit 1; }
+          postgres_bin=$(pg_config --bindir)
+          for tool in initdb pg_ctl postgres; do
+            [[ -x "$postgres_bin/$tool" ]] || { echo "::error::PostgreSQL $tool is missing from pg_config bindir; cannot run disposable browser fixture"; exit 1; }
+          done
+          printf '%s\n' "$postgres_bin" >> "$GITHUB_PATH"
+      - name: Install pinned Chromium and WebKit test browsers
+        working-directory: web
+        run: npx --no-install playwright install --with-deps chromium webkit
+      - name: Test browser flows against disposable Go and PostgreSQL fixture
+        run: npm run --prefix web test:browser
+      - name: Offline feedback configuration tests
+        run: node --test tools/feedback/*.test.mjs
+      - name: Verify isolated target artifacts
+        env:
+          FRAMEBRIAR_BUILD_SHA: ${{ github.sha }}
+        run: bash tools/feedback/check-targets.sh
 
   hosted-go:
     name: hosted-go
@@ -262,7 +307,8 @@ jobs:
         env:
           AFFECTED_RESULT: ${{ needs.affected.result }}
           SEL_DOCS: ${{ needs.affected.outputs.docs }}
-          SEL_WEB: ${{ needs.affected.outputs.web }}
+          # Match the web job's full-stack selection, including backend-only changes.
+          SEL_WEB: ${{ needs.affected.outputs.web == 'true' || needs.affected.outputs.hosted_go == 'true' }}
           SEL_HOSTED_GO: ${{ needs.affected.outputs.hosted_go }}
           SEL_LOCAL_GO: ${{ needs.affected.outputs.local_go }}
           SEL_CONTRACTS: ${{ needs.affected.outputs.contracts }}

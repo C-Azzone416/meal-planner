@@ -86,7 +86,7 @@ test('shows the offline banner inside the signed-in shell and hides it again whe
     onLine.mockReturnValue(true)
     window.dispatchEvent(new Event('online'))
   })
-  expect(screen.queryByText('You’re offline. This app uses browser-only storage; check the save status before leaving.')).toBeNull()
+  await waitFor(() => expect(screen.queryByText('You’re offline. This app uses browser-only storage; check the save status before leaving.')).toBeNull())
 })
 
 test('an unknown recipe is a "Recipe not found" page with a way back, inside the shell', async () => {

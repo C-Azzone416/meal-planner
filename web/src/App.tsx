@@ -16,6 +16,7 @@ import {
   AuthNetworkError,
   AuthPasswordPolicyError,
 } from './auth/service'
+import { FeedbackProvider } from './feedback/Feedback'
 import { AppShell } from './components/AppShell'
 import { RouteFocus } from './components/RouteFocus'
 import { PageSkeleton } from './components/StateCard'
@@ -53,7 +54,7 @@ function ProtectedShell({ storage }: { storage?: StorageLike | null }) {
     return <Navigate to="/sign-in" replace state={{ from: `${location.pathname}${location.search}${location.hash}` }} />
   }
 
-  return <AccountRecipes key={auth.user.id} accountId={auth.user.id}><HostedPlanner accountId={auth.user.id} storage={storage}><AppShell onSignOut={() => void auth.signOut()}><Outlet /></AppShell></HostedPlanner></AccountRecipes>
+  return <FeedbackProvider key={auth.user.id}><AccountRecipes key={auth.user.id} accountId={auth.user.id}><HostedPlanner accountId={auth.user.id} storage={storage}><AppShell onSignOut={() => void auth.signOut()}><Outlet /></AppShell></HostedPlanner></AccountRecipes></FeedbackProvider>
 }
 
 function HostedPlanner({ accountId, storage, children }: { accountId: string; storage?: StorageLike | null; children: ReactNode }) {
