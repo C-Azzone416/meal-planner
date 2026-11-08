@@ -4,6 +4,10 @@ const FRACTIONS: Record<number, string> = { 0.25: '¼', 0.5: '½', 0.75: '¾' }
 
 /** 1.25 → "1¼", 0.5 → "½", 3 → "3". Only quarter steps are expressed as fractions. */
 export function formatQuantity(quantity: number): string {
+  // Valid small recipe amounts must not be presented as zero.
+  if (quantity > 0 && quantity < 0.005) {
+    return quantity.toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 21 })
+  }
   const whole = Math.floor(quantity + 1e-9)
   const fraction = Math.round((quantity - whole) * 4) / 4
   if (Math.abs(quantity - (whole + fraction)) < 1e-6 && fraction in FRACTIONS) {
