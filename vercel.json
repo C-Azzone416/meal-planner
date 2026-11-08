@@ -8,6 +8,7 @@
     { "source": "/sign-in", "destination": "/index.html" },
     { "source": "/week", "destination": "/index.html" },
     { "source": "/recipes", "destination": "/index.html" },
+    { "source": "/recipes/:path*", "destination": "/index.html" },
     { "source": "/prep", "destination": "/index.html" },
     { "source": "/shopping", "destination": "/index.html" },
     { "source": "/drafts", "destination": "/index.html" },
