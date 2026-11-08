@@ -22,7 +22,10 @@ paths:
       parameters:
         - {name: id, in: query, schema: {type: string, format: uuid}}
         - {name: after, in: query, schema: {type: string, format: uuid}}
-        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 100}}
+        - name: limit
+          in: query
+          description: Upper bound on items per page. The server may return fewer (see nextCursor).
+          schema: {type: integer, minimum: 1, maximum: 100, default: 100}
       responses:
         "200":
           description: A recipe when id is supplied; otherwise an ID-ordered page (not a concurrent-insert snapshot)
@@ -139,8 +142,12 @@ components:
         recipes:
           type: array
           maxItems: 100
+          description: At least one item unless the owner has none. Whole recipes only; a response is capped at about 3.5 MB of encoded JSON, so a page can hold far fewer than `limit` items.
           items: {$ref: "#/components/schemas/RecipeEnvelope"}
-        nextCursor: {type: [string, "null"], format: uuid}
+        nextCursor:
+          type: [string, "null"]
+          format: uuid
+          description: Pass as `after` to continue. Non-null means more recipes may follow, even when the page has fewer than `limit` items; it is the ID of the last recipe in this page. Null means the end. Clients must follow it until null.
     RecipeContent:
       type: object
       additionalProperties: false

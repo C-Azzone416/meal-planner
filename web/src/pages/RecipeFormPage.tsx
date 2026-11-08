@@ -242,6 +242,10 @@ function RecipeForm({ recipe }: { recipe?: DeepReadonly<Recipe> }) {
     </FridgePanel>
     <PreviewNotice />
     <FridgePanel className="content-panel">
+      {remote?.error && <>
+        <p className="inline-note" role="status">Saving is likely unavailable right now: recipe requests are failing. Nothing is saved in this browser as a fallback, so check the result after you save.</p>
+        <RecipeLoadNotice />
+      </>}
       <form className="rx-form" noValidate onSubmit={onSubmit} aria-label={recipe ? 'Edit recipe' : 'Add recipe'}>
         {remote && <p className="inline-note">{recipe && revision === undefined ? 'This is a browser-only recipe. Saving creates a new database copy for your account and keeps the browser original.' : 'Save writes this recipe to your account’s database. Planning and drafts remain in this browser.'}</p>}
         {saveError && <div role="alert"><p>{saveError}</p>{createAttempt && !conflict && <p>Retry sends the same recipe once. Fields are locked until the save is confirmed or you leave this form.</p>}{conflict && recipe && <a href={recipePath(recipe.id)} target="_blank" rel="noreferrer">View latest recipe in a new tab before resolving your edits</a>}</div>}

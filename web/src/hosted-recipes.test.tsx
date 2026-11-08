@@ -188,3 +188,27 @@ test('rejects overlong tags locally and allows correction after a definitive 400
   expect(writes()[0][1]?.body).not.toBe(writes()[1][1]?.body)
   expect((writes()[0][1]?.headers as Record<string, string>)['Idempotency-Key']).not.toBe((writes()[1][1]?.headers as Record<string, string>)['Idempotency-Key'])
 })
+
+test('the direct add form warns before submit when recipe requests are already failing, and still fails safe on submit', async () => {
+  fetcher.mockResolvedValueOnce(json({}, 503))
+  mount('/recipes/new')
+  await screen.findByRole('heading', { name: 'add a recipe' })
+  expect((await screen.findByText(/Saving is likely unavailable right now/)).getAttribute('role')).toBe('status')
+  expect(screen.getByRole('button', { name: 'Retry loading recipes' })).toBeTruthy()
+  expect(writes()).toHaveLength(0) // nothing is sent just by opening the form
+
+  // Submitting is still attempted, and a failed write reports an unconfirmed save (no browser-local fallback).
+  fill()
+  fetcher.mockResolvedValueOnce(json({}, 503))
+  fireEvent.click(screen.getByRole('button', { name: 'Save recipe' }))
+  await waitFor(() => expect(screen.getAllByRole('alert').some((el) => /not been confirmed/.test(el.textContent ?? ''))).toBe(true))
+  expect(writes()).toHaveLength(1)
+  expect(localStorage.getItem(accountStorageKey('account-a')) ?? '').not.toContain('My manual dinner')
+})
+
+test('the add form shows no outage warning when recipe requests work', async () => {
+  mount('/recipes/new')
+  await screen.findByRole('heading', { name: 'add a recipe' })
+  await waitFor(() => expect(fetcher).toHaveBeenCalled())
+  expect(screen.queryByText(/Saving is likely unavailable/)).toBeNull()
+})
