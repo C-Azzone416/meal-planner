@@ -130,7 +130,8 @@ export function SignInPage({
           {mode === 'set-password' && (
             <form onSubmit={(event) => void savePassword(event)}>
               <h2>choose your password</h2>
-              <p>Enter the code from your email, then choose a new password.</p>
+              <p>If this email has access, we’ll send a code. This is a private project; contact the owner to request access.</p>
+              <p>If you receive a code, enter it below and choose a new password.</p>
               <label>
                 Password code
                 <input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value)} placeholder="6-digit code" minLength={6} maxLength={6} required />
