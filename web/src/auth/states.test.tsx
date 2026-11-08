@@ -64,6 +64,7 @@ describe('password reset code request', () => {
     renderRoute('/sign-in', makeService(null))
     await requestCode('allowed@example.test')
     const resend = await screen.findByRole('button', { name: 'Email me a new password code' }) as HTMLButtonElement
+    await act(async () => {}) // let the countdown's interval effect register before moving the clock
     expect(resend.disabled).toBe(true)
     expect(screen.getByText('You can request another code in 60 seconds.')).toBeTruthy()
 
@@ -84,6 +85,7 @@ describe('password reset code request', () => {
     renderRoute('/sign-in', service)
     await requestCode('allowed@example.test')
     await screen.findByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')
+    await act(async () => {}) // let the countdown's interval effect register before moving the clock
     act(() => { vi.advanceTimersByTime(60_000) })
     const resend = screen.getByRole('button', { name: 'Email me a new password code' }) as HTMLButtonElement
     await waitFor(() => expect(resend.disabled).toBe(false))
@@ -123,8 +125,11 @@ describe('sign-out and session expiry notices', () => {
     expect(await screen.findByRole('heading', { name: 'our recipes' })).toBeTruthy()
 
     vi.mocked(service.getSession).mockResolvedValue(null)
-    await act(async () => { window.dispatchEvent(new Event('focus')) })
-    expect(await screen.findByText('Your session ended. Sign in again.')).toBeTruthy()
+    // The re-check listens for focus once its effect has run; keep nudging until it has.
+    await waitFor(async () => {
+      await act(async () => { window.dispatchEvent(new Event('focus')) })
+      expect(screen.getByText('Your session ended. Sign in again.')).toBeTruthy()
+    })
     expect(screen.getByRole('heading', { name: 'what’s for dinner?' })).toBeTruthy()
 
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'allowed@example.test' } })
@@ -151,8 +156,10 @@ describe('sign-out and session expiry notices', () => {
     renderRoute('/week', service)
     await screen.findByRole('heading', { name: 'this week’s dinners' })
     vi.mocked(service.getSession).mockResolvedValue(null)
-    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
-    expect(await screen.findByText('Your session ended. Sign in again.')).toBeTruthy()
+    await waitFor(async () => {
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+      expect(screen.getByText('Your session ended. Sign in again.')).toBeTruthy()
+    })
   })
 
   test('wrong credentials still use the generic copy and keep no stale notice', async () => {
