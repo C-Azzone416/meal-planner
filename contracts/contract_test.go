@@ -28,7 +28,7 @@ type spec struct {
 }
 
 type schema struct {
-	Type                 string            `yaml:"type"`
+	Type                 any               `yaml:"type"`
 	Required             []string          `yaml:"required"`
 	AdditionalProperties *bool             `yaml:"additionalProperties"`
 	Enum                 []string          `yaml:"enum"`

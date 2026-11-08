@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import {
   createBrowserRouter,
   Navigate,
@@ -19,6 +19,7 @@ import {
 import { AppShell } from './components/AppShell'
 import { RouteFocus } from './components/RouteFocus'
 import { PageSkeleton } from './components/StateCard'
+import { AccountRecipes, useRemoteRecipes } from './recipes/RemoteRecipes'
 import { PlannerProvider } from './planner/store'
 import type { StorageLike } from './planner/persist'
 import {
@@ -52,7 +53,13 @@ function ProtectedShell({ storage }: { storage?: StorageLike | null }) {
     return <Navigate to="/sign-in" replace state={{ from: `${location.pathname}${location.search}${location.hash}` }} />
   }
 
-  return <PlannerProvider accountId={auth.user.id} storage={storage}><AppShell onSignOut={() => void auth.signOut()}><Outlet /></AppShell></PlannerProvider>
+  return <AccountRecipes key={auth.user.id} accountId={auth.user.id}><HostedPlanner accountId={auth.user.id} storage={storage}><AppShell onSignOut={() => void auth.signOut()}><Outlet /></AppShell></HostedPlanner></AccountRecipes>
+}
+
+function HostedPlanner({ accountId, storage, children }: { accountId: string; storage?: StorageLike | null; children: ReactNode }) {
+  const remote = useRemoteRecipes()
+  const recipes = useMemo(() => remote?.records.map((record) => ({ ...record.content, id: record.id })) ?? [], [remote?.records])
+  return <PlannerProvider accountId={accountId} storage={storage} externalRecipes={recipes}>{children}</PlannerProvider>
 }
 
 function SignInRoute() {

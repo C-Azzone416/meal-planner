@@ -1,5 +1,5 @@
 /** Form model, conversion and validation for adding/editing a recipe (docs/ux-decisions.md §1). */
-import { newItemId } from '../planner/keys'
+import { containsIllFormed, newItemId } from '../planner/keys'
 import type { Aisle, Attention, DeepReadonly, NewRecipe, Recipe } from '../planner/types'
 
 export interface IngredientRow {
@@ -159,7 +159,7 @@ export function validate(values: RecipeFormValues): FormError[] {
 
   const title = values.title.trim()
   if (!title) add('f-title', 'Title is required.')
-  else if (title.length > 120) add('f-title', 'Title must be 120 characters or fewer.')
+  else if (Array.from(title).length > 120) add('f-title', 'Title must be 120 characters or fewer.')
 
   const active = values.activeMinutes.trim()
   if (!isInt(active) || Number(active) > 600) add('f-activeMinutes', 'Active minutes must be a whole number from 0 to 600.')
@@ -215,6 +215,34 @@ export function validate(values: RecipeFormValues): FormError[] {
     add(values.cookTonight.length ? `cook-${values.cookTonight[0].id}-text` : 'add-cookTonight', 'Add at least one Cook tonight step.')
   }
 
+  // Keep text/count limits aligned with hosted.ValidateRecipeContent. Count Unicode
+  // code points like Go's utf8.RuneCountInString, and reject invalid text before upload.
+  const text = (field: string, value: string, max: number, label: string) => {
+    if (containsIllFormed(value) || value.includes('\0')) add(field, `${label} contains text that cannot be saved.`)
+    else if (Array.from(value.trim()).length > max) add(field, `${label} must be ${max} characters or fewer.`)
+  }
+  if (containsIllFormed(values.title) || values.title.includes('\0')) add('f-title', 'Title contains text that cannot be saved.')
+  text('f-icon', values.icon, 16, 'Icon')
+  const tags = toRecipeFields(values).tags
+  if (tags.length > 32) add('f-tags', 'Use at most 32 tags.')
+  for (const tag of tags) text('f-tags', tag, 80, 'Each tag')
+  for (const section of ['ingredients', 'prepAhead', 'prepTonight', 'cookTonight'] as const) {
+    const rows = values[section]
+    if (rows.length > 200) add(`add-${section}`, 'Use at most 200 rows per section.')
+  }
+  for (const row of values.ingredients.filter(rowIsTouched.ingredients)) {
+    text(`ing-${row.id}-name`, row.name, 500, 'Ingredient name')
+    text(`ing-${row.id}-unit`, row.unit, 80, 'Unit')
+  }
+  for (const row of values.prepAhead.filter(rowIsTouched.prepAhead)) {
+    text(`ahead-${row.id}-text`, row.text, 4000, 'Step')
+    text(`ahead-${row.id}-label`, row.label, 500, 'Short name')
+    text(`ahead-${row.id}-storageNote`, row.storageNote, 2000, 'Storage note')
+  }
+  for (const row of values.prepTonight.filter(rowIsTouched.prepTonight)) text(`tonight-${row.id}-text`, row.text, 4000, 'Step')
+  for (const row of values.cookTonight.filter(rowIsTouched.cookTonight)) text(`cook-${row.id}-text`, row.text, 4000, 'Step')
+  // Leave room for the update revision and request wrapper below the 256 KiB API cap.
+  if (new TextEncoder().encode(JSON.stringify({ content: toRecipeFields(values) })).length > 260_000) add('f-title', 'This recipe is too large. Shorten the text or remove some rows.')
   return errors
 }
 

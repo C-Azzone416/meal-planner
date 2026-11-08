@@ -143,6 +143,8 @@ const isDraft = (value: unknown): boolean =>
   isRecord(value.confirmed) &&
   DRAFT_GUESS_KEYS.every((key) => typeof (value.confirmed as Json)[key] === 'boolean')
 
+// Hosted recipe UUID references survive reload without persisting database recipe content.
+// Their content is fetched separately; an unavailable database must not reset the local plan.
 function isPlan(value: unknown, recipeIds: Set<string>): boolean {
   if (!isRecord(value) || !isNum(value.revision) || !Array.isArray(value.nights) || value.nights.length !== 7) return false
   // A recipe may appear on only one night per week.
@@ -152,7 +154,7 @@ function isPlan(value: unknown, recipeIds: Set<string>): boolean {
     if (!isRecord(night) || night.day !== index || typeof night.pinned !== 'boolean') return false
     if (night.status === 'planned') {
       return (
-        isString(night.recipeId) && recipeIds.has(night.recipeId) &&
+        isString(night.recipeId) && (recipeIds.has(night.recipeId) || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(night.recipeId)) &&
         Number.isInteger(night.servings) && (night.servings as number) >= 1 && (night.servings as number) <= 12
       )
     }

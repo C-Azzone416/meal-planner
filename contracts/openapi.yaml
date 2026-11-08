@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Meal Planner API
-  version: 0.0.0
+  version: 0.1.0
 paths:
   /api/health:
     get:
@@ -14,7 +14,97 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
+  /api/recipes:
+    get:
+      operationId: getManualRecipes
+      summary: Read one owned recipe by id, or page through owned manual recipes
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: id, in: query, schema: {type: string, format: uuid}}
+        - {name: after, in: query, schema: {type: string, format: uuid}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 100}}
+      responses:
+        "200":
+          description: A recipe when id is supplied; otherwise an ID-ordered page (not a concurrent-insert snapshot)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - {$ref: "#/components/schemas/RecipeEnvelope"}
+                  - {$ref: "#/components/schemas/RecipePage"}
+        "401": {description: Missing or invalid session}
+        "404": {description: Recipe not found, including another owner's ID}
+        "503": {description: Authentication or storage unavailable}
+    post:
+      operationId: createManualRecipe
+      summary: Save a person-authored recipe with a durable retry receipt
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [content]
+              properties:
+                content: {$ref: "#/components/schemas/RecipeContent"}
+      responses:
+        "201":
+          description: Committed recipe
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RecipeEnvelope"}
+        "200":
+          description: Original committed receipt for an identical retry
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RecipeEnvelope"}
+        "400": {description: Invalid or incomplete content}
+        "401": {description: Missing or invalid session}
+        "409": {description: Key previously used with different content}
+        "413": {description: JSON body exceeds 256 KiB}
+        "415": {description: Content type is not application/json}
+        "503": {description: Storage unavailable; outcome may be uncertain, retry the same key and payload}
+    put:
+      operationId: updateManualRecipe
+      summary: Replace owned recipe content using optimistic concurrency
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [content, expectedRevision]
+              properties:
+                content: {$ref: "#/components/schemas/RecipeContent"}
+                expectedRevision: {type: integer, minimum: 1, maximum: 9007199254740991}
+      responses:
+        "200":
+          description: Committed update or identical retry, unless a newer edit has superseded it
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RecipeEnvelope"}
+        "400": {description: Invalid or incomplete content}
+        "401": {description: Missing or invalid session}
+        "404": {description: Recipe not found, including another owner's ID}
+        "409": {description: Stale revision; reload without discarding unsaved form}
+        "503": {description: Storage unavailable; outcome may be uncertain}
 components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
   schemas:
     Health:
       type: object
@@ -29,3 +119,94 @@ components:
           enum: [meal-planner-api]
         version:
           type: string
+    RecipeEnvelope:
+      type: object
+      additionalProperties: false
+      required: [id, revision, status, origin, createdAt, updatedAt, content]
+      properties:
+        id: {type: string, format: uuid, readOnly: true}
+        revision: {type: integer, minimum: 1, readOnly: true}
+        status: {type: string, enum: [approved], readOnly: true}
+        origin: {type: string, enum: [manual], readOnly: true}
+        createdAt: {type: string, format: date-time, readOnly: true}
+        updatedAt: {type: string, format: date-time, readOnly: true}
+        content: {$ref: "#/components/schemas/RecipeContent"}
+    RecipePage:
+      type: object
+      additionalProperties: false
+      required: [recipes, nextCursor]
+      properties:
+        recipes:
+          type: array
+          maxItems: 100
+          items: {$ref: "#/components/schemas/RecipeEnvelope"}
+        nextCursor: {type: [string, "null"], format: uuid}
+    RecipeContent:
+      type: object
+      additionalProperties: false
+      required: [title, icon, activeMinutes, totalMinutes, attention, tags, defaultServings, ingredients, prepAhead, prepTonight, cookTonight]
+      properties:
+        title: {type: string, minLength: 1, maxLength: 120}
+        shortName: {type: string, maxLength: 120}
+        icon: {type: string, minLength: 1, maxLength: 16}
+        activeMinutes: {type: integer, minimum: 0, maximum: 600}
+        totalMinutes: {type: integer, minimum: 0, maximum: 10080, description: Must be at least activeMinutes}
+        attention: {type: string, enum: [low, medium, high]}
+        tags: {type: array, maxItems: 32, items: {type: string, minLength: 1, maxLength: 80}}
+        defaultServings: {type: integer, minimum: 1, maximum: 12}
+        ingredients:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: {$ref: "#/components/schemas/RecipeIngredient"}
+        prepAhead:
+          type: array
+          maxItems: 200
+          items: {$ref: "#/components/schemas/RecipePrepAhead"}
+        prepTonight:
+          type: array
+          maxItems: 200
+          items: {$ref: "#/components/schemas/RecipePrepTonight"}
+        cookTonight:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: {$ref: "#/components/schemas/RecipeCookStep"}
+    RecipeIngredient:
+      type: object
+      additionalProperties: false
+      required: [id, name, quantity, unit, aisle, isPantry]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 160}
+        name: {type: string, minLength: 1, maxLength: 500}
+        quantity: {type: [number, "null"], exclusiveMinimum: 0, maximum: 1000000}
+        unit: {type: string, maxLength: 80}
+        aisle: {type: string, enum: [Produce, "Meat & fish", Dairy, Bakery, "Pantry aisle", Frozen, Other]}
+        isPantry: {type: boolean}
+    RecipePrepAhead:
+      type: object
+      additionalProperties: false
+      required: [id, text, minutes, keepsDays, storageNote]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 160}
+        text: {type: string, minLength: 1, maxLength: 4000}
+        label: {type: string, maxLength: 500}
+        minutes: {type: integer, minimum: 0, maximum: 10080}
+        keepsDays: {type: [integer, "null"], minimum: 1, maximum: 3650}
+        storageNote: {type: string, maxLength: 2000}
+    RecipePrepTonight:
+      type: object
+      additionalProperties: false
+      required: [id, text, minutes]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 160}
+        text: {type: string, minLength: 1, maxLength: 4000}
+        minutes: {type: integer, minimum: 0, maximum: 10080}
+    RecipeCookStep:
+      type: object
+      additionalProperties: false
+      required: [id, text, timerSeconds]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 160}
+        text: {type: string, minLength: 1, maxLength: 4000}
+        timerSeconds: {type: [integer, "null"], minimum: 1, maximum: 604800}

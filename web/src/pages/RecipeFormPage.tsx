@@ -3,6 +3,8 @@ import { Link, useBlocker, useNavigate, useParams } from 'react-router-dom'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
 import { joinList } from '../planner/format'
+import { RecipeLoadNotice, useRemoteRecipes } from '../recipes/RemoteRecipes'
+import { RecipeAPIError } from '../recipes/api'
 import { usePlanner } from '../planner/store'
 import { AISLES, DAY_NAMES, type DeepReadonly, type Recipe } from '../planner/types'
 import '../styles/recipes.css'
@@ -27,8 +29,10 @@ import {
 export function RecipeFormPage({ mode }: { mode: 'new' | 'edit' }) {
   const { recipeId } = useParams()
   const planner = usePlanner()
+  const remote = useRemoteRecipes()
   if (mode === 'new') return <RecipeForm key="new" />
   const recipe = planner.getRecipe(recipeId)
+  if (!recipe && remote && (remote.loading || remote.error)) return <RecipeLoadNotice />
   if (!recipe) return <><RecipeNotFound /><PreviewNotice /></>
   return <RecipeForm key={recipe.id} recipe={recipe} />
 }
@@ -94,6 +98,16 @@ function RowShell({ section, noun, rowId, index, count, onMove, onRemove, childr
 
 function RecipeForm({ recipe }: { recipe?: DeepReadonly<Recipe> }) {
   const planner = usePlanner()
+  const remote = useRemoteRecipes()
+  // Capture the version actually opened, not a later list refresh while this form is dirty.
+  const [revision] = useState(() => remote?.records.find((item) => item.id === recipe?.id)?.revision)
+  const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [conflict, setConflict] = useState(false)
+  const [createAttempt, setCreateAttempt] = useState<{ key: string; content: ReturnType<typeof toRecipeFields> } | null>(null)
+  const mounted = useRef(true)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const { clearStatus } = planner
   const navigate = useNavigate()
   const [initial] = useState(() => (recipe ? formFromRecipe(recipe) : emptyForm()))
@@ -162,8 +176,9 @@ function RecipeForm({ recipe }: { recipe?: DeepReadonly<Recipe> }) {
     setValues((current) => ({ ...current, [section]: next }) as RecipeFormValues)
   }
 
-  const onSubmit = (event: FormEvent) => {
+  const onSubmit = async (event: FormEvent) => {
     event.preventDefault()
+    if (savingRef.current || conflict) return
     setSubmitted(true)
     const found = validate(values)
     if (found.length > 0) {
@@ -171,14 +186,39 @@ function RecipeForm({ recipe }: { recipe?: DeepReadonly<Recipe> }) {
       document.getElementById(found[0].field)?.focus()
       return
     }
-    const fields = toRecipeFields(values)
-    bypass.current = true
-    if (recipe) {
-      planner.updateRecipe({ ...recipe, ...fields, id: recipe.id })
-      navigate(recipePath(recipe.id), { state: { saved: true } })
-    } else {
-      const id = planner.addRecipe(fields)
+    const fields = { ...toRecipeFields(values), ...(recipe?.shortName ? { shortName: recipe.shortName } : {}) }
+    savingRef.current = true
+    setSaving(true)
+    setSaveError(null)
+    try {
+      let id: string
+      if (remote) {
+        if (recipe && revision !== undefined) {
+          id = await remote.update(recipe.id, fields, revision)
+        } else {
+          const attempt = createAttempt ?? { key: crypto.randomUUID(), content: fields }
+          setCreateAttempt(attempt)
+          id = await remote.create(attempt.content, attempt.key)
+        }
+      } else if (recipe) {
+        planner.updateRecipe({ ...recipe, ...fields, id: recipe.id })
+        id = recipe.id
+      } else {
+        id = planner.addRecipe(fields)
+      }
+      if (!mounted.current) return
+      bypass.current = true
       navigate(recipePath(id), { state: { saved: true } })
+    } catch (cause) {
+      if (!mounted.current) return
+      // These responses are definitive pre-write rejection, so edits can be corrected
+      // and a new create attempt started. Unknown outcomes keep their original payload/key.
+      if (cause instanceof RecipeAPIError && [400, 413, 415].includes(cause.status)) setCreateAttempt(null)
+      setConflict(cause instanceof RecipeAPIError && cause.status === 409)
+      setSaveError(cause instanceof Error ? cause.message : 'Save could not be confirmed. Retry without closing this form.')
+    } finally {
+      savingRef.current = false
+      if (mounted.current) setSaving(false)
     }
   }
 
@@ -198,30 +238,32 @@ function RecipeForm({ recipe }: { recipe?: DeepReadonly<Recipe> }) {
     <FridgePanel className="hero-panel rx-hero">
       <Link className="rx-back" to={cancelTarget}>{recipe ? '← Back to recipe' : '← All recipes'}</Link>
       <PaperTitle words={recipe ? ['edit', 'recipe'] : ['add', 'a', 'recipe']} />
-      {plannedDays.length > 0 && <p className="inline-note">This recipe is on this week ({joinList(plannedDays.map((day) => DAY_NAMES[day]))}). Saving updates this week’s shopping and prep.</p>}
+      {plannedDays.length > 0 && (!remote || revision !== undefined) && <p className="inline-note">This recipe is on this week ({joinList(plannedDays.map((day) => DAY_NAMES[day]))}). Saving updates this week’s shopping and prep.</p>}
     </FridgePanel>
     <PreviewNotice />
     <FridgePanel className="content-panel">
       <form className="rx-form" noValidate onSubmit={onSubmit} aria-label={recipe ? 'Edit recipe' : 'Add recipe'}>
+        {remote && <p className="inline-note">{recipe && revision === undefined ? 'This is a browser-only recipe. Saving creates a new database copy for your account and keeps the browser original.' : 'Save writes this recipe to your account’s database. Planning and drafts remain in this browser.'}</p>}
+        {saveError && <div role="alert"><p>{saveError}</p>{createAttempt && !conflict && <p>Retry sends the same recipe once. Fields are locked until the save is confirmed or you leave this form.</p>}{conflict && recipe && <a href={recipePath(recipe.id)} target="_blank" rel="noreferrer">View latest recipe in a new tab before resolving your edits</a>}</div>}
         {errors.length > 0 && <div role="alert" className="rx-summary">
           <h2>{errors.length === 1 ? '1 problem to fix before saving' : `${errors.length} problems to fix before saving`}</h2>
           <ul>{errors.map((item) => <li key={item.field}><button type="button" className="rx-link-button" onClick={() => document.getElementById(item.field)?.focus()}>{item.message}</button></li>)}</ul>
         </div>}
 
-        <fieldset className="rx-section">
+        <fieldset className="rx-section" disabled={saving || createAttempt !== null || conflict}>
           <legend>Basics</legend>
           <div className="rx-grid">
             <TextField id="f-title" label="Title" required className="rx-wide" value={values.title} onChange={(value) => setField('title', value)} error={error('f-title')} maxLength={120} />
-            <TextField id="f-icon" label="Icon" hint="One emoji for the recipe card." value={values.icon} onChange={(value) => setField('icon', value)} maxLength={8} />
+            <TextField id="f-icon" label="Icon" hint="One emoji for the recipe card." value={values.icon} onChange={(value) => setField('icon', value)} error={error('f-icon')} maxLength={16} />
             <TextField id="f-activeMinutes" label="Active minutes" required inputMode="numeric" hint="Hands-on time, 0–600." value={values.activeMinutes} onChange={(value) => setField('activeMinutes', value)} error={error('f-activeMinutes')} />
             <TextField id="f-totalMinutes" label="Total minutes" required inputMode="numeric" hint="Start to table, including waiting." value={values.totalMinutes} onChange={(value) => setField('totalMinutes', value)} error={error('f-totalMinutes')} />
             <SelectField id="f-attention" label="Attention needed" value={values.attention} onChange={(value) => setField('attention', value as RecipeFormValues['attention'])} options={[{ value: 'low', label: 'Low' }, { value: 'medium', label: 'Medium' }, { value: 'high', label: 'High' }]} />
             <TextField id="f-servings" label="Servings" required inputMode="numeric" hint="1–12." value={values.servings} onChange={(value) => setField('servings', value)} error={error('f-servings')} />
-            <TextField id="f-tags" label="Tags" className="rx-wide" hint="Separate with commas, e.g. Low attention, Vegetarian." value={values.tags} onChange={(value) => setField('tags', value)} />
+            <TextField id="f-tags" label="Tags" className="rx-wide" hint="Separate with commas, e.g. Low attention, Vegetarian." value={values.tags} onChange={(value) => setField('tags', value)} error={error('f-tags')} />
           </div>
         </fieldset>
 
-        <fieldset className="rx-section">
+        <fieldset className="rx-section" disabled={saving || createAttempt !== null || conflict}>
           <legend>Ingredients</legend>
           <ul className="rx-rows">{values.ingredients.map((row: IngredientRow, index) => {
             const key = `ing-${row.id}`
@@ -238,7 +280,7 @@ function RecipeForm({ recipe }: { recipe?: DeepReadonly<Recipe> }) {
           {error('add-ingredients') && <p id="add-ingredients-error" className="field-error">Error: {error('add-ingredients')}</p>}
         </fieldset>
 
-        <fieldset className="rx-section">
+        <fieldset className="rx-section" disabled={saving || createAttempt !== null || conflict}>
           <legend>Prep ahead</legend>
           <p className="rx-hint">Steps you can do before the meal day. Say how long the result keeps and how to store it.</p>
           <ul className="rx-rows">{values.prepAhead.map((row: PrepAheadRow, index) => {
@@ -256,7 +298,7 @@ function RecipeForm({ recipe }: { recipe?: DeepReadonly<Recipe> }) {
           <button type="button" id="add-prepAhead" className="button button--paper rx-button" onClick={() => addRow('prepAhead')}>+ Add prep-ahead step</button>
         </fieldset>
 
-        <fieldset className="rx-section">
+        <fieldset className="rx-section" disabled={saving || createAttempt !== null || conflict}>
           <legend>Prep tonight</legend>
           <ul className="rx-rows">{values.prepTonight.map((row: PrepTonightRow, index) => {
             const key = `tonight-${row.id}`
@@ -270,7 +312,7 @@ function RecipeForm({ recipe }: { recipe?: DeepReadonly<Recipe> }) {
           <button type="button" id="add-prepTonight" className="button button--paper rx-button" onClick={() => addRow('prepTonight')}>+ Add prep-tonight step</button>
         </fieldset>
 
-        <fieldset className="rx-section">
+        <fieldset className="rx-section" disabled={saving || createAttempt !== null || conflict}>
           <legend>Cook tonight</legend>
           <ul className="rx-rows">{values.cookTonight.map((row: CookRow, index) => {
             const key = `cook-${row.id}`
@@ -285,7 +327,7 @@ function RecipeForm({ recipe }: { recipe?: DeepReadonly<Recipe> }) {
         </fieldset>
 
         <div className="button-row rx-form-actions">
-          <button type="submit" className="button button--green rx-button">{recipe ? 'Save changes' : 'Save recipe'}</button>
+          <button type="submit" disabled={saving || conflict} className="button button--green rx-button">{saving ? 'Saving…' : createAttempt ? 'Retry save' : remote && recipe && revision === undefined ? 'Save a copy to account' : recipe ? 'Save changes' : 'Save recipe'}</button>
           <button type="button" className="button button--paper rx-button" onClick={() => navigate(cancelTarget)}>Cancel</button>
         </div>
       </form>
