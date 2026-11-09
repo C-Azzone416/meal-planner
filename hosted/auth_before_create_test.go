@@ -81,7 +81,9 @@ func (f *webhookFixture) payload(email string) []byte {
 }
 
 func (f *webhookFixture) request(body []byte) *http.Request {
-	headerJSON, _ := json.Marshal(detachedJWSHeader{Algorithm: "EdDSA", KeyID: testKeyID})
+	// Exercise the documented Neon webhook profile throughout this suite.
+	typ := "JWS"
+	headerJSON, _ := json.Marshal(detachedJWSHeader{Algorithm: "EdDSA", KeyID: testKeyID, Type: &typ})
 	return f.requestHeader(body, headerJSON)
 }
 
@@ -101,6 +103,93 @@ func (f *webhookFixture) requestHeader(body, headerJSON []byte) *http.Request {
 	req.Header.Set("X-Neon-Event-Type", beforeCreateEventType)
 	req.Header.Set("X-Neon-Event-Id", "event-test")
 	return req
+}
+
+func TestAuthBeforeCreateAcceptsNeonDocumentedJWSHeader(t *testing.T) {
+	// https://neon.com/docs/auth/guides/webhooks#request-headers documents
+	// this protected header for the common webhook signature envelope,
+	// including user.before_create. Only the illustrative kid is substituted;
+	// all signatures, identities and keys below are synthetic.
+	const sample = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXUyIsImtpZCI6IjAxZGVjNTJiIn0"
+	header, err := base64.RawURLEncoding.DecodeString(sample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(header) != `{"alg":"EdDSA","typ":"JWS","kid":"01dec52b"}` {
+		t.Fatalf("unexpected documented header: %s", header)
+	}
+	header = bytes.Replace(header, []byte("01dec52b"), []byte(testKeyID), 1)
+	f := newWebhookFixture(t)
+	for _, email := range []string{testAllowedEmail, testOtherEmail} {
+		t.Run(email, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			AuthBeforeCreate(f.config()).ServeHTTP(rec, f.requestHeader(f.payload(email), header))
+			want := "{\"allowed\":true}\n"
+			if email == testOtherEmail {
+				want = "{\"allowed\":false,\"error_message\":\"This app is private and is not accepting signups for this email.\",\"error_code\":\"SIGNUP_NOT_ALLOWED\"}\n"
+			}
+			if rec.Code != http.StatusOK || rec.Body.String() != want {
+				t.Fatalf("status = %d, body = %q, want 200 and %q", rec.Code, rec.Body.String(), want)
+			}
+		})
+	}
+}
+
+func TestAuthBeforeCreateJWSRetainsSignatureAndEnvelopeRestrictions(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*webhookFixture, *http.Request) *http.Request
+		status int
+	}{
+		{"unsigned", func(_ *webhookFixture, req *http.Request) *http.Request {
+			req.Header.Del("X-Neon-Signature")
+			return req
+		}, http.StatusBadRequest},
+		{"changed raw body", func(f *webhookFixture, req *http.Request) *http.Request {
+			// Semantically identical JSON must not survive a byte change.
+			req.Body = io.NopCloser(bytes.NewReader(append(f.payload(testAllowedEmail), '\n')))
+			return req
+		}, http.StatusUnauthorized},
+		{"changed fresh timestamp", func(f *webhookFixture, req *http.Request) *http.Request {
+			req.Header.Set("X-Neon-Timestamp", strconv.FormatInt(f.now.Add(time.Second).UnixMilli(), 10))
+			return req
+		}, http.StatusUnauthorized},
+		{"different signing key", func(f *webhookFixture, _ *http.Request) *http.Request {
+			other := newWebhookFixture(t)
+			return other.request(f.payload(testAllowedEmail))
+		}, http.StatusUnauthorized},
+		{"wrong protected key ID", func(f *webhookFixture, _ *http.Request) *http.Request {
+			return f.requestHeader(f.payload(testAllowedEmail), []byte(`{"alg":"EdDSA","typ":"JWS","kid":"other-key"}`))
+		}, http.StatusUnauthorized},
+		{"empty protected key ID", func(f *webhookFixture, _ *http.Request) *http.Request {
+			return f.requestHeader(f.payload(testAllowedEmail), []byte(`{"alg":"EdDSA","typ":"JWS","kid":""}`))
+		}, http.StatusUnauthorized},
+		{"wrong algorithm", func(f *webhookFixture, _ *http.Request) *http.Request {
+			return f.requestHeader(f.payload(testAllowedEmail), []byte(`{"alg":"HS256","typ":"JWS","kid":"test-key"}`))
+		}, http.StatusUnauthorized},
+		{"non-detached payload", func(_ *webhookFixture, req *http.Request) *http.Request {
+			req.Header.Set("X-Neon-Signature", strings.Replace(req.Header.Get("X-Neon-Signature"), "..", ".e30.", 1))
+			return req
+		}, http.StatusUnauthorized},
+		{"wrong event header", func(_ *webhookFixture, req *http.Request) *http.Request {
+			req.Header.Set("X-Neon-Event-Type", "user.created")
+			return req
+		}, http.StatusBadRequest},
+		{"signed wrong event", func(f *webhookFixture, _ *http.Request) *http.Request {
+			body := bytes.Replace(f.payload(testAllowedEmail), []byte(beforeCreateEventType), []byte("user.created"), 1)
+			return f.request(body)
+		}, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newWebhookFixture(t)
+			req := tc.mutate(f, f.request(f.payload(testAllowedEmail)))
+			rec := httptest.NewRecorder()
+			AuthBeforeCreate(f.config()).ServeHTTP(rec, req)
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d; body = %s", rec.Code, tc.status, rec.Body.String())
+			}
+		})
+	}
 }
 
 func TestAuthBeforeCreateRejectsAmbiguousSignedIdentityJSON(t *testing.T) {
@@ -164,7 +253,7 @@ func TestAuthBeforeCreateRejectsAmbiguousJWSHeaders(t *testing.T) {
 func TestAuthBeforeCreatePreservesProviderExtensions(t *testing.T) {
 	f := newWebhookFixture(t)
 	body := []byte(`{"event_id":"event-test","event_type":"user.before_create","context":{"\u0065ndpoint_id":"ep-test-environment","provider":null},"user":{"email":"ALLOWED@example.invalid","name":"Sample \ud83c\udf7d","image":null},"extra":{"count":9007199254740993}}`)
-	header := []byte(`{"alg":"EdDSA","kid":"test-key","typ":"JWT","b64":true,"providerExtension":null}`)
+	header := []byte(`{"alg":"EdDSA","kid":"test-key","typ":"JWS","b64":true,"providerExtension":null}`)
 	rec := httptest.NewRecorder()
 	AuthBeforeCreate(f.config()).ServeHTTP(rec, f.requestHeader(body, header))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"allowed":true`) {

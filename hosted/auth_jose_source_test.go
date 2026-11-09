@@ -26,69 +26,99 @@ func TestAuthJOSETypeProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name, metadata string
-		accepted       bool
+		name, metadata                  string
+		bearerAccepted, webhookAccepted bool
 	}{
-		{"omitted", ``, true},
-		{"JWT", `,"typ":"JWT"`, true},
-		{"escaped JWT", `,"t\u0079p":"\u004aWT"`, true},
-		{"encoded payload", `,"typ":"JWT","b64":true`, true},
-		{"provider metadata", `,"typ":"JWT","provider":{"nullable":null,"label":"\ud83e\udd6f"}`, true},
-		{"empty type", `,"typ":""`, false},
-		{"refresh token", `,"typ":"refresh+jwt"`, false},
-		{"access media type", `,"typ":"at+jwt"`, false},
-		{"full JWT media type", `,"typ":"application/jwt"`, false},
-		{"lowercase JWT", `,"typ":"jwt"`, false},
-		{"mixed case JWT", `,"typ":"Jwt"`, false},
-		{"padded JWT", `,"typ":" JWT "`, false},
-		{"Unicode padded JWT", `,"typ":"\u00a0JWT"`, false},
-		{"malformed type Unicode", `,"typ":"\ud800"`, false},
-		{"null type", `,"typ":null`, false},
-		{"number type", `,"typ":42`, false},
-		{"bool type", `,"typ":true`, false},
-		{"array type", `,"typ":["JWT"]`, false},
-		{"object type", `,"typ":{"value":"JWT"}`, false},
-		{"case type alias", `,"TYP":"JWT"`, false},
-		{"duplicate type", `,"typ":"JWT","typ":"JWT"`, false},
-		{"escaped duplicate type", `,"typ":"JWT","t\u0079p":"JWT"`, false},
-		{"conflicting type first", `,"typ":"refresh+jwt","typ":"JWT"`, false},
-		{"conflicting type last", `,"typ":"JWT","typ":"refresh+jwt"`, false},
-		{"null type overwrite", `,"typ":"JWT","typ":null`, false},
-		{"nested JWT", `,"cty":"JWT"`, false},
-		{"type and nested JWT", `,"typ":"JWT","cty":"JWT"`, false},
-		{"escaped nested JWT", `,"c\u0074y":"\u004aWT"`, false},
-		{"JSON content type", `,"cty":"application/json"`, false},
-		{"text content type", `,"cty":"text/plain"`, false},
-		{"empty content type", `,"cty":""`, false},
-		{"null content type", `,"cty":null`, false},
-		{"number content type", `,"cty":42`, false},
-		{"bool content type", `,"cty":true`, false},
-		{"array content type", `,"cty":["JWT"]`, false},
-		{"object content type", `,"cty":{"value":"JWT"}`, false},
-		{"case content type alias", `,"CTY":"JWT"`, false},
-		{"duplicate content type", `,"cty":"JWT","cty":"JWT"`, false},
-		{"escaped duplicate content type", `,"cty":"JWT","c\u0074y":"JWT"`, false},
-		{"critical empty", `,"crit":[]`, false},
-		{"critical type", `,"typ":"JWT","crit":["typ"]`, false},
-		{"unencoded payload", `,"b64":false`, false},
+		{"omitted", ``, true, true},
+		{"JWT", `,"typ":"JWT"`, true, false},
+		{"JWS", `,"typ":"JWS"`, false, true},
+		{"escaped JWT", `,"t\u0079p":"\u004aWT"`, true, false},
+		{"escaped JWS", `,"t\u0079p":"\u004a\u0057\u0053"`, false, true},
+		{"encoded bearer payload", `,"typ":"JWT","b64":true`, true, false},
+		{"encoded webhook payload", `,"typ":"JWS","b64":true`, false, true},
+		{"bearer provider metadata", `,"typ":"JWT","provider":{"nullable":null,"label":"\ud83e\udd6f"}`, true, false},
+		{"webhook provider metadata", `,"typ":"JWS","provider":{"nullable":null,"label":"\ud83e\udd6f"}`, false, true},
+		{"empty type", `,"typ":""`, false, false},
+		{"refresh token", `,"typ":"refresh+jwt"`, false, false},
+		{"access media type", `,"typ":"at+jwt"`, false, false},
+		{"full JWT media type", `,"typ":"application/jwt"`, false, false},
+		{"full JWS media type", `,"typ":"application/jose"`, false, false},
+		{"lowercase JWT", `,"typ":"jwt"`, false, false},
+		{"lowercase JWS", `,"typ":"jws"`, false, false},
+		{"mixed case JWT", `,"typ":"Jwt"`, false, false},
+		{"mixed case JWS", `,"typ":"Jws"`, false, false},
+		{"padded JWT", `,"typ":" JWT "`, false, false},
+		{"padded JWS", `,"typ":" JWS "`, false, false},
+		{"Unicode padded JWT", `,"typ":"\u00a0JWT"`, false, false},
+		{"Unicode padded JWS", `,"typ":"\u00a0JWS"`, false, false},
+		{"Unicode case alias JWS", `,"typ":"JWſ"`, false, false},
+		{"malformed type Unicode", `,"typ":"\ud800"`, false, false},
+		{"invalid UTF-8 type", ",\"typ\":\"JW\xff\"", false, false},
+		{"null type", `,"typ":null`, false, false},
+		{"number type", `,"typ":42`, false, false},
+		{"bool type", `,"typ":true`, false, false},
+		{"array type", `,"typ":["JWT"]`, false, false},
+		{"object type", `,"typ":{"value":"JWS"}`, false, false},
+		{"case bearer type alias", `,"TYP":"JWT"`, false, false},
+		{"case webhook type alias", `,"TYP":"JWS"`, false, false},
+		{"duplicate bearer type", `,"typ":"JWT","typ":"JWT"`, false, false},
+		{"duplicate webhook type", `,"typ":"JWS","typ":"JWS"`, false, false},
+		{"escaped duplicate bearer type", `,"typ":"JWT","t\u0079p":"JWT"`, false, false},
+		{"escaped duplicate webhook type", `,"typ":"JWS","t\u0079p":"JWS"`, false, false},
+		{"bearer then webhook type", `,"typ":"JWT","typ":"JWS"`, false, false},
+		{"webhook then bearer type", `,"typ":"JWS","typ":"JWT"`, false, false},
+		{"conflicting type first", `,"typ":"refresh+jwt","typ":"JWT"`, false, false},
+		{"conflicting type last", `,"typ":"JWS","typ":"refresh+jwt"`, false, false},
+		{"null bearer type overwrite", `,"typ":"JWT","typ":null`, false, false},
+		{"null webhook type overwrite", `,"typ":"JWS","typ":null`, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Whitespace and escapes deliberately survive in the signed bytes.
 			header := []byte(`{ "alg" : "EdDSA", "kid" : "test-key"` + tc.metadata + ` }`)
 			_, err := VerifyBearer(t.Context(), "Bearer "+bearer.rawToken(header, claims), bearer.config())
-			if tc.accepted && err != nil || !tc.accepted && !errors.Is(err, ErrInvalidBearer) {
-				t.Errorf("bearer error = %v, accepted = %t", err, tc.accepted)
+			if tc.bearerAccepted && err != nil || !tc.bearerAccepted && !errors.Is(err, ErrInvalidBearer) {
+				t.Errorf("bearer error = %v, accepted = %t", err, tc.bearerAccepted)
 			}
 			rec := httptest.NewRecorder()
 			AuthBeforeCreate(webhook.config()).ServeHTTP(rec, webhook.requestHeader(webhook.payload(testAllowedEmail), header))
 			want := http.StatusUnauthorized
-			if tc.accepted {
+			if tc.webhookAccepted {
 				want = http.StatusOK
 			}
-			if rec.Code != want || tc.accepted && !strings.Contains(rec.Body.String(), `"allowed":true`) {
+			if rec.Code != want || tc.webhookAccepted && rec.Body.String() != "{\"allowed\":true}\n" {
 				t.Errorf("webhook status = %d, body = %s, want = %d", rec.Code, rec.Body.String(), want)
 			}
 		})
+	}
+}
+
+func TestAuthJOSESharedSignatureRestrictions(t *testing.T) {
+	bearer, webhook := newBearerFixture(t), newWebhookFixture(t)
+	claims, _ := json.Marshal(bearer.claims())
+	for _, typ := range []string{"", `,"typ":"JWT"`, `,"typ":"JWS"`} {
+		for _, metadata := range []string{
+			`,"cty":"JWT"`, `,"cty":"JWS"`, `,"c\u0074y":"\u004aWT"`,
+			`,"cty":"application/json"`, `,"cty":"text/plain"`, `,"cty":""`, `,"cty":null`,
+			`,"cty":42`, `,"cty":true`, `,"cty":["JWT"]`, `,"cty":{"value":"JWT"}`,
+			`,"CTY":"JWT"`, `,"cty":"JWT","cty":"JWT"`, `,"cty":"JWT","c\u0074y":"JWT"`,
+			`,"crit":[]`, `,"crit":["typ"]`, `,"crit":["b64"],"b64":true`,
+			`,"crit":["custom"],"custom":true`, `,"crit":null`, `,"crit":"typ"`, `,"CRIT":[]`,
+			`,"b64":false`, `,"b64":null`, `,"b64":"true"`, `,"B64":true`,
+			`,"b64":false,"b64":true`, `,"b64":true,"b64":false`,
+			`,"b64":true,"b\u00364":true`, `,"crit":["b64"],"b64":false`,
+		} {
+			t.Run(typ+metadata, func(t *testing.T) {
+				header := []byte(`{"alg":"EdDSA","kid":"test-key"` + typ + metadata + `}`)
+				if _, err := VerifyBearer(t.Context(), "Bearer "+bearer.rawToken(header, claims), bearer.config()); !errors.Is(err, ErrInvalidBearer) {
+					t.Errorf("unsupported bearer metadata accepted: %v", err)
+				}
+				rec := httptest.NewRecorder()
+				AuthBeforeCreate(webhook.config()).ServeHTTP(rec, webhook.requestHeader(webhook.payload(testAllowedEmail), header))
+				if rec.Code != http.StatusUnauthorized {
+					t.Errorf("unsupported webhook metadata accepted: %d", rec.Code)
+				}
+			})
+		}
 	}
 }
 
@@ -103,6 +133,8 @@ func TestAuthJOSEDoesNotReserializeSignedHeaders(t *testing.T) {
 	if _, err := VerifyBearer(t.Context(), "Bearer "+strings.Join(parts, "."), bearer.config()); !errors.Is(err, ErrInvalidBearer) {
 		t.Fatalf("changed bearer header accepted: %v", err)
 	}
+	header = []byte(`{"alg":"EdDSA","kid":"test-key","typ":"JWS"}`)
+	replacement = base64.RawURLEncoding.EncodeToString([]byte(`{ "alg":"EdDSA","kid":"test-key","t\u0079p":"JWS" }`))
 	req := webhook.requestHeader(webhook.payload(testAllowedEmail), header)
 	parts = strings.Split(req.Header.Get("X-Neon-Signature"), ".")
 	parts[0] = replacement

@@ -211,13 +211,17 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 }
 
 func (header bearerHeader) supported() bool {
-	// Both auth paths support an omitted typ or exactly JWT, with no cty:
-	// neither implements nested JWTs or another declared payload format. Use
-	// pointers to distinguish omitted metadata from explicitly empty strings.
+	// Access-token metadata is distinct from the detached webhook JWS profile.
+	return header.supportedSignature() && (header.Type == nil || *header.Type == "JWT")
+}
+
+func (header bearerHeader) supportedSignature() bool {
+	// Neither auth path implements nested JWTs or another declared payload
+	// format. Pointers distinguish omission from explicitly empty metadata.
 	// No critical extensions or unencoded payloads are implemented. Unknown
 	// noncritical metadata never selects the signing key's source.
 	return header.Algorithm == "EdDSA" && header.KeyID != "" &&
-		(header.Type == nil || *header.Type == "JWT") && header.ContentType == nil &&
+		header.ContentType == nil &&
 		header.Critical == nil && (header.Base64 == nil || *header.Base64)
 }
 

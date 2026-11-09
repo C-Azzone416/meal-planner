@@ -69,7 +69,14 @@ type beforeCreatePayload struct {
 	} `json:"user"`
 }
 
-type detachedJWSHeader = bearerHeader
+type detachedJWSHeader bearerHeader
+
+func (header detachedJWSHeader) supported() bool {
+	// Neon documents {"alg":"EdDSA","typ":"JWS","kid":"01dec52b"} at
+	// https://neon.com/docs/auth/guides/webhooks#request-headers.
+	// Omitted typ remains compatible; an explicit JWT belongs to bearer auth.
+	return bearerHeader(header).supportedSignature() && (header.Type == nil || *header.Type == "JWS")
+}
 
 type jwksDocument struct {
 	Keys []jwk `json:"keys"`
