@@ -145,7 +145,7 @@ func TestVerifyBearerRejectsAmbiguousClaimNames(t *testing.T) {
 func TestVerifyBearerRejectsAmbiguousHeaderNamesAndExtensions(t *testing.T) {
 	f := newBearerFixture(t)
 	claims, _ := json.Marshal(f.claims())
-	const header = `{"alg":"EdDSA","kid":"test-key","typ":"JWT","cty":"JWT","b64":true}`
+	const header = `{"alg":"EdDSA","kid":"test-key","typ":"JWT","b64":true}`
 	for name := range authHeaderFields {
 		for label, mutated := range map[string]string{
 			"alias":     header[:len(header)-1] + `,"` + strings.ToUpper(name) + `":"ignored"}`,

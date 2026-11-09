@@ -28,6 +28,7 @@ var (
 )
 
 // BearerAuthConfig configures Neon JWT verification for protected APIs.
+// JWKSURL exists for deterministic tests; production derives it from BaseURL.
 type BearerAuthConfig struct {
 	BaseURL          string
 	ExpectedEndpoint string
@@ -49,8 +50,8 @@ type bearerContextKey struct{}
 type bearerHeader struct {
 	Algorithm   string   `json:"alg"`
 	KeyID       string   `json:"kid"`
-	Type        string   `json:"typ,omitempty"`
-	ContentType string   `json:"cty,omitempty"`
+	Type        *string  `json:"typ,omitempty"`
+	ContentType *string  `json:"cty,omitempty"`
 	Critical    []string `json:"crit,omitempty"`
 	Base64      *bool    `json:"b64,omitempty"`
 }
@@ -145,11 +146,7 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 	if jwksURL == "" {
 		jwksURL = baseURL + "/.well-known/jwks.json"
 	}
-	client := config.Client
-	if client == nil {
-		client = &http.Client{Timeout: 3 * time.Second}
-	}
-	publicKey, err := fetchEd25519PublicKey(ctx, client, jwksURL, header.KeyID)
+	publicKey, err := fetchEd25519PublicKey(ctx, config.Client, jwksURL, header.KeyID)
 	if err != nil {
 		if errors.Is(err, errSigningKeyNotFound) {
 			return UserIdentity{}, ErrInvalidBearer
@@ -214,9 +211,14 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 }
 
 func (header bearerHeader) supported() bool {
-	// No critical extensions or unencoded payloads are implemented. Ordinary
-	// provider metadata is allowed but never selects the signing key's source.
-	return header.Algorithm == "EdDSA" && header.KeyID != "" && header.Critical == nil && (header.Base64 == nil || *header.Base64)
+	// Both auth paths support an omitted typ or exactly JWT, with no cty:
+	// neither implements nested JWTs or another declared payload format. Use
+	// pointers to distinguish omitted metadata from explicitly empty strings.
+	// No critical extensions or unencoded payloads are implemented. Unknown
+	// noncritical metadata never selects the signing key's source.
+	return header.Algorithm == "EdDSA" && header.KeyID != "" &&
+		(header.Type == nil || *header.Type == "JWT") && header.ContentType == nil &&
+		header.Critical == nil && (header.Base64 == nil || *header.Base64)
 }
 
 func audienceContains(raw json.RawMessage, expected string) bool {

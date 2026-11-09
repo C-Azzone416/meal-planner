@@ -1,39 +1,43 @@
 # November 2026 UI/auth-disabled release scope
 
-This document describes the full change being promoted to main by release PR #56. It is a review checklist, not acceptance of any remaining risk. QA must consolidate the full scope and evidence before an independent judge reviews the same head. Any later code change requires regressions and renewed sequential review. CI must be green on that head and on the resulting main commit before deployment.
+This document describes the web release promoted to main by PR #56. QA must approve the complete scope and evidence before an independent judge reviews the same head. Any later code change requires regressions and renewed sequential review. Required CI must pass on that head and on the resulting main commit before deployment.
 
 ## Included product surfaces
 
 - Responsive browser UI and browser-local planning, shopping, prep and cooking flows, with per-account storage isolation and explicit unsaved/unavailable states.
 - Restricted authentication code: exact identity policy, same-origin proxy, bearer verification, signed before-create webhook, password-code notice and controlled activation runbook. Production authentication stays disabled for this code release.
-- Manual recipe HTTP API and reviewed Neon/Postgres schema files, ownership and revision checks, idempotent create receipts, bounded responses, and recipe detail/edit rewrites. The code release does not apply migrations or install runtime credentials.
-- **Local recipe-draft epic #19**, including `cmd/mealplanner`, `cmd/mealplanner-mcp`, `internal/core/draft`, `internal/localstore`, `internal/mcpadapter`, their contracts, tests and local-setup documentation. This is a separate included product surface, not the paused hosted-draft bridge #55. The CLI provides read-only validation/list/show; the stdio MCP server supports local draft creation and revision-controlled updates in a private local directory (the default per-user configuration directory, or an explicit override). These tools have no hosted route and are not started by Vercel.
+- Manual recipe HTTP API and reviewed Neon/Postgres schema files, ownership and revision checks, idempotent create receipts, bounded responses, and recipe detail/edit rewrites. This release does not apply migrations or install runtime credentials.
+- Shared standard-library code under `internal/core/draft`, with its tests and fixtures. Hosted recipes use its strict JSON-string Unicode validation. Retaining this package does not expose its draft service or in-memory store through a command, MCP server or hosted draft endpoint.
+- Existing main command scaffolds: `mealplanner version` and `mealplanner-mcp --version`. The MCP scaffold drains stdin without dispatching requests or writing drafts. These are unchanged from current main, not the local draft product.
 - Current-main CI bootstrap and reviewed-evidence infrastructure (#65 and the CI-only #66 split), refreshed through `dfeda615d21cbe1ece12a39bd9378d44191f1c49`. Framebriar application integration (#54), the deferred private Preview exporter, and runtime activation are excluded. Private-dependency Preview targets remain blocked without a direct-build fallback.
+
+## Deferred local-tool surface
+
+The executable and filesystem portions of local recipe-draft epic #19 are excluded from this web release: `draft validate/list/show`, local draft persistence, the MCP SDK server, tool dispatch, and MCP create/update operations. `internal/localstore` and `internal/mcpadapter` are absent, and both commands retain only their main scaffold behavior. The MCP SDK, JSON Schema SDK and their unused transitive dependencies are removed from the release module.
+
+The work remains in development history, including pre-split commit `ad556e9585971ee7409142eda56e332f43bb1cc9`; no shared history, user draft files, installed binaries or agent-host configuration are changed. That snapshot has unresolved duplicate MCP tool-parameter and in-flight ID findings. Exclusion is not approval or a claim that those bugs are fixed. Restoring the local product requires a separate reviewed change that addresses those findings and reruns its full protocol, persistence and host-compatibility acceptance checks.
+
+The paused MCP-to-hosted draft bridge #55 remains excluded independently. The hosted manual recipe API remains included; it is not a local MCP endpoint.
 
 ## Dependency and publication boundary
 
-The full repository promotion includes the pinned Go MCP SDK `github.com/modelcontextprotocol/go-sdk v1.8.0`, `github.com/google/jsonschema-go v0.4.3`, `github.com/lib/pq v1.10.9`, and their `go.mod`/`go.sum` transitive dependencies. They must be reviewed as part of the complete release diff, even where they do not affect a deployed web route. The local tools' standalone release workflow is triggered only by `cli-v*` tags or an explicit dispatch. This hosted release creates only an `app-v*` tag; it does not publish CLI/MCP binaries or alter any host's MCP configuration.
+The release keeps the PostgreSQL driver `github.com/lib/pq v1.10.9`, YAML contract-test dependency `gopkg.in/yaml.v3 v3.0.1`, and only their required module checksums. Review the resulting `go.mod`/`go.sum` rather than assuming every prior dependency remains.
 
-## Required re-review of judge findings
+The standalone CLI publication workflow remains gated by `cli-v*` tags or explicit dispatch and the shared exact-main CI verifier. This hosted release uses only an `app-v*` tag; it does not publish command binaries or change any host's MCP configuration. Required CI, remaining shared-core and command tests, cross-builds, contract checks, disposable-Postgres integration and deployment safeguards remain active.
 
-1. Explicitly review the included local CLI/MCP surface and dependency changes above; do not mistake #55 exclusion for exclusion of all local draft tooling.
-2. Confirm every runtime authentication entry point rejects incomplete/malformed provider and allowlist configuration, including session routes; reject provider URL query/fragment delimiters.
-3. Confirm JWT NumericDate claims require JSON numbers and compare fractional boundaries without truncation or overflow. Review the explicit representation/size limits.
-4. Confirm malformed query encoding, unknown/duplicate/case-variant JSON properties, null or inappropriate revision fields and empty IDs cannot trigger storage calls. Verify the entire 256 KiB request limit, including whitespace and extra data, and the existing response-size budget.
-5. Confirm local store reads and writes remain pinned to the opened root/drafts directory across pathname substitution. Review the documented OS, advisory-lock, hard-link/mount and availability boundaries; documentation alone does not accept a risk.
-6. Confirm exact supported JSON-RPC ID correlation, rejection of unsupported numeric representations and malformed-Unicode string IDs before SDK dispatch, no rejected/later tool execution, and bounded orderly shutdown. Review compatibility implications for configured MCP clients.
-7. Execute the runbook's token-safe alias recovery example with a fake curl, proving a synthetic token travels only through stdin and not process arguments. No live alias or credential change is part of the test.
+## Required review checklist
 
-## Follow-up parsing-boundary review
-
-- Treat the complete managed-provider authority as policy, including empty/explicit ports and canonical issuer handling. Test every runtime auth entry point, not only literal deployment-config validation.
-- Require case-sensitive, unambiguous auth JSON before typed decoding: registered JWT claims/headers and adjacent webhook/JWKS/proxy identity fields must not be overwritten by case aliases, duplicate decoded keys, malformed Unicode or null coercion. Verify supported provider extensions and exact identity matching still work. Validate original email bytes before trimming: Unicode padding must be rejected by the bearer verifier, signed webhook and every proxy email route; only outer ASCII SP/HT/CR/LF and ASCII case differences are accepted.
-- Check every recipe string and object key before lossy JSON decoding. Invalid UTF-8 and unpaired surrogate escapes must produce 400 on POST/PUT with no repository call; valid Unicode must survive unchanged within content limits.
-- Exercise the pinned MCP SDK after initialization with padded frames, split writes, LF/CRLF and EOF. Only outer JSON whitespace is normalized; IDs and object contents stay unchanged. Original input size limits, malformed-frame rejection, prior-response drain and no later dispatch remain enforced. Include SDK wire-parser preflight and cancellation parameter validation, and prove that cancelled handlers cannot evade the overall session deadline.
+1. Verify the local-tool exclusion in source, imports, module dependencies and actual scaffold binaries. No draft command, MCP tool dispatch or filesystem mutation may remain. Preserve the complete shared-core validation tests and hosted Unicode checks; do not treat removal of an executable surface as permission to skip tests of retained code.
+2. Confirm every runtime authentication entry point rejects incomplete or malformed provider and allowlist configuration, including session routes. Validate the full managed authority, including empty/explicit ports, Unicode/DNS boundaries, encoded paths, query/fragment delimiters and canonical issuer handling.
+3. Confirm unambiguous auth JSON before typed decoding: duplicate decoded keys, security-field case aliases, malformed Unicode, null coercion and excessive nesting are rejected. JWT NumericDates require JSON numbers and exact fractional comparisons. Preserve documented verification spellings and distinct-key rotation.
+4. Enforce the supported JOSE payload profile and trusted signing-key source. Conflicting `typ`/`cty` declarations must fail. JWKS redirects must not replace the configured provider endpoint, including same-origin redirects, HTTPS cross-origin redirects and HTTP downgrades. Test signed bearer and webhook paths with real HTTP redirect handling and prove no redirected destination is contacted.
+5. Validate original email bytes before trimming. Unicode padding must be rejected by the bearer verifier, signed webhook and every proxy email route. Only outer ASCII SP/HT/CR/LF and ASCII case differences are accepted; the proxy forwards the exact configured lowercase identity. Rejected identities must not reach a protected handler or email provider.
+6. Confirm malformed query encoding, unknown/duplicate/case-variant recipe JSON properties, malformed Unicode in every string/key, null or inappropriate revision fields and empty IDs cannot trigger storage calls. Verify POST/PUT, preserved valid Unicode, the full 256 KiB input limit and existing response-size budget.
+7. Execute the runbook's token-safe alias recovery example with a fake curl, proving a synthetic token travels only through stdin and not process arguments. No live alias or credential change is part of that test.
 
 ## Remaining deployment and acceptance gates
 
-- Review all application and local-tool regressions, full CI, workflow/shell checks and disposable-Postgres integration on the exact final head. A clean incremental whitespace diff is not a claim about intentionally truncated historical JSON fixtures in the full release diff.
+- Review all retained application/core/scaffold regressions, full CI, workflow/shell checks and disposable-Postgres integration on the exact final head. The intentionally truncated core JSON fixture remains a disclosed full-diff whitespace exception.
 - Use only the existing authorized owner review exception if needed; never bypass required CI or weaken protection rules. Preserve shared history and develop.
 - Immediately before deployment, verify Production auth variables remain absent from project/shared configuration and deployment overrides. A green environment-validation job alone does not prove auth is disabled: it also permits a complete valid auth configuration.
 - After deployment, verify the exact commit and public alias, `GET /api/auth-config` returning `enabled:false`, disabled sign-in, protected-API rejection, and direct UI routes. Prior old-production 404 responses do not prove these new behaviors.

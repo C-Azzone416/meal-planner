@@ -155,11 +155,7 @@ func serveAuthBeforeCreate(w http.ResponseWriter, r *http.Request, config AuthWe
 	if jwksURL == "" {
 		jwksURL = baseURL + "/.well-known/jwks.json"
 	}
-	client := config.Client
-	if client == nil {
-		client = &http.Client{Timeout: 3 * time.Second}
-	}
-	publicKey, err := fetchEd25519PublicKey(r.Context(), client, jwksURL, signatureKeyID)
+	publicKey, err := fetchEd25519PublicKey(r.Context(), config.Client, jwksURL, signatureKeyID)
 	if err != nil {
 		http.Error(w, "could not verify webhook signing key", http.StatusBadGateway)
 		return
@@ -235,6 +231,28 @@ func verifyDetachedWebhookSignature(rawBody []byte, timestamp, compactSignature,
 	return nil
 }
 
+// jwksHTTPClient pins key retrieval to the configured source. A redirect is
+// never an authority to trust another key endpoint, even on the same origin.
+// Clone injected http.Client values so their timeout, transport/TLS and cookie
+// policy survive, but their redirect policy cannot override this boundary.
+// Other HTTPDoer implementations are trusted in-process test dependencies.
+func jwksHTTPClient(client HTTPDoer) HTTPDoer {
+	if client == nil {
+		client = &http.Client{Timeout: 3 * time.Second}
+	}
+	if provided, ok := client.(*http.Client); ok {
+		if provided == nil {
+			provided = &http.Client{Timeout: 3 * time.Second}
+		}
+		copy := *provided
+		copy.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+		return &copy
+	}
+	return client
+}
+
 func fetchEd25519PublicKey(ctx context.Context, client HTTPDoer, jwksURL, keyID string) (ed25519.PublicKey, error) {
 	parsed, err := url.Parse(jwksURL)
 	if err != nil || parsed.Host == "" || parsed.Scheme != "https" {
@@ -245,11 +263,16 @@ func fetchEd25519PublicKey(ctx context.Context, client HTTPDoer, jwksURL, keyID 
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	resp, err := client.Do(req)
+	resp, err := jwksHTTPClient(client).Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	// Defense in depth for clients exposing a final request. Minimal test
+	// doubles may omit it; this check is not a sandbox for injected code.
+	if resp.Request != nil && (resp.Request.URL == nil || resp.Request.URL.String() != parsed.String()) {
+		return nil, errors.New("JWKS response came from an unexpected URL")
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("JWKS returned HTTP %d", resp.StatusCode)
 	}

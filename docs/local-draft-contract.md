@@ -1,14 +1,16 @@
 # Local Draft Contract
 
-Status: contract v1 (`schema_version` 1), 2026-11-04. Resolves the decisions in issue #20 for the local draft slice tracked by epic #19.
+Status: contract v1 (`schema_version` 1), 2026-11-04; executable local-tool surface deferred from the November 2026 web release. Resolves the decisions in issue #20 for the local draft slice tracked by epic #19.
 
-This document is the shared contract for the local recipe-draft workflow. Go core (#21), local store (#22), MCP adapter (#23) and CLI (#24) are implemented from it, and host verification (#25) tests against it. All examples are synthetic.
+> **Release boundary:** This is the specification for the retained shared draft core and a design for deferred local tools, not an installation guide. The web release retains `internal/core/draft`, its tests and synthetic fixtures, including the strict JSON-string validator used by hosted recipes. It excludes `internal/localstore`, `internal/mcpadapter`, local draft CLI commands and MCP draft tools. The CLI and MCP entry points have only their existing version/scaffold behavior. All local store, CLI and MCP examples and conformance requirements below describe the deferred implementation, not features available in this release. Development and host-verification work remain in develop and pre-split release history for separate review.
 
-Local drafts are a **staging workflow** that exists before the hosted API and database are connected. The long-term direction is unchanged: structured recipes live in hosted Postgres behind the authenticated Go API (see [architecture](architecture.md)). Nothing here replaces that, and nothing here is a hosted save.
+This document defines the shared contract for Go core (#21), the deferred local store (#22), MCP adapter (#23), CLI (#24) and host verification (#25). Only the shared core is included in this web release. All examples are synthetic.
+
+Local drafts are designed as a **staging workflow** independent of hosted API and database setup. The long-term direction is unchanged: structured recipes live in hosted Postgres behind the authenticated Go API (see [architecture](architecture.md)). Nothing here replaces that, and nothing here is a hosted save.
 
 ## 1. Scope and non-goals
 
-In scope: create, get, list, update and validate a local recipe draft, plus a local status read, exposed through a Go core, a stdio MCP server and a small CLI.
+Design scope: create, get, list, update and validate a local recipe draft, plus a local status read, exposed through a Go core and, in the deferred release, a stdio MCP server and a small CLI.
 
 Not in this slice, and not implied by anything below:
 
@@ -803,7 +805,7 @@ Because unknown fields are rejected, **any** new field, new required rule, enum 
 
 ### 12.2 CI classification note
 
-`.github/scripts/classify.sh` maps `internal/core/*` to the *core* component and `cmd/*` to the *cli* component. PR #26 maps `internal/localstore/*` to the `cmd/*` arm (local Go, contracts compatibility, integration). Only `internal/mcpadapter/*` is still unmapped and falls into the fail-closed "unknown path → run everything" case, which is safe but heavier than needed; #23 adds a rule for it without weakening the fail-closed behavior. This document does not change `.github/*`.
+`.github/scripts/classify.sh` maps `internal/core/*` to the *core* component and `cmd/*`, `internal/localstore/*` and `internal/mcpadapter/*` to the *cli* component (local Go, contracts compatibility and integration). The two deferred package paths remain reserved in the classifier even though their implementations are excluded from this web release. The local Go job tests all remaining internal and command packages with `go test ./internal/... ./cmd/...`; no job or required gate is disabled. Unknown paths continue to select every check.
 
 ## 13. MCP tools (`cmd/mealplanner-mcp`, via `internal/mcpadapter`)
 

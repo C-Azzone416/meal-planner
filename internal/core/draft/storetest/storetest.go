@@ -1,6 +1,6 @@
 // Package storetest is the shared conformance suite for draft.Store implementations
-// (contract sections 9.2 and 9.3). The in-memory store runs it in this repository's core tests and
-// the file store (internal/localstore) runs it against its own implementation:
+// (contract sections 9.2 and 9.3). The in-memory store runs it in this repository's core tests.
+// A future local file store can run the same suite against its own implementation:
 //
 //	storetest.Run(t, func(t *testing.T) draft.Store { return openStoreInTempDir(t) })
 //

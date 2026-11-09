@@ -83,18 +83,15 @@ The following conceptual modules are proposed, not yet created:
 | CLI adapter | Human-invoked commands and readable output | Duplicate domain logic |
 | MCP adapter | Narrow tool definitions and request mapping | Broad account access or unrestricted data mutation |
 
-Final directory names for the hosted API and web client are intentionally deferred until their first implementation slice establishes real dependency boundaries. The local draft slice below fixes names for its own packages.
+The current hosted API and web client directories are recorded in the [repository layout](repo-layout.md). The deferred local draft design below specifies package boundaries for a separate future release.
 
-## Local draft staging slice
+## Shared draft core and deferred local tools
 
-Before the hosted API and database are connected, a first slice proves the local-tool path with no hosted dependency: the reusable local core (`internal/core/draft`) defines recipe drafts, structural validation and a persistence interface; a file store (`internal/localstore`) keeps versioned JSON drafts in a private local data directory; and thin adapters expose it through a stdio MCP server (`cmd/mealplanner-mcp`) and a small CLI (`cmd/mealplanner`). The authoritative description is the [local draft contract](local-draft-contract.md).
+The web release retains the transport-independent `internal/core/draft` model, structural validation, service and persistence interface, with the in-memory store and conformance tests. Hosted manual recipes use its `ValidJSONString` helper to reject malformed Unicode before decoding. The core imports only the standard library and does not import a file store, CLI, MCP SDK or hosted service.
 
-Boundaries of this slice:
+The file store (`internal/localstore`), MCP adapter (`internal/mcpadapter`) and local draft commands from epic #19 are deferred from this release. Their development remains in develop and pre-split release history. The two `cmd/` entry points retain their existing version/scaffold behavior, and their separate build and publication gates remain intact.
 
-- It is a **staging workflow**, not a replacement for the hosted application database. Postgres remains the long-term home of structured recipes. The local store is one implementation of the core's persistence interface; a later implementation can submit drafts through the authenticated draft API without changing the adapters.
-- Every locally saved object is a draft. There is no reviewed or approved state, so this slice does not satisfy Checkpoint E, which concerns a *reviewed* draft traveling through the core and the authenticated API.
-- It makes no network calls: no hosted API, no OneNote/Microsoft Graph, no automatic fetching of source links, and no LLM call by the application. The agent host supplies candidate content.
-- Non-goals: planning, scaling, shopping or prep lists, delete or publish operations, import, sync, and any new provider credentials.
+The [local draft contract](local-draft-contract.md) remains normative for the shared core and describes the deferred local-tool design. That design stages drafts locally without replacing hosted Postgres; it does not provide a reviewed or approved state, hosted save, import, sync, source fetching or an application LLM call. It does not satisfy Checkpoint E. Local tool and host-compatibility acceptance must be completed in a separate release before those tools are offered for use.
 
 ## Proposed contract shape
 
