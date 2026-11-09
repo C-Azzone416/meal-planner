@@ -202,6 +202,16 @@ func (p *parser) parse(depth int) (node, error) {
 	return node{}, errors.New("unexpected token")
 }
 
+// ValidJSONString reports whether raw is one JSON string whose Unicode scalar
+// values survive encoding/json unchanged. JSON syntax validation alone accepts
+// invalid UTF-8 and unpaired surrogate escapes, replacing them with U+FFFD.
+// This syntax-only helper imposes no content-field limits: transport IDs may
+// contain controls (including NUL) and exceed the draft-content size limit.
+func ValidJSONString(raw []byte) bool {
+	raw = bytes.TrimSpace(raw)
+	return len(raw) >= 2 && raw[0] == '"' && json.Valid(raw) && utf8.Valid(raw) && !hasUnpairedSurrogate(raw)
+}
+
 // hasUnpairedSurrogate reports whether the JSON text seg contains a \uD800-\uDBFF escape not
 // immediately followed by a \uDC00-\uDFFF escape, or a \uDC00-\uDFFF escape not preceded by one.
 func hasUnpairedSurrogate(seg []byte) bool {

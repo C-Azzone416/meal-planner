@@ -118,7 +118,7 @@ Confirm with `GET /v4/aliases/<PREVIEW_ALIAS>` using the same stdin-header patte
 6. A required reviewer approves the `production` environment (once for `pull`, once for `deploy`). Check the summary's SHA and version before approving; production secrets are released only after approval. Recommended: restrict the `production` environment's deployment branches to `main` (configured separately, not by these workflows).
 7. The pull, build and deploy jobs (see the build/deploy split above) deploy that SHA with `--prod`, wait for the production alias to point at the new deployment ID, smoke-test `https://<alias>/api/health` without a bypass header, then the tag job pushes the annotated tag. The summary records the deployment URL, the production alias, the Vercel deployment ID and the manifest (SHA, lockfile hashes, tool versions, build-output checksum).
 
-Runs are serialized (`production` group, never cancelled). A third request queued while one waits replaces the older queued one, so re-dispatch if a request is dropped. Database migration steps are present but skipped (there is no schema yet).
+Runs are serialized (`production` group, never cancelled). A third request queued while one waits replaces the older queued one, so re-dispatch if a request is dropped. No database migrations run during deployment. Reviewed schema files under `hosted/migrations` ship as source only and require separate owner-approved manual activation in [the recipes runbook](recipes.md). The legacy `db/migrations/**` guard reserves that path for a future reviewed runner; it is not an all-SQL presence check.
 
 ## 4. Deploy or smoke failure
 

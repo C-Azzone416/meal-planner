@@ -203,11 +203,11 @@ jobs:
           head=$(git rev-parse HEAD)
           [[ "$head" == "$SHA" ]] || { echo "::error::checked out $head, expected $SHA"; exit 1; }
 
-      # Schema migrations are intentionally skipped: there is no database schema yet. This guard fails
-      # loudly if migrations appear before a runner is wired. When one exists, apply only reviewed,
-      # forward-compatible migrations in their own job before `deploy`, through the direct Production
-      # migrator connection (production environment secret).
-      - name: Migrate Production database (skipped, no schema yet)
+      # No migration runner executes here. The reviewed hosted/migrations SQL
+      # files are shipped as source only; application requires separate owner-approved
+      # manual activation (docs/runbooks/recipes.md). This legacy guard reserves
+      # db/migrations for a future reviewed runner; it does not detect all SQL files.
+      - name: Reject unsupported db/migrations runner input (Production)
         if: ${{ hashFiles('db/migrations/**') != '' }}
         run: |
           echo "::error::migrations found under db/migrations but no migration runner is wired yet"

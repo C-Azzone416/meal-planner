@@ -6,9 +6,11 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+
+	"github.com/C-Azzone416/meal-planner/internal/core/draft"
 )
 
-var errUnsupportedID = errors.New("unsupported request id: use a string or a canonical integer between -9007199254740991 and 9007199254740991")
+var errUnsupportedID = errors.New("unsupported request id: use a valid Unicode string or a canonical integer between -9007199254740991 and 9007199254740991")
 var errFrameTooLarge = errors.New("protocol frame exceeds the 4 MiB limit")
 
 // The pinned SDK decodes IDs via float64 and then int64. Validate BEFORE handing
@@ -24,8 +26,10 @@ func supportedID(raw json.RawMessage) bool {
 		return true
 	}
 	if t[0] == '"' {
-		return true
-	} // JSON syntax has already been checked.
+		// Validate the original bytes before either decoder can replace malformed
+		// Unicode and incorrectly correlate a response or cancellation.
+		return draft.ValidJSONString(t)
+	}
 	n, err := strconv.ParseInt(string(t), 10, 64)
 	return err == nil && n >= -9007199254740991 && n <= 9007199254740991 && strconv.FormatInt(n, 10) == string(t)
 }
