@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -68,6 +69,22 @@ func DecodeContent(raw []byte) (Content, []Issue) {
 	return normalize(c), nil
 }
 
+// ValidUniqueJSONMembers checks one JSON value for duplicate object members,
+// including escaped names and case aliases under encoding/json's field matching.
+// When the root is an object, reservedRootKeys also require canonical casing.
+// This checks syntax and member identity using the draft parser's nesting
+// limit. Callers still validate the payload's types, string contents and schema.
+func ValidUniqueJSONMembers(raw []byte, reservedRootKeys ...string) bool {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	p := &parser{dec: dec, raw: raw, membersOnly: true, reservedRootKeys: reservedRootKeys}
+	if _, err := p.parse(0); err != nil {
+		return false
+	}
+	_, err := dec.Token()
+	return errors.Is(err, io.EOF)
+}
+
 // ValidateRaw decodes raw with DecodeContent and validates the result, so every adapter reports
 // the same thing for the same input. A decode failure is a ValidationResult whose only error is
 // the decode issue (no warnings, since semantic validation is skipped); otherwise it is Validate of
@@ -118,9 +135,25 @@ var errTooDeep = errors.New("nesting too deep")
 // parser builds a node tree from the token stream. It also looks at the raw text of every string
 // token, because encoding/json replaces an unpaired \uD800-\uDFFF escape with U+FFFD and so hides it.
 type parser struct {
-	dec  *json.Decoder
-	raw  []byte
-	last int64 // input offset after the previous token
+	dec              *json.Decoder
+	raw              []byte
+	last             int64 // input offset after the previous token
+	membersOnly      bool  // fold member names and skip building the node tree
+	reservedRootKeys []string
+}
+
+// foldedJSONKey uses the same Unicode equivalence as encoding/json's field
+// lookup. SimpleFold walks a cycle, so use the smallest rune in each cycle.
+func foldedJSONKey(key string) string {
+	return strings.Map(func(r rune) rune {
+		for {
+			next := unicode.SimpleFold(r)
+			if next <= r {
+				return next
+			}
+			r = next
+		}
+	}, key)
 }
 
 // token returns the next token and the raw text consumed for it (the token plus any delimiters and
@@ -151,7 +184,7 @@ func (p *parser) parse(depth int) (node, error) {
 			n := node{kind: nodeObject}
 			seen := map[string]bool{}
 			for p.dec.More() {
-				kt, kseg, err := p.token()
+				kt, _, err := p.token()
 				if err != nil {
 					return node{}, err
 				}
@@ -159,17 +192,29 @@ func (p *parser) parse(depth int) (node, error) {
 				if !ok {
 					return node{}, errors.New("object key is not a string")
 				}
-				if seen[key] {
+				identity := key
+				if p.membersOnly {
+					identity = foldedJSONKey(key)
+					if depth == 0 {
+						for _, reserved := range p.reservedRootKeys {
+							if key != reserved && strings.EqualFold(key, reserved) {
+								return node{}, errors.New("noncanonical object key")
+							}
+						}
+					}
+				}
+				if seen[identity] {
 					return node{}, &duplicateKeyError{}
 				}
-				seen[key] = true
-				_ = kseg // a key with an unpaired surrogate matches no field, so it is an unknown field
+				seen[identity] = true
 				v, err := p.parse(depth + 1)
 				if err != nil {
 					return node{}, noEOF(err)
 				}
-				n.keys = append(n.keys, key)
-				n.items = append(n.items, v)
+				if !p.membersOnly {
+					n.keys = append(n.keys, key)
+					n.items = append(n.items, v)
+				}
 			}
 			if _, _, err := p.token(); err != nil { // the closing brace
 				return node{}, noEOF(err)
@@ -182,7 +227,9 @@ func (p *parser) parse(depth int) (node, error) {
 				if err != nil {
 					return node{}, noEOF(err)
 				}
-				n.items = append(n.items, v)
+				if !p.membersOnly {
+					n.items = append(n.items, v)
+				}
 			}
 			if _, _, err := p.token(); err != nil {
 				return node{}, noEOF(err)
@@ -193,7 +240,7 @@ func (p *parser) parse(depth int) (node, error) {
 	case json.Number:
 		return node{kind: nodeNumber, num: t.String()}, nil
 	case string:
-		return node{kind: nodeString, badUnicode: hasUnpairedSurrogate(seg)}, nil
+		return node{kind: nodeString, badUnicode: !p.membersOnly && hasUnpairedSurrogate(seg)}, nil
 	case bool:
 		return node{kind: nodeBool}, nil
 	case nil:
