@@ -219,3 +219,32 @@ test('both gates accept UTF-8 declarations, ordinary whitespace and UTF-8 route 
  const check=f.check();assert.equal(check.status,0,check.stderr)
  f.pack();const seal=f.run();assert.equal(seal.status,0,seal.stderr)
 }))
+
+const headerMapData = `data:application/json;base64,${Buffer.from(JSON.stringify({version:3,sources:['synthetic.css'],sourcesContent:['synthetic private source'],names:[],mappings:'AAAA'})).toString('base64')}`
+for (const key of ['SourceMap','X-SourceMap']) {
+ for (const form of ['map','pairs','set','append','finite']) {
+  test(`clean seal rejects ${key} inline map through ${form} response headers`,()=>fixture(f=>{
+   const route={src:'/style.css'}
+   if(form==='map')route.headers={[key]:headerMapData}
+   else if(form==='pairs')route.headers=[{key,value:headerMapData}]
+   else route.transforms=[{type:'response.headers',op:form==='append'?'append':'set',target:{key:form==='finite'?{inc:[key]}:key},args:headerMapData}]
+   fs.writeFileSync(path.join(f.source,'.vercel/output/config.json'),JSON.stringify({version:3,routes:[route]}))
+   fs.writeFileSync(path.join(f.source,'.vercel/output/static/style.css'),'body{}')
+   f.pack();assert.notEqual(f.run().status,0)
+   assert.equal(fs.existsSync(f.env.SEALED_PREBUILD_JSON),false)
+  }))
+ }
+}
+test('clean seal accepts valid UTF-8 response-header transform args',()=>fixture(f=>{
+ fs.writeFileSync(path.join(f.source,'.vercel/output/config.json'),JSON.stringify({version:3,routes:[{src:'/style.css',transforms:[{type:'response.headers',op:'set',target:{key:'Content-Type'},args:'text/css; charset=utf-8'}]}]}))
+ fs.writeFileSync(path.join(f.source,'.vercel/output/static/style.css'),'body{}')
+ f.pack();const result=f.run();assert.equal(result.status,0,result.stderr)
+}))
+test('clean seal rejects non-UTF-8 transform args even with a misleading target.value',()=>fixture(f=>{
+ fs.writeFileSync(path.join(f.source,'.vercel/output/config.json'),JSON.stringify({version:3,routes:[{src:'/style.css',transforms:[{type:'response.headers',op:'set',target:{key:'Content-Type',value:'text/css; charset=utf-8'},args:'text/css; charset=iso-2022-jp'}]}]}))
+ f.pack();assert.notEqual(f.run().status,0)
+}))
+test('clean seal accepts incidental native binary shifts while retaining provenance',()=>fixture(f=>{
+ fs.appendFileSync(path.join(f.source,'.vercel/output/functions/api/feedback/status.func/bootstrap'),Buffer.from([0,0xff,0x1b,0x28,0x42,0,0x1b,0x24,0x42]))
+ f.pack();const result=f.run();assert.equal(result.status,0,result.stderr)
+}))

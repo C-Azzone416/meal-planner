@@ -4,7 +4,8 @@ import assert from 'node:assert/strict'
 // byte order. Match it at any alignment, even if a route renames a no-BOM file.
 const wideSourceMap = new RegExp([...'sourceMappingURL'].join('\\x00{1,3}'), 'i')
 // ISO-2022-JP is ASCII-byte-valid UTF-8 but its shifts change browser decoding.
-// Reject those shifts regardless of extension, including rewritten opaque assets.
+// Decode suspicious opaque bytes for map detection; a shift alone may be an
+// ordinary instruction or debug-section byte sequence in a native executable.
 const statefulShift = /\x1b(?:\([BJI]|\$[@B]|\$\(D)/
 const textExtension = /\.(?:[cm]?js|css|json|html?|svg|xml|txt|webmanifest)$/i
 const markupExtension = /\.(?:html?|svg|xml)$/i
@@ -28,17 +29,23 @@ export function inspectAsset(name, bytes) {
   assert.ok(!wideBoms.some(hex => bytes.subarray(0, hex.length / 2).equals(Buffer.from(hex, 'hex'))), 'Artifact text must be UTF-8')
   const byteText = bytes.toString('latin1')
   assert.ok(!wideSourceMap.test(byteText), 'Encoded source-map marker in artifact')
-  assert.ok(!statefulShift.test(byteText), 'Stateful text encoding must not be exported')
+  if (statefulShift.test(byteText)) {
+    inspectMarkers(new TextDecoder('iso-2022-jp').decode(bytes))
+  }
   let text = bytes.toString('utf8')
+  let readableText = false
+  try {
+    const decoded = new TextDecoder('utf-8', {fatal: true}).decode(bytes)
+    readableText = !/[\x00-\x08\x0b\x0e-\x1f\x7f]/.test(decoded)
+  } catch { /* Native binaries need not be UTF-8. */ }
   if (textExtension.test(name)) {
     text = new TextDecoder('utf-8', {fatal: true}).decode(bytes)
     // HT, LF, FF and CR are normal source whitespace. Other ASCII controls,
     // notably ESC/SO/SI, are not supported in served text.
     assert.ok(!/[\x00-\x08\x0b\x0e-\x1f\x7f]/.test(text), 'Text artifacts contain unsupported control bytes')
   }
-  inspectEncodingDeclarations(name, text)
-  assert.ok(!/sourceMappingURL\s*=/i.test(text), 'Source-map directive in artifact')
-  assert.ok(!/FRAMEBRIAR_FAKE_SERVICE|FRAMEBRIAR_TEST_SECRET|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|-----BEGIN (?:RSA |EC )?PRIVATE KEY-----/.test(text), 'Forbidden credential or fixture marker in artifact')
+  if (textExtension.test(name) || readableText) inspectEncodingDeclarations(name, text)
+  inspectMarkers(text)
   if (/\.json$/i.test(name)) {
     const value = JSON.parse(text)
     assert.ok(value?.name !== '@masra91/framebriar', 'Raw private SDK package manifest in artifact')
@@ -47,19 +54,72 @@ export function inspectAsset(name, bytes) {
   return text
 }
 
-// Brotli and raw deflate have no reliable magic. Reject any advertised encoding
-// as well as their conventional extensions, including rewritten/extensionless routes.
+function inspectMarkers(text) {
+  assert.ok(!/sourceMappingURL\s*=/i.test(text), 'Source-map directive in artifact')
+  assert.ok(!/FRAMEBRIAR_FAKE_SERVICE|FRAMEBRIAR_TEST_SECRET|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|-----BEGIN (?:RSA |EC )?PRIVATE KEY-----/.test(text), 'Forbidden credential or fixture marker in artifact')
+}
+
+// Inspect actual response-header containers rather than every object with a
+// `key`: request predicates and transform targets are not {key,value} headers.
+// Shapes: https://vercel.com/docs/build-output-api/configuration
 function inspectHeaders(value) {
   if (!value || typeof value !== 'object') return
-  // Vercel's header maps, {key,value} entries and static contentType overrides
-  // obey the same contract: a bare media type or one explicit UTF-8 charset;
-  // other parameters, duplicate charsets and control bytes fail closed.
-  if (typeof value.key === 'string' && value.key.toLowerCase() === 'content-type') inspectContentType(value.value)
   for (const [key, child] of Object.entries(value)) {
-    if (['content-type', 'contenttype'].includes(key.toLowerCase())) inspectContentType(child)
-    assert.ok(key.toLowerCase() !== 'content-encoding', 'Encoded routes must not be exported')
-    assert.ok(!(key.toLowerCase() === 'key' && typeof child === 'string' && child.toLowerCase() === 'content-encoding'), 'Encoded routes must not be exported')
-    inspectHeaders(child)
+    if (key === 'headers') inspectHeaderCollection(child)
+    else if (key === 'transforms') {
+      assert.ok(Array.isArray(child), 'Transforms must be an array')
+      for (const transform of child) inspectTransform(transform)
+    } else if (key === 'contentType') inspectContentType(child)
+    else inspectHeaders(child)
+  }
+}
+
+function inspectHeaderCollection(headers) {
+  assert.ok(headers && typeof headers === 'object', 'Headers must be a map or list')
+  if (Array.isArray(headers)) {
+    for (const entry of headers) {
+      assert.ok(entry && typeof entry === 'object' && !Array.isArray(entry), 'Invalid header entry')
+      if (Object.hasOwn(entry, 'key')) inspectHeader(entry.key, entry.value)
+      else {
+        // vercel.json-style route groups wrap their header-pair list.
+        assert.ok(Object.hasOwn(entry, 'headers'), 'Missing header-pair list')
+        inspectHeaderCollection(entry.headers)
+      }
+    }
+  } else for (const [key, value] of Object.entries(headers)) inspectHeader(key, value)
+}
+
+function inspectHeader(key, value) {
+  assert.ok(typeof key === 'string' && key.length > 0 && !/[^!#$%&'*+.^_`|~0-9a-z-]/i.test(key), 'Response header name must be a fixed token')
+  assert.ok(typeof value === 'string' && !/[\x00-\x08\x0a-\x1f\x7f]/.test(value), 'Response header value must be a string without controls')
+  const name = key.toLowerCase()
+  assert.ok(!['sourcemap', 'x-sourcemap'].includes(name), 'Source-map response headers must not be exported')
+  // Brotli/raw deflate have no reliable magic. Block advertised encodings too.
+  assert.notEqual(name, 'content-encoding', 'Encoded routes must not be exported')
+  if (name === 'content-type') inspectContentType(value)
+}
+
+function inspectTransform(transform) {
+  assert.ok(transform && typeof transform === 'object', 'Invalid transform')
+  if (transform.type !== 'response.headers') return
+  assert.ok(['set', 'append', 'delete'].includes(transform.op), 'Unsupported response-header operation')
+  // Deletion does not introduce a value or alter text decoding. Vercel permits
+  // selector objects here, including broad prefix/suffix matches.
+  if (transform.op === 'delete') return
+  const key = transform.target?.key
+  let names
+  if (typeof key === 'string') names = [key]
+  else if (key && Object.keys(key).length === 1 && typeof key.eq === 'string') names = [key.eq]
+  else if (key && Object.keys(key).length === 1 && Array.isArray(key.inc)) names = key.inc
+  else throw new Error('Mutating response headers require a fixed or finite target')
+  assert.ok(names.length > 0, 'Missing response-header target')
+  const values = Array.isArray(transform.args) ? transform.args : [transform.args]
+  assert.ok(values.length > 0, 'Missing response-header args')
+  for (const name of names) {
+    if (typeof name === 'string' && name.toLowerCase() === 'content-type') {
+      assert.equal(values.length, 1, 'Content-Type must have one value')
+    }
+    for (const value of values) inspectHeader(name, value)
   }
 }
 
