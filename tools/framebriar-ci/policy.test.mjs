@@ -73,3 +73,51 @@ test('registry ports and noncanonical private tarball paths are rejected',()=>{
   assert.throws(()=>validateManifests(pkg,JSON.stringify({packages:{'':{dependencies:deps},'node_modules/@masra91/framebriar':{...sdk,resolved}}})))
  }
 })
+test('develop source binds exact merged branch head, never PR reuse',()=>{
+ const s=source();s.input.subject='develop';s.input.pr='';s.base={name:'develop',commit:{sha:headSha}}
+ const result=checkSource(s);assert.equal(result.subject,'develop');assert.equal(result.pr,0);assert.equal(result.base_sha,headSha)
+ s.base.commit.sha=baseSha;assert.throws(()=>checkSource(s))
+ s.base.commit.sha=headSha;s.input.pr='54';assert.throws(()=>checkSource(s))
+})
+test('private web selection requires pinned evidence and does not replace mandatory gate',()=>{
+ const w=fs.readFileSync('.github/workflows/ci.yml','utf8')
+ const web=w.split('\n  web:\n')[1].split('\n  hosted-go:\n')[0]
+ assert.match(web,/Require exact-SHA reviewed frontend evidence/)
+ assert.match(web,/vars.FRAMEBRIAR_TRUSTED_WORKFLOW_SHA/)
+ assert.match(web,/node .trusted-evidence\/tools\/framebriar-ci\/bridge.mjs/)
+ assert.doesNotMatch(web,/FRAMEBRIAR_PACKAGE_READ_TOKEN|NODE_AUTH_TOKEN|continue-on-error/)
+ assert.match(w,/needs: \[affected, web, hosted-go, local-go, contracts, integration, preview\]/)
+ assert.match(web,/No Production fallback|no Production fallback/)
+})
+
+test('clean evidence reporter still revalidates source after frontend execution',()=>{
+ const workflow=fs.readFileSync('.github/workflows/framebriar-reviewed-ci.yml','utf8')
+ const report=workflow.split('\n  evidence:\n')[1]
+ assert.match(report,/needs: \[validate, frontend\]/)
+ assert.match(report,/Reject stale source after frontend execution/)
+ assert.ok(report.indexOf('node trusted/tools/framebriar-ci/verify.mjs') < report.indexOf('node trusted/tools/framebriar-ci/report.mjs'))
+ for(const name of ['EXPECTED_BASE_SHA','EXPECTED_PACKAGE_HASH','EXPECTED_LOCK_HASH']) assert.match(report,new RegExp(name+':'))
+})
+test('public Preview retains original migration and deployment guards',()=>{
+ const workflow=fs.readFileSync('.github/workflows/preview.yml','utf8')
+ const build=workflow.split('\n  build:\n')[1].split('\n  deploy:\n')[0]
+ const deploy=workflow.split('\n  deploy:\n')[1]
+ assert.match(build,/ref: \$\{\{ inputs.sha \}\}/)
+ assert.match(build,/hashFiles\('db\/migrations\/\*\*'\)/)
+ assert.match(build,/name: Vercel build \(preview\)/)
+ assert.match(build,/materialize-output.sh \./)
+ assert.match(build,/id: pack/)
+ assert.doesNotMatch(build,/secrets\./)
+ assert.match(deploy,/safe-extract.sh/)
+ assert.match(deploy,/materialize-output.sh --check/)
+ assert.match(deploy,/EXPECTED_OUTPUT_SHA256/)
+ assert.match(deploy,/deploy --prebuilt --target=preview/)
+})
+test('reusable Preview caller and source selector need only contents read',()=>{
+ const caller=fs.readFileSync('.github/workflows/ci.yml','utf8').split('\n  preview:\n')[1].split('\n  required:\n')[0]
+ const selector=fs.readFileSync('.github/workflows/preview.yml','utf8').split('\n  select-source:\n')[1].split('\n  pull:\n')[0]
+ for(const text of [caller,selector]) {
+  assert.match(text,/contents: read/)
+  assert.doesNotMatch(text,/actions: read|pull-requests: read|permissions: write-all|: write\b/)
+ }
+})

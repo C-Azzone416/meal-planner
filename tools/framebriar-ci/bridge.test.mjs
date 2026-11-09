@@ -23,6 +23,7 @@ function fixture() {
  const routes={
  '':{id:1,full_name:'owner/repo',owner:{type:'User',login:'owner'}},
  'pulls/54':{number:54,state:'open',head:{sha:head,repo:{full_name:'owner/repo'}},base:{ref:'develop',sha:'0'.repeat(40),repo:{full_name:'owner/repo'}}},
+ [`compare/${base}...${head}`]:{status:'ahead',base_commit:{sha:base},merge_base_commit:{sha:base}},
  'branches/main':{name:'main',commit:{sha:main}},'branches/develop':{name:'develop',commit:{sha:base}},
  'actions/workflows/framebriar-reviewed-ci.yml/runs':{total_count:1,workflow_runs:[run]},
  'actions/runs/123':run,'actions/runs/123/attempts/1/jobs':{total_count:3,jobs},
@@ -187,3 +188,34 @@ for(const [name,attempt] of [
  f.routes['actions/runs/122/attempts/2']=attempt
  await assert.rejects(verifyEvidence(f.input,f.fetch))
 })
+function developFixture() {
+ const f=fixture();f.input.subject='develop';f.input.prNumber=0
+ f.routes['branches/develop'].commit.sha=head
+ f.run.display_title=`Reviewed develop at ${head}`
+ f.evidence.subject='develop';f.evidence.pr=0;f.evidence.base_sha=head
+ f.bytes=packed(f.evidence);f.artifact.digest=digest(f.bytes);f.artifact.size_in_bytes=f.bytes.length
+ return f
+}
+test('develop bridge validates merged SHA separately from PR evidence',async()=>{
+ const f=developFixture();assert.equal((await verifyEvidence(f.input,f.fetch)).subject,'develop')
+ assert.equal(f.counts['pulls/54'],undefined)
+})
+test('develop bridge cannot reuse PR-head receipt or moved branch',async()=>{
+ for(const change of [f=>{f.evidence.subject='pr';f.evidence.pr=54},f=>{f.routes['branches/develop'].commit.sha=base}]) {
+  const f=developFixture();change(f);f.bytes=packed(f.evidence);f.artifact.digest=digest(f.bytes);f.artifact.size_in_bytes=f.bytes.length
+  await assert.rejects(verifyEvidence(f.input,f.fetch))
+ }
+})
+test('PR bridge rejects head that does not include actual current base',async()=>{
+ const f=fixture();f.routes[`compare/${base}...${head}`].status='diverged'
+ await assert.rejects(verifyEvidence(f.input,f.fetch))
+})
+for(const kind of ['pr','develop']) {
+ for(const prebuild of [null,false,{}, {artifact_id:100,source_sha:head,target:'preview',enabled:false,screenshots:false}]) {
+  test(`${kind} evidence rejects removed prebuild extension ${JSON.stringify(prebuild)}`,async()=>{
+   const f=kind==='pr'?fixture():developFixture()
+   f.bytes=packed({...f.evidence,prebuild});f.artifact.digest=digest(f.bytes);f.artifact.size_in_bytes=f.bytes.length
+   await assert.rejects(verifyEvidence(f.input,f.fetch))
+  })
+ }
+}

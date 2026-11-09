@@ -4,6 +4,7 @@
 #
 # Build/deploy split: `vercel build` runs repository install and build scripts, so it runs in a
 # job that never has VERCEL_TOKEN. Jobs:
+#   select-source checks committed manifests with fixed workflow code; private/unknown dependencies fail.
 #   pull   token, no checkout during the token step. Afterwards only tools/deploy/check-pulled-env.sh is checked
 #          out, at the workflow's own commit, to guard the env files. Uploads only .vercel/project.json (never the env files).
 #   build  no token. Checks out the SHA, runs `vercel build`, uploads .vercel/output as a tarball.
@@ -28,7 +29,8 @@ on:
 permissions:
   contents: read
 
-# Preview deploys come only from develop pushes. Every develop commit deploys; none is cancelled, so no
+# Preview deploys come only from develop pushes. Only public-dependency targets are supported; private
+# targets fail before pull/build. No run is cancelled, so no
 # commit's CI shows a cancelled preview. Runs for different SHAs may overlap, so the stable alias step only
 # moves the alias forward only (never to an ancestor of the commit it already serves), so an older deploy
 # finishing late cannot take it back.
@@ -46,7 +48,57 @@ env:
   NO_UPDATE_NOTIFIER: "1"
 
 jobs:
+  select-source:
+    name: Deploy / classify Preview source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      private: ${{ steps.dependency.outputs.private }}
+    env:
+      SHA: ${{ inputs.sha }}
+    steps:
+      - name: Validate exact target before dependency selection
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+      - name: Inspect exact target manifests without executing source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          sparse-checkout: |
+            web/package.json
+            web/package-lock.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+          path: .target-manifests
+      - name: Check out fixed dependency classifier only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: tools/framebriar-ci/classify-dependency.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+          path: .dependency-policy
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+      - name: Classify locked private dependency with fixed workflow code
+        id: dependency
+        run: |
+          set -euo pipefail
+          [[ "$(git -C .target-manifests rev-parse HEAD)" == "$SHA" ]] || exit 1
+          node .dependency-policy/tools/framebriar-ci/classify-dependency.mjs .target-manifests
+      - name: Require supported public Preview dependencies
+        env:
+          PRIVATE_DEPENDENCY: ${{ steps.dependency.outputs.private }}
+        run: |
+          set -euo pipefail
+          [[ "$PRIVATE_DEPENDENCY" == false ]] || { echo '::error::Private or unknown Preview dependencies are blocked: reviewed private artifact export is not implemented. No direct install/build fallback is permitted.'; exit 1; }
+
   pull:
+    needs: select-source
+    if: needs.select-source.outputs.private == 'false'
     name: Deploy / preview-pull
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -114,7 +166,8 @@ jobs:
 
   build:
     name: Deploy / preview-build
-    needs: pull
+    needs: [select-source, pull]
+    if: needs.select-source.outputs.private == 'false'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:

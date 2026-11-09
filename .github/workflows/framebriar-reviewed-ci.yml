@@ -1,12 +1,18 @@
 name: Framebriar reviewed CI (informational)
-run-name: Reviewed PR ${{ inputs.pr }} at ${{ inputs.sha }}
+run-name: ${{ inputs.subject == 'develop' && format('Reviewed develop at {0}', inputs.sha) || format('Reviewed PR {0} at {1}', inputs.pr, inputs.sha) }}
 on:
   workflow_dispatch:
     inputs:
-      pr:
-        description: Same-repository open PR number
-        type: string
+      subject:
+        description: Reviewed PR head or exact merged develop head
+        type: choice
+        options: [pr, develop]
+        default: pr
         required: true
+      pr:
+        description: Same-repository open PR number (leave empty for develop)
+        type: string
+        required: false
       sha:
         description: Exact current PR head SHA approved for private SDK access
         type: string
@@ -17,12 +23,13 @@ on:
         required: true
 permissions: {}
 concurrency:
-  group: framebriar-reviewed-${{ inputs.pr }}
+  group: framebriar-reviewed-${{ inputs.subject }}-${{ inputs.pr }}
   cancel-in-progress: false
 defaults:
   run:
     shell: bash
 env:
+  SUBJECT: ${{ inputs.subject }}
   TARGET_SHA: ${{ inputs.sha }}
   PR_NUMBER: ${{ inputs.pr }}
   APPROVED_WORKFLOW_SHA: ${{ inputs.workflow_sha }}
@@ -154,8 +161,6 @@ jobs:
           set -euo pipefail
           npm run --prefix web test:browser
           bash tools/feedback/check-targets.sh
-      # No output/artifact upload from this target-controlled runner.
-
   evidence:
     name: Publish informational exact-SHA evidence
     needs: [validate, frontend]
@@ -175,7 +180,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '26'
-      - name: Reject stale source before publishing evidence
+      - name: Reject stale source after frontend execution
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_BASE_SHA: ${{ needs.validate.outputs.base_sha }}
