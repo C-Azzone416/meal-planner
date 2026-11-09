@@ -157,9 +157,6 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$(git -C .target-manifests rev-parse HEAD)" == "$SHA" ]] || exit 1
-          for file in web/package.json web/package-lock.json; do
-            [[ "$(git -C .target-manifests ls-tree HEAD "$file" | cut -d' ' -f1)" == 100644 ]] || exit 1
-          done
           node .dependency-policy/tools/framebriar-ci/classify-dependency.mjs .target-manifests
       - name: Validate exact target and explicit trusted revision
         if: steps.dependency.outputs.private == 'true'

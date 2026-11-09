@@ -113,7 +113,10 @@ test('public Preview and rollback retain their ordinary build path',()=>{
  const workflow=fs.readFileSync('.github/workflows/preview.yml','utf8')
  const build=workflow.split('\n  build:\n')[1].split('\n  deploy:\n')[0]
  assert.match(build,/ref: \$\{\{ inputs.sha \}\}/)
- assert.match(build,/ls-tree HEAD/)
+ // Committed-path enforcement is shared with ordinary CI, not duplicated here.
+ const classifier=fs.readFileSync('tools/framebriar-ci/classify-dependency.mjs','utf8')
+ assert.match(classifier,/ls-tree/)
+ assert.match(classifier,/100644 blob/)
  assert.match(build,/classify-dependency.mjs .target-manifests/)
  const steps=build.split(/(?=^      - )/m)
  const ordinary=steps.filter(b=>b.includes("steps.dependency.outputs.private == 'false'"))

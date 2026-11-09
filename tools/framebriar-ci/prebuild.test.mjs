@@ -34,7 +34,8 @@ function fixture(fn) {
  const env={...process.env,PATH:`${bin}:${process.env.PATH}`,TARGET_SHA:sha,PREBUILD_DIRECTORY:directory,SEALED_PREBUILD_JSON:path.join(root,'sealed.json'),VERCEL_PROJECT_ID:'synthetic-project',VERCEL_ORG_ID:'synthetic-org'}
  const pack=()=>execFileSync(tar,['-cf',path.join(directory,'build-output.tar'),'.vercel/output','.vercel/project.json'],{cwd:source})
  const run=()=>spawnSync(process.execPath,['tools/framebriar-ci/seal-prebuild.mjs'],{env,encoding:'utf8'})
- try {pack();fn({source,directory,env,pack,run,root})}finally{fs.rmSync(root,{recursive:true,force:true})}
+ const check=()=>spawnSync(process.execPath,['tools/framebriar-ci/artifact-tools/check-artifact.mjs',path.join(source,'.vercel/output/static')],{env:{...env,FRAMEBRIAR_BUILD_SHA:sha,FRAMEBRIAR_ENVIRONMENT:'preview',FRAMEBRIAR_APP_ID:'meal-planner-preview',FRAMEBRIAR_ENABLED:'0',FRAMEBRIAR_SCREENSHOTS:'0',FRAMEBRIAR_ALLOWED_ORIGIN:''},encoding:'utf8'})
+ try {pack();fn({source,directory,env,pack,run,check,root})}finally{fs.rmSync(root,{recursive:true,force:true})}
 }
 test('clean sealer checks real tar bytes without executing them',()=>fixture(f=>{
  const r=f.run();assert.equal(r.status,0,r.stderr)
@@ -107,4 +108,51 @@ test('clean seal rejects private SDK manifests outside node_modules',()=>fixture
  fs.writeFileSync(path.join(vendor,'package.json'),JSON.stringify({name:'@masra91/framebriar',version:'0.4.1'}))
  fs.writeFileSync(path.join(vendor,'index.js'),'export const secret=1')
  f.pack();assert.notEqual(f.run().status,0)
+}))
+
+// Real archives exercise both gates, not just the shared policy function.
+const unicodeMap = `${inlineMap}\nbody { color: red }`
+const utf16le = Buffer.from(unicodeMap, 'utf16le')
+const utf16be = Buffer.from(utf16le).swap16()
+const utf32le = Buffer.alloc(unicodeMap.length * 4)
+for (let i = 0; i < unicodeMap.length; i++) utf32le.writeUInt32LE(unicodeMap.charCodeAt(i), i * 4)
+const utf32be = Buffer.from(utf32le).swap32()
+for (const [encoding, bom, bytes] of [
+ ['UTF-16LE', 'fffe', utf16le], ['UTF-16BE', 'feff', utf16be],
+ ['UTF-32LE', 'fffe0000', utf32le], ['UTF-32BE', '0000feff', utf32be],
+]) {
+ for (const name of ['style.css', 'script.js', 'opaque']) {
+  test(`both artifact gates reject ${encoding} BOM in ${name}`,()=>fixture(f=>{
+   fs.writeFileSync(path.join(f.source,'.vercel/output/static',name),Buffer.concat([Buffer.from(bom,'hex'),bytes]))
+   assert.notEqual(f.check().status,0)
+   f.pack();assert.notEqual(f.run().status,0)
+   assert.equal(fs.existsSync(f.env.SEALED_PREBUILD_JSON),false)
+  }))
+ }
+ for (const name of ['style.css', 'opaque']) {
+  test(`both artifact gates reject ${encoding} ${name} without BOM`,()=>fixture(f=>{
+   fs.writeFileSync(path.join(f.source,'.vercel/output/static',name),bytes)
+   assert.notEqual(f.check().status,0)
+   f.pack();assert.notEqual(f.run().status,0)
+   assert.equal(fs.existsSync(f.env.SEALED_PREBUILD_JSON),false)
+  }))
+ }
+ test(`clean seal rejects unaligned ${encoding} marker inside binary function`,()=>fixture(f=>{
+  fs.appendFileSync(path.join(f.source,'.vercel/output/functions/api/feedback/status.func/bootstrap'),Buffer.concat([Buffer.from([0x7f]),bytes]))
+  f.pack();assert.notEqual(f.run().status,0)
+  assert.equal(fs.existsSync(f.env.SEALED_PREBUILD_JSON),false)
+ }))
+}
+test('both gates reject malformed UTF-8 CSS',()=>fixture(f=>{
+ fs.writeFileSync(path.join(f.source,'.vercel/output/static/style.css'),Buffer.from([0xc0,0xaf]))
+ assert.notEqual(f.check().status,0)
+ f.pack();assert.notEqual(f.run().status,0)
+}))
+test('both gates accept valid non-ASCII UTF-8 text, BOM and binary assets',()=>fixture(f=>{
+ fs.writeFileSync(path.join(f.source,'.vercel/output/static/style.css'),'\ufeff/* Café 🍴 */ body { color: red }')
+ fs.writeFileSync(path.join(f.source,'.vercel/output/static/icon.png'),Buffer.from('89504e470d0a1a0a0000000d4948445200000001','hex'))
+ // A compiled Go function is binary, not a UTF-8 text file.
+ fs.appendFileSync(path.join(f.source,'.vercel/output/functions/api/feedback/status.func/bootstrap'),Buffer.from([0,0xff,0x80,0]))
+ const check=f.check();assert.equal(check.status,0,check.stderr)
+ f.pack();const seal=f.run();assert.equal(seal.status,0,seal.stderr)
 }))

@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -57,11 +58,32 @@ export function classifyDependency(packageText, lockText) {
   return found
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const root = process.argv[2] || '.'
-  for (const file of ['package.json', 'package-lock.json']) {
-    if (!fs.lstatSync(path.join(root, 'web', file)).isFile()) throw new Error('Manifest must be a regular file')
+// CI and Preview must classify the same committed paths, not follow a checkout
+// symlink or silently read untracked/replaced manifests. Keep the entire path
+// policy here, alongside dependency parsing, so the workflows cannot diverge.
+export function classifyCheckout(root) {
+  const git = args => execFileSync('git', ['-C', root, ...args], {maxBuffer: 8 * 1024 * 1024})
+  if (fs.realpathSync(root) !== fs.realpathSync(git(['rev-parse', '--show-toplevel']).toString('utf8').trim())) {
+    throw new Error('Manifest root must be the repository root')
   }
-  const result = classifyDependency(fs.readFileSync(path.join(root, 'web/package.json'), 'utf8'), fs.readFileSync(path.join(root, 'web/package-lock.json'), 'utf8'))
+  if (!fs.lstatSync(path.join(root, 'web')).isDirectory()) throw new Error('web must be a regular directory')
+  const manifests = ['package.json', 'package-lock.json'].map(file => {
+    const relative = `web/${file}`
+    const entry = git(['ls-tree', '-z', 'HEAD', '--', relative]).toString('utf8')
+    const match = /^100644 blob ([0-9a-f]{40})\t([^\0]+)\0$/.exec(entry)
+    if (!match || match[2] !== relative) {
+      throw new Error('Manifest must be a committed regular non-executable file')
+    }
+    const local = path.join(root, relative)
+    if (!fs.lstatSync(local).isFile()) throw new Error('Manifest must be a regular file')
+    const committed = git(['cat-file', 'blob', match[1]])
+    if (!fs.readFileSync(local).equals(committed)) throw new Error('Manifest differs from committed source')
+    return committed.toString('utf8')
+  })
+  return classifyDependency(...manifests)
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const result = classifyCheckout(process.argv[2] || '.')
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `private=${result}\n`)
 }
