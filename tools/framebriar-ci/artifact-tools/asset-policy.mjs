@@ -20,6 +20,7 @@ export function inspectAsset(name, bytes) {
   // RFC 1950 zlib-wrapped deflate has a method/window byte and mod-31 header.
   assert.ok(!(bytes.length >= 2 && (bytes[0] & 15) === 8 && (bytes[0] >> 4) <= 7 && ((bytes[0] << 8) + bytes[1]) % 31 === 0), 'Deflate asset in artifact')
   assert.ok(bytes.subarray(257,262).toString('ascii') !== 'ustar', 'Archive container in artifact')
+  if (bytes.subarray(0,4).equals(Buffer.from([0,97,115,109]))) inspectWasm(bytes)
   // The output contract supports UTF-8 text only. CSS honors UTF-16 BOMs,
   // so scanning those bytes as UTF-8 would miss otherwise readable source maps.
   // Reject Unicode-wide BOMs even on renamed/extensionless files and require
@@ -144,4 +145,36 @@ function inspectEncodingDeclarations(name, text) {
 function assertUtf8(label) {
   const normalized = label.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '').toLowerCase()
   assert.equal(normalized, 'utf-8', 'Text declarations must specify UTF-8')
+}
+
+// ECMA-426 also links Wasm maps via a custom section, with no '=' delimiter.
+// Parse bounded section/name lengths without compiling or executing the module;
+// do not reject ordinary data strings that happen to mention the section name.
+function inspectWasm(bytes) {
+  assert.ok(bytes.subarray(4,8).equals(Buffer.from([1,0,0,0])), 'Unsupported Wasm version')
+  function u32(start, limit) {
+    let value = 0
+    for (let i = 0; i < 5; i++) {
+      assert.ok(start + i < limit, 'Truncated Wasm length')
+      const byte = bytes[start + i]
+      assert.ok(i < 4 || byte <= 15, 'Invalid Wasm length')
+      value += (byte & 127) * 2 ** (7 * i)
+      if (byte < 128) return {value, next:start + i + 1}
+    }
+    throw new Error('Invalid Wasm length')
+  }
+  let offset = 8
+  while (offset < bytes.length) {
+    const id = bytes[offset++]
+    const size = u32(offset, bytes.length)
+    const end = size.next + size.value
+    assert.ok(end <= bytes.length, 'Truncated Wasm section')
+    if (id === 0) {
+      const name = u32(size.next, end)
+      assert.ok(name.next + name.value <= end, 'Truncated Wasm section name')
+      const label = new TextDecoder('utf-8', {fatal:true}).decode(bytes.subarray(name.next, name.next + name.value))
+      assert.notEqual(label.toLowerCase(), 'sourcemappingurl', 'Wasm source-map section must not be exported')
+    }
+    offset = end
+  }
 }

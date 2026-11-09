@@ -68,3 +68,35 @@ test('request predicates are not mistaken for response-header pairs', () => {
 })
 
 test('ordinary legal header tokens remain supported', () => assert.doesNotThrow(() => inspectConfig({routes:[{src:'/app.css',headers:{'X_Custom.Header':'ok'}}]})))
+
+
+const uleb = value => {
+ const bytes=[]
+ do { const byte=value%128; value=Math.floor(value/128); bytes.push(byte | (value ? 128 : 0)) } while(value)
+ return Buffer.from(bytes)
+}
+const wasmHeader=Buffer.from([0,97,115,109,1,0,0,0])
+function wasmSection(name, value) {
+ const label=Buffer.from(name), payload=Buffer.concat([uleb(label.length),label,Buffer.from(value)])
+ return Buffer.concat([wasmHeader,Buffer.from([0]),uleb(payload.length),payload])
+}
+for(const name of ['module.wasm','opaque','renamed.png']) {
+ test(`Wasm source-map custom section rejects regardless of filename: ${name}`,()=>{
+  for(const url of [sourceMap,'/external-map']) {
+   const raw=Buffer.from(url), bytes=wasmSection('sourceMappingURL',Buffer.concat([uleb(raw.length),raw]))
+   assert.equal(WebAssembly.validate(bytes),true)
+   assert.throws(()=>inspectAsset(name,bytes),/Wasm source-map/)
+  }
+ })
+}
+test('ordinary Wasm and unrelated custom-section data remain supported',()=>{
+ for(const bytes of [wasmHeader,wasmSection('producer','sourceMappingURL')]) {
+  assert.equal(WebAssembly.validate(bytes),true)
+  assert.doesNotThrow(()=>inspectAsset('module.wasm',bytes))
+ }
+})
+test('Wasm section parsing rejects truncated and overflowing lengths',()=>{
+ for(const suffix of [[0,128],[0,255,255,255,255,127],[0,3,5,97,98],[0,127,1,97]]) {
+  assert.throws(()=>inspectAsset('module.wasm',Buffer.concat([wasmHeader,Buffer.from(suffix)])))
+ }
+})

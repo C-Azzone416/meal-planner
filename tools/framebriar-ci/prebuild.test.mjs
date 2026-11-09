@@ -248,3 +248,16 @@ test('clean seal accepts incidental native binary shifts while retaining provena
  fs.appendFileSync(path.join(f.source,'.vercel/output/functions/api/feedback/status.func/bootstrap'),Buffer.from([0,0xff,0x1b,0x28,0x42,0,0x1b,0x24,0x42]))
  f.pack();const result=f.run();assert.equal(result.status,0,result.stderr)
 }))
+
+
+test('both artifact gates reject valid Wasm with a source-map custom section',()=>fixture(f=>{
+ const leb=value=>{const bytes=[];do{const byte=value%128;value=Math.floor(value/128);bytes.push(byte|(value?128:0))}while(value);return Buffer.from(bytes)}
+ const name=Buffer.from('sourceMappingURL'),url=Buffer.from(headerMapData)
+ const payload=Buffer.concat([leb(name.length),name,leb(url.length),url])
+ const bytes=Buffer.concat([Buffer.from([0,97,115,109,1,0,0,0,0]),leb(payload.length),payload])
+ assert.equal(WebAssembly.validate(bytes),true)
+ fs.writeFileSync(path.join(f.source,'.vercel/output/static/opaque'),bytes)
+ assert.notEqual(f.check().status,0)
+ f.pack();assert.notEqual(f.run().status,0)
+ assert.equal(fs.existsSync(f.env.SEALED_PREBUILD_JSON),false)
+}))
