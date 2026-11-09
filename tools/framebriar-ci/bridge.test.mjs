@@ -210,40 +210,12 @@ test('PR bridge rejects head that does not include actual current base',async()=
  const f=fixture();f.routes[`compare/${base}...${head}`].status='diverged'
  await assert.rejects(verifyEvidence(f.input,f.fetch))
 })
-function withPrebuild(f) {
- const build={id:100,name:'framebriar-preview-output-123-1',digest:'sha256:'+'d'.repeat(64),expired:false,size_in_bytes:100,workflow_run:{id:123,head_sha:main}}
- f.evidence.prebuild={migration_readiness:{source_sha:head,tree_sha:head,policy:'no-migration-sources-v1'},artifact_id:100,artifact_name:build.name,artifact_digest:build.digest,tar_sha256:'e'.repeat(64),source_sha:head,target:'preview',enabled:false,screenshots:false}
- f.routes['actions/runs/123/artifacts']={total_count:2,artifacts:[f.artifact,build]}
- f.bytes=packed(f.evidence);f.artifact.digest=digest(f.bytes);f.artifact.size_in_bytes=f.bytes.length
- return build
+for(const kind of ['pr','develop']) {
+ for(const prebuild of [null,false,{}, {artifact_id:100,source_sha:head,target:'preview',enabled:false,screenshots:false}]) {
+  test(`${kind} evidence rejects removed prebuild extension ${JSON.stringify(prebuild)}`,async()=>{
+   const f=kind==='pr'?fixture():developFixture()
+   f.bytes=packed({...f.evidence,prebuild});f.artifact.digest=digest(f.bytes);f.artifact.size_in_bytes=f.bytes.length
+   await assert.rejects(verifyEvidence(f.input,f.fetch))
+  })
+ }
 }
-test('develop evidence carries only matching disabled Preview prebuild identity',async()=>{
- const f=developFixture();withPrebuild(f)
- assert.equal((await verifyEvidence(f.input,f.fetch)).prebuild.artifact_id,100)
-})
-test('prebuild cannot cross SHA, artifact digest, attempt or enabled target',async()=>{
- for(const change of [
-  (f,b)=>f.evidence.prebuild.source_sha=main,
-  (f,b)=>f.evidence.prebuild.target='production',
-  (f,b)=>f.evidence.prebuild.enabled=true,
-  (f,b)=>f.evidence.prebuild.artifact_name='framebriar-preview-output-123-2',
-  (f,b)=>b.digest='sha256:'+'f'.repeat(64),
- ]) {
-  const f=developFixture();const b=withPrebuild(f);change(f,b)
-  f.bytes=packed(f.evidence);f.artifact.digest=digest(f.bytes);f.artifact.size_in_bytes=f.bytes.length
-  await assert.rejects(verifyEvidence(f.input,f.fetch))
- }
-})
-
-test('consumer independently rejects migrated immutable source and forged readiness binding',async()=>{
- for(const change of [
-  f=>f.routes[`git/trees/${head}`].tree.push({path:'hosted/migrations/001.sql',type:'blob',mode:'100644',sha:head}),
-  f=>f.routes[`git/trees/${head}`].tree.push({path:'web/Migrations/001.js',type:'blob',mode:'100644',sha:head}),
-  f=>f.evidence.prebuild.migration_readiness.tree_sha=main,
-  f=>delete f.evidence.prebuild.migration_readiness,
- ]) {
-  const f=developFixture();withPrebuild(f);change(f)
-  f.bytes=packed(f.evidence);f.artifact.digest=digest(f.bytes);f.artifact.size_in_bytes=f.bytes.length
-  await assert.rejects(verifyEvidence(f.input,f.fetch))
- }
-})

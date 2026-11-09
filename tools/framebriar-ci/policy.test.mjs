@@ -38,7 +38,7 @@ test('workflow keeps reader in fixed install before target checkout and clean re
  assert.doesNotMatch(report,/path: target|secrets\.|checks: write|statuses: write/)
  assert.match(report,/overwrite: false/)
  assert.doesNotMatch(w,/pull_request_target|cache: npm/)
- assert.equal((w.match(/uses: actions\/upload-artifact/g)||[]).length,3)
+ assert.equal((w.match(/uses: actions\/upload-artifact/g)||[]).length,1)
 })
 
 test('artifact collision cannot pass if clean reporter upload fails', () => {
@@ -90,50 +90,34 @@ test('private web selection requires pinned evidence and does not replace mandat
  assert.match(web,/No Production fallback|no Production fallback/)
 })
 
-test('prebuild migration block and existing deployment protections remain',()=>{
- const w=fs.readFileSync('.github/workflows/framebriar-reviewed-ci.yml','utf8')
- assert.match(w,/Reject stale source and independently check committed migration readiness/)
- assert.match(w,/READINESS_JSON:/)
- assert.match(w,/FRAMEBRIAR_ENABLED: "0"/)
- assert.match(w,/FRAMEBRIAR_SCREENSHOTS: "0"/)
- const preview=fs.readFileSync('.github/workflows/preview.yml','utf8')
- const deploy=preview.split('\n  deploy:\n')[1]
- assert.match(preview,/PREBUILD_REQUIRED: '1'/)
- assert.match(preview,/artifact-ids: \$\{\{ steps.evidence.outputs.artifact_id \}\}/)
+test('clean evidence reporter still revalidates source after frontend execution',()=>{
+ const workflow=fs.readFileSync('.github/workflows/framebriar-reviewed-ci.yml','utf8')
+ const report=workflow.split('\n  evidence:\n')[1]
+ assert.match(report,/needs: \[validate, frontend\]/)
+ assert.match(report,/Reject stale source after frontend execution/)
+ assert.ok(report.indexOf('node trusted/tools/framebriar-ci/verify.mjs') < report.indexOf('node trusted/tools/framebriar-ci/report.mjs'))
+ for(const name of ['EXPECTED_BASE_SHA','EXPECTED_PACKAGE_HASH','EXPECTED_LOCK_HASH']) assert.match(report,new RegExp(name+':'))
+})
+test('public Preview retains original migration and deployment guards',()=>{
+ const workflow=fs.readFileSync('.github/workflows/preview.yml','utf8')
+ const build=workflow.split('\n  build:\n')[1].split('\n  deploy:\n')[0]
+ const deploy=workflow.split('\n  deploy:\n')[1]
+ assert.match(build,/ref: \$\{\{ inputs.sha \}\}/)
+ assert.match(build,/hashFiles\('db\/migrations\/\*\*'\)/)
+ assert.match(build,/name: Vercel build \(preview\)/)
+ assert.match(build,/materialize-output.sh \./)
+ assert.match(build,/id: pack/)
+ assert.doesNotMatch(build,/secrets\./)
  assert.match(deploy,/safe-extract.sh/)
  assert.match(deploy,/materialize-output.sh --check/)
  assert.match(deploy,/EXPECTED_OUTPUT_SHA256/)
  assert.match(deploy,/deploy --prebuilt --target=preview/)
- const build=preview.split('\n  build:\n')[1].split('\n  deploy:\n')[0]
- assert.doesNotMatch(build,/secrets\./)
- for(const block of build.split(/(?=^      - )/m).filter(b=>b.includes("steps.dependency.outputs.private == 'true'"))) assert.doesNotMatch(block,/npm ci|vercel@.*build/)
 })
-
-test('public Preview and rollback retain their ordinary build path',()=>{
- const workflow=fs.readFileSync('.github/workflows/preview.yml','utf8')
- const build=workflow.split('\n  build:\n')[1].split('\n  deploy:\n')[0]
- assert.match(build,/ref: \$\{\{ inputs.sha \}\}/)
- // Committed-path enforcement is shared with ordinary CI, not duplicated here.
- const classifier=fs.readFileSync('tools/framebriar-ci/classify-dependency.mjs','utf8')
- assert.match(classifier,/ls-tree/)
- assert.match(classifier,/100644 blob/)
- assert.match(build,/classify-dependency.mjs .target-manifests/)
- const steps=build.split(/(?=^      - )/m)
- const ordinary=steps.filter(b=>b.includes("steps.dependency.outputs.private == 'false'"))
- assert.ok(ordinary.some(b=>b.includes('name: Vercel build (preview)')))
- assert.ok(ordinary.some(b=>b.includes('id: public-pack')))
- assert.ok(ordinary.some(b=>b.includes("hashFiles('db/migrations/**')")))
- assert.ok(ordinary.some(b=>b.includes('materialize-output.sh .')))
- assert.equal(steps.filter(b=>b.includes('name: Vercel build (preview)')&&!b.includes("steps.dependency.outputs.private == 'false'")).length,0)
- assert.equal(steps.filter(b=>b.includes('PREBUILD_REQUIRED:')&&!b.includes("steps.dependency.outputs.private == 'true'")).length,0)
-})
-
-test('reusable Preview caller grants its required read-only evidence permissions',()=>{
+test('reusable Preview caller and source selector need only contents read',()=>{
  const caller=fs.readFileSync('.github/workflows/ci.yml','utf8').split('\n  preview:\n')[1].split('\n  required:\n')[0]
- const callee=fs.readFileSync('.github/workflows/preview.yml','utf8')
- for(const permission of ['contents','actions','pull-requests']) {
-  assert.match(caller,new RegExp(`^      ${permission}: read$`,'m'))
-  assert.match(callee,new RegExp(`^ {2,6}${permission}: read$`,'m'))
+ const selector=fs.readFileSync('.github/workflows/preview.yml','utf8').split('\n  select-source:\n')[1].split('\n  pull:\n')[0]
+ for(const text of [caller,selector]) {
+  assert.match(text,/contents: read/)
+  assert.doesNotMatch(text,/actions: read|pull-requests: read|permissions: write-all|: write\b/)
  }
- assert.doesNotMatch(caller,/permissions: write-all|: write\b/)
 })
