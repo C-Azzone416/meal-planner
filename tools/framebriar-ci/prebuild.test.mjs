@@ -156,3 +156,66 @@ test('both gates accept valid non-ASCII UTF-8 text, BOM and binary assets',()=>f
  const check=f.check();assert.equal(check.status,0,check.stderr)
  f.pack();const seal=f.run();assert.equal(seal.status,0,seal.stderr)
 }))
+
+const shiftedMapMarker = [...'sourceMappingURL'].map((letter, index) => `${index % 2 ? '\x1b(B' : '\x1b(J'}${letter}`).join('') + '\x1b(B'
+const iso2022Css = Buffer.from(`@charset "iso-2022-jp";\nbody{} ${inlineMap.replace('sourceMappingURL', shiftedMapMarker)}`, 'ascii')
+test('both gates reject the browser-decodable ISO-2022-JP source map repro',()=>fixture(f=>{
+ const decoded = new TextDecoder('iso-2022-jp', {fatal: true}).decode(iso2022Css)
+ assert.ok(decoded.includes(inlineMap), 'Fixture must decode to the original inline map')
+ fs.writeFileSync(path.join(f.source,'.vercel/output/static/style.css'),iso2022Css)
+ fs.writeFileSync(path.join(f.source,'.vercel/output/config.json'),JSON.stringify({version:3,routes:[{src:'/style.css',headers:{'Content-Type':'text/css; charset=iso-2022-jp'}}]}))
+ assert.notEqual(f.check().status,0,'Pre-upload checker accepted ISO-2022-JP map')
+ f.pack();assert.notEqual(f.run().status,0,'Clean sealer accepted ISO-2022-JP map')
+ assert.equal(fs.existsSync(f.env.SEALED_PREBUILD_JSON),false)
+}))
+for (const name of ['style.css', 'opaque', 'image.png']) {
+ test(`both gates reject stateful encoding shifts in ${name} without declarations`,()=>fixture(f=>{
+  fs.writeFileSync(path.join(f.source,'.vercel/output/static',name),Buffer.from(inlineMap.replace('sourceMappingURL',shiftedMapMarker),'ascii'))
+  assert.notEqual(f.check().status,0)
+  f.pack();assert.notEqual(f.run().status,0)
+ }))
+}
+for (const [name, text] of [
+ ['style.css', '@charset "iso-2022-jp"; body{}'],
+ ['opaque', '@charset "windows-1252"; body{}'],
+ ['page.html', '<meta charset="iso-2022-jp">'],
+ ['page.html', '<meta http-equiv="Content-Type" content="text/html; charset=shift_jis">'],
+ ['script.html', '<script charset="iso-2022-jp" src="/opaque"></script>'],
+ ['style.html', '<link charset="iso-2022-jp" href="/opaque" rel="stylesheet">'],
+ ['image.svg', '<?xml version="1.0" encoding="shift_jis"?><svg/>'],
+ ['style.css', '/* state control: \x1b */ body{}'],
+]) {
+ test(`both gates reject non-UTF-8 declaration or control in ${name}: ${JSON.stringify(text)}`,()=>fixture(f=>{
+  fs.writeFileSync(path.join(f.source,'.vercel/output/static',name),text)
+  assert.notEqual(f.check().status,0)
+  f.pack();assert.notEqual(f.run().status,0)
+ }))
+}
+for (const header of [
+ 'text/css; charset=iso-2022-jp', 'text/css; ChArSeT = "shift_jis"',
+ 'text/css; charset=utf-8; charset=iso-2022-jp', 'text/css; charset=',
+ 'text/css; charset=unicode', 'text/css\r\nContent-Encoding: gzip',
+ 'text/css\n', 'text/css\u2028',
+]) {
+ for (const style of ['map','pairs','override']) {
+  test(`clean seal rejects ${style} routing Content-Type ${JSON.stringify(header)} with clean assets`,()=>fixture(f=>{
+   const headers = style === 'map' ? {'CoNtEnT-TyPe':header} : [{key:'CONTENT-TYPE',value:header}]
+   const config = style === 'override' ? {version:3,overrides:{opaque:{path:'style.css',contentType:header}}} : {version:3,routes:[{src:'/style.css',dest:'/opaque',headers}]}
+   fs.writeFileSync(path.join(f.source,'.vercel/output/config.json'),JSON.stringify(config))
+   fs.writeFileSync(path.join(f.source,'.vercel/output/static/opaque'),'body{}')
+   f.pack();assert.notEqual(f.run().status,0)
+  }))
+ }
+}
+test('both gates accept UTF-8 declarations, ordinary whitespace and UTF-8 route headers',()=>fixture(f=>{
+ fs.writeFileSync(path.join(f.source,'.vercel/output/static/style.css'),'@charset "UTF-8";\n\tbody { color: red }\r\n\f')
+ fs.writeFileSync(path.join(f.source,'.vercel/output/static/index.html'),'<meta charset="utf-8"><meta http-equiv="Content-Type" content="text/html; charset=utf-8">')
+ fs.writeFileSync(path.join(f.source,'.vercel/output/static/image.svg'),'<?xml version="1.0" encoding="UTF-8"?><svg/>')
+ fs.writeFileSync(path.join(f.source,'.vercel/output/config.json'),JSON.stringify({version:3,overrides:{'image.svg':{contentType:'image/svg+xml; charset=utf-8'}},routes:[
+  {src:'/style.css',headers:{'Content-Type':'text/css; charset="UTF-8"','Cache-Control':'public, max-age=3600'}},
+  {src:'/index.html',headers:[{key:'content-type',value:'text/html; charset=utf-8'}]},
+  {src:'/image.svg',headers:{'Content-Type':'image/svg+xml'}},
+ ]}))
+ const check=f.check();assert.equal(check.status,0,check.stderr)
+ f.pack();const seal=f.run();assert.equal(seal.status,0,seal.stderr)
+}))
