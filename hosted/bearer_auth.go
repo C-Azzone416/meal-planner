@@ -198,7 +198,7 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 		}
 	}
 
-	email := strings.TrimSpace(claims.Email)
+	email := claims.Email
 	emailVerified := claims.EmailVerifiedCamel != nil && *claims.EmailVerifiedCamel
 	if claims.EmailVerifiedSnake != nil {
 		if claims.EmailVerifiedCamel != nil {
@@ -210,7 +210,7 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 	if claims.Subject == "" || !emailVerified || !authEmailMatches(email, config.AllowedEmail) {
 		return UserIdentity{}, ErrInvalidBearer
 	}
-	return UserIdentity{Issuer: claims.Issuer, Subject: claims.Subject, Email: email}, nil
+	return UserIdentity{Issuer: claims.Issuer, Subject: claims.Subject, Email: strings.Trim(email, " \t\r\n")}, nil
 }
 
 func (header bearerHeader) supported() bool {

@@ -183,8 +183,8 @@ func serveAuthBeforeCreate(w http.ResponseWriter, r *http.Request, config AuthWe
 		return
 	}
 
-	email := strings.TrimSpace(payload.User.Email)
-	if email == "" {
+	email := payload.User.Email
+	if strings.Trim(email, " \t\r\n") == "" {
 		http.Error(w, "webhook payload is missing an email", http.StatusBadRequest)
 		return
 	}

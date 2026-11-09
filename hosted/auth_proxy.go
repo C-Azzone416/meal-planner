@@ -247,7 +247,6 @@ func authProxyEmailPayload(body []byte, allowedEmail string) ([]byte, bool) {
 	if err := json.Unmarshal(payload["email"], &email); err != nil {
 		return nil, false
 	}
-	allowedEmail = strings.TrimSpace(allowedEmail)
 	if !authEmailMatches(email, allowedEmail) {
 		return nil, false
 	}

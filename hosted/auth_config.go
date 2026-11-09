@@ -129,12 +129,14 @@ func normalizeAuthPolicy(baseURL, endpoint, allowedEmail string) (string, error)
 
 // The configured allowlist is ASCII. Unicode SimpleFold aliases such as the
 // Kelvin sign and long s must not identify the same account as ASCII k and s.
+// Check the original bytes before trimming so Unicode whitespace cannot become
+// an alias either. Only SP, HT, CR and LF are accepted as outer padding.
 func authEmailMatches(email, allowed string) bool {
-	email = strings.TrimSpace(email)
 	for i := range len(email) {
 		if email[i] >= 0x80 {
 			return false
 		}
 	}
+	email = strings.Trim(email, " \t\r\n")
 	return email != "" && strings.EqualFold(email, allowed)
 }
