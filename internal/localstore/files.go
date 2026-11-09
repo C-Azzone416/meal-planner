@@ -9,6 +9,8 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
+	"unicode/utf8"
 
 	"github.com/C-Azzone416/meal-planner/internal/core/draft"
 )
@@ -110,19 +112,26 @@ func readDraftFileOnce(dir *os.Root, path, id string) (draft.Draft, error) {
 // decode reads schema_version first and only then decodes the rest strictly, so a file written by
 // a newer schema is reported as unsupported rather than corrupt.
 func decode(raw []byte, id string) (draft.Draft, error) {
-	var head struct {
-		SchemaVersion json.RawMessage `json:"schema_version"`
+	if !utf8.Valid(raw) || !json.Valid(raw) {
+		return draft.Draft{}, corrupt(draft.CodeInvalidJSON, "the draft file is not valid JSON", nil)
 	}
-	if err := json.Unmarshal(raw, &head); err != nil {
-		return draft.Draft{}, corrupt(draft.CodeInvalidJSON, "the draft file is not valid JSON", err)
+	version, ok := draft.StoredSchemaVersion(raw)
+	if !ok {
+		return draft.Draft{}, corrupt(draft.CodeInvalidContent, "the draft file has an invalid schema header", nil)
 	}
-	var ver int
-	if len(head.SchemaVersion) == 0 || json.Unmarshal(head.SchemaVersion, &ver) != nil {
-		return draft.Draft{}, corrupt(draft.CodeInvalidContent, "the draft file has no integer schema_version", nil)
+	ver, err := strconv.Atoi(string(version))
+	if err != nil {
+		// The header already verified the integer spelling. Only a version
+		// outside the representable range can fail here.
+		return draft.Draft{}, newError(draft.CategoryUnsupportedSchema, draft.CodeSchemaUnsupported,
+			"the draft was written by an unsupported schema version", nil)
 	}
 	if !slices.Contains(draft.SupportedSchemaVersions, ver) {
 		return draft.Draft{}, newError(draft.CategoryUnsupportedSchema, draft.CodeSchemaUnsupported,
 			fmt.Sprintf("draft was written by schema version %d; this build reads %v", ver, draft.SupportedSchemaVersions), nil)
+	}
+	if !draft.ValidStoredDraftShape(raw) {
+		return draft.Draft{}, corrupt(draft.CodeInvalidContent, "the draft file does not match the schema", nil)
 	}
 	var d draft.Draft
 	dec := json.NewDecoder(bytes.NewReader(raw))

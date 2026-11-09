@@ -13,6 +13,19 @@ import (
 // maxTrackedLine caps a complete protocol frame before any bytes reach the SDK.
 const maxTrackedLine = 4 << 20
 
+// The byte limit bounds retained decoded strings without shrinking the existing
+// per-frame limit. The count limit also bounds the map cost of short, empty and
+// numeric IDs. Both leave room for thousands of ordinary host calls.
+const (
+	maxSessionIDBytes = 8 << 20
+	maxSessionIDs     = 32 << 10
+)
+
+type idBudget struct {
+	bytes int
+	count int
+}
+
 // frameGate sits between stdin/stdout and the SDK transport. The SDK treats stdin EOF as the end
 // of the session and may drop requests that were read but not yet answered (for example when a
 // client pipes `initialize`, `initialized` and a tool call and closes stdin). The gate withholds
@@ -33,13 +46,15 @@ const maxTrackedLine = 4 << 20
 // Invalid frames terminate input before SDK delivery. Earlier accepted
 // requests still get their shutdown grace.
 type frameGate struct {
-	grace time.Duration
+	grace    time.Duration
+	idBudget idBudget // set before the gate starts
 
 	mu        sync.Mutex
 	cond      *sync.Cond
 	queue     bytes.Buffer            // registered bytes the SDK may read
 	lineBuf   []byte                  // incomplete line held back until its newline (or EOF) arrives
 	seen      map[jsonrpc.ID]struct{} // request IDs accepted in this session
+	seenBytes int                     // decoded string bytes retained in seen
 	pending   map[jsonrpc.ID]struct{} // accepted IDs still awaiting a response
 	inputErr  error                   // non-EOF input failure, reported after accepted requests drain
 	inEOF     bool                    // underlying reader ended
@@ -53,6 +68,7 @@ type frameGate struct {
 func newFrameGate(grace time.Duration) *frameGate {
 	g := &frameGate{
 		grace:     grace,
+		idBudget:  idBudget{bytes: maxSessionIDBytes, count: maxSessionIDs},
 		seen:      make(map[jsonrpc.ID]struct{}),
 		pending:   make(map[jsonrpc.ID]struct{}),
 		deadlineC: make(chan struct{}),

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/C-Azzone416/meal-planner/internal/core/draft"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -17,6 +18,7 @@ var errFrameTooLarge = errors.New("protocol frame exceeds the 4 MiB limit")
 var errAmbiguousEnvelope = errors.New("invalid protocol envelope: malformed JSON or duplicate/noncanonical member name")
 var errAmbiguousToolParams = errors.New("invalid tools/call params: malformed JSON or duplicate/noncanonical member name")
 var errDuplicateID = errors.New("request id already used in this session")
+var errIDBudget = errors.New("session request ID budget exhausted (reconnect to start a new session)")
 
 // The pinned SDK decodes IDs via float64 and then int64. Validate BEFORE handing
 // any frame to it: accepting a rounded ID can correlate a response (or a
@@ -108,8 +110,11 @@ func (g *frameGate) deliver(line []byte) bool {
 		g.rejectInput(errAmbiguousEnvelope)
 		return false
 	}
+	// Check the original bytes before changing gate state or forwarding.
+	// Admission still gives a malformed cancellation ID its specific error.
+	validUTF8 := utf8.Valid(line)
 	if req, ok := msg.(*jsonrpc.Request); ok {
-		forward, err := g.admitRequest(req)
+		forward, err := g.admitRequest(req, validUTF8)
 		if err != nil {
 			g.rejectInput(err)
 			return false
@@ -117,6 +122,9 @@ func (g *frameGate) deliver(line []byte) bool {
 		if !forward {
 			return true
 		}
+	} else if !validUTF8 {
+		g.rejectInput(errAmbiguousEnvelope)
+		return false
 	}
 	// Preserve the JSON bytes while normalizing the frame-boundary whitespace
 	// for the SDK, which requires LF/CR immediately after the value.
@@ -126,7 +134,10 @@ func (g *frameGate) deliver(line []byte) bool {
 }
 
 // admitRequest reserves calls and returns whether the SDK should see the frame.
-func (g *frameGate) admitRequest(req *jsonrpc.Request) (bool, error) {
+func (g *frameGate) admitRequest(req *jsonrpc.Request, validUTF8 bool) (bool, error) {
+	if !validUTF8 && req.Method != "notifications/cancelled" {
+		return false, errAmbiguousEnvelope
+	}
 	switch req.Method {
 	case "tools/call":
 		if len(req.Params) > 0 && !draft.ValidUniqueJSONMembers(req.Params, "name", "arguments", "_meta") {
@@ -140,6 +151,9 @@ func (g *frameGate) admitRequest(req *jsonrpc.Request) (bool, error) {
 		}
 		if !supportedID(target) {
 			return false, errUnsupportedID
+		}
+		if !validUTF8 {
+			return false, errAmbiguousEnvelope
 		}
 		// Invalid reason or _meta must not prematurely expose EOF.
 		var cancellation mcp.CancelledParams
@@ -163,7 +177,12 @@ func (g *frameGate) admitRequest(req *jsonrpc.Request) (bool, error) {
 			// without registering a response or forwarding it to the SDK.
 			return false, errDuplicateID
 		}
+		text, _ := req.ID.Raw().(string)
+		if len(g.seen) >= g.idBudget.count || len(text) > g.idBudget.bytes-g.seenBytes {
+			return false, errIDBudget
+		}
 		g.seen[req.ID] = struct{}{}
+		g.seenBytes += len(text)
 		g.pending[req.ID] = struct{}{}
 	}
 	return true, nil
