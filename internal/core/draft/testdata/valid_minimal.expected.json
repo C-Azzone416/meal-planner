@@ -1,0 +1,8 @@
+{
+  "errors": [],
+  "warnings": [
+    { "code": "no_ingredients", "path": "/ingredients" },
+    { "code": "no_instructions", "path": "/instructions" },
+    { "code": "no_sources", "path": "/sources" }
+  ]
+}

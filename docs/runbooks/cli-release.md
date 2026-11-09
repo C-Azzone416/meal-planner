@@ -10,7 +10,7 @@ GitHub Release archives, and the CLI and MCP share one version.
    `0.y.z`; while the major version is `0`, the release is marked as a
    GitHub pre-release.
 2. Make sure the commit to release is on `main` and its CI is green. The
-   workflow refuses to publish otherwise: `tools/release/verify-ci.sh <sha>`
+   workflow refuses to publish otherwise: `tools/deploy/verify-ci.sh <sha>`
    requires a `ci.yml` push run on `main` for that SHA with a job named
    `required` that succeeded (needs `GH_TOKEN`/`GITHUB_REPOSITORY`; the UI's
    "CI / required" is only workflow/job display text).  See below for running it locally.
@@ -46,18 +46,22 @@ GitHub Release archives, and the CLI and MCP share one version.
 To re-run for an existing tag, use **Actions → Release CLI → Run workflow**
 with the `tag` input. A leftover draft for the tag is deleted and recreated.
 If a **published** release already exists, `publish` fails with a clear
-message; delete that release (not the tag) first.
+message. Without immutable releases, delete that release (not the tag) first. With
+immutable releases (below) it cannot be deleted; cut a new version instead.
 
 If GitHub immutable releases are enabled for the repository, publishing the
 draft locks the tag and the release assets. After that, neither can be changed
 or deleted, so a bad release can only be superseded by a new version.
+Only drafts can be deleted, so every delete step in this runbook (including the
+throwaway-tag cleanup below) applies to drafts or to repositories without
+immutable releases.
 
-Running `tools/release/verify-ci.sh` locally needs:
+Running `tools/deploy/verify-ci.sh` locally needs:
 
 ```sh
 export GITHUB_REPOSITORY=C-Azzone416/meal-planner
 export GH_TOKEN=<token with actions: read>   # or `GH_TOKEN=$(gh auth token)`
-tools/release/verify-ci.sh <sha>
+tools/deploy/verify-ci.sh <sha>
 ```
 
 ### Tag protection (recommended, not yet configured)
@@ -76,9 +80,12 @@ is the real control.
 
 Run once after the workflow lands on `main` and the tag ruleset is in place,
 using a throwaway tag `cli-v0.0.1`. Tag the current green `main` commit unless
-a step says otherwise. Delete the release and the tag afterwards
-(`gh release delete cli-v0.0.1 --cleanup-tag --yes`, or delete the tag with
-`git push origin :refs/tags/cli-v0.0.1`).
+a step says otherwise. If immutable releases are enabled, the happy-path step
+publishes a release and locks the tag and assets permanently: either run the
+live verification before enabling immutable releases, or treat `cli-v0.0.1` as
+a real, permanent version. Without immutable releases, delete the release and
+the tag afterwards (`gh release delete cli-v0.0.1 --cleanup-tag --yes`, or
+delete the tag with `git push origin :refs/tags/cli-v0.0.1`).
 
 - [ ] **Happy path.** Push `cli-v0.0.1`. All jobs go green; a published
   pre-release (major `0`) has the five archives plus `SHA256SUMS`.

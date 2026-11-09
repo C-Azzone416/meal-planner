@@ -2,5 +2,17 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "npm ci --prefix web",
   "buildCommand": "npm run --prefix web build",
-  "outputDirectory": "web/dist"
+  "outputDirectory": "web/dist",
+  "rewrites": [
+    { "source": "/api/auth-proxy/:path*", "destination": "/api/auth-proxy?path=:path*" },
+    { "source": "/sign-in", "destination": "/index.html" },
+    { "source": "/week", "destination": "/index.html" },
+    { "source": "/recipes", "destination": "/index.html" },
+    { "source": "/recipes/:path*", "destination": "/index.html" },
+    { "source": "/prep", "destination": "/index.html" },
+    { "source": "/shopping", "destination": "/index.html" },
+    { "source": "/drafts", "destination": "/index.html" },
+    { "source": "/cook", "destination": "/index.html" },
+    { "source": "/house-rules", "destination": "/index.html" }
+  ]
 }

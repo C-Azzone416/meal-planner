@@ -2,7 +2,7 @@
 
 Status: planning baseline, 2026-11-01
 
-This document describes architectural direction and conceptual boundaries. It deliberately contains no executable API schema, database schema, migration, handler, or generated client.
+This document describes architectural direction and conceptual boundaries. It deliberately contains no executable API schema, database schema, migration, handler, or generated client. The repository now has a verification skeleton (see [repository layout](repo-layout.md)); the components below remain proposals unless stated otherwise.
 
 ## Settled architecture
 
@@ -83,7 +83,15 @@ The following conceptual modules are proposed, not yet created:
 | CLI adapter | Human-invoked commands and readable output | Duplicate domain logic |
 | MCP adapter | Narrow tool definitions and request mapping | Broad account access or unrestricted data mutation |
 
-Final directory names are intentionally deferred until the first implementation slice establishes real dependency boundaries.
+The current hosted API and web client directories are recorded in the [repository layout](repo-layout.md). The deferred local draft design below specifies package boundaries for a separate future release.
+
+## Shared draft core and deferred local tools
+
+The web release retains the transport-independent `internal/core/draft` model, structural validation, service and persistence interface, with the in-memory store and conformance tests. Hosted manual recipes use its `ValidJSONString` helper to reject malformed Unicode before decoding. The core imports only the standard library and does not import a file store, CLI, MCP SDK or hosted service.
+
+The file store (`internal/localstore`), MCP adapter (`internal/mcpadapter`) and local draft commands from epic #19 are deferred from this release. Their development remains in develop and pre-split release history. The two `cmd/` entry points retain their existing version/scaffold behavior, and their separate build and publication gates remain intact.
+
+The [local draft contract](local-draft-contract.md) remains normative for the shared core and describes the deferred local-tool design. That design stages drafts locally without replacing hosted Postgres; it does not provide a reviewed or approved state, hosted save, import, sync, source fetching or an application LLM call. It does not satisfy Checkpoint E. Local tool and host-compatibility acceptance must be completed in a separate release before those tools are offered for use.
 
 ## Proposed contract shape
 

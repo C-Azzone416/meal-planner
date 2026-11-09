@@ -1,0 +1,10 @@
+{
+  "title": "   ",
+  "ingredients": [ { "text": "" } ],
+  "instructions": [ { "text": "Stir.", "phase": "prep_ahead" } ],
+  "sources": [
+    { "id": "s1", "kind": "url" },
+    { "id": "s1", "kind": "publication", "label": "Example Cookbook" }
+  ],
+  "estimates": { "active_minutes": { "value": -5, "basis": { "kind": "sourced", "source_ref": "s9" } } }
+}

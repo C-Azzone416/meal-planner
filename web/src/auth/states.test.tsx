@@ -1,0 +1,351 @@
+// @vitest-environment jsdom
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+import { afterEach, describe, expect, test, vi } from 'vitest'
+import { AppRoutes } from '../App'
+import { PlannerProvider } from '../planner/store'
+import { AuthProvider } from './AuthProvider'
+import { AuthCredentialsError, AuthNetworkError, loadAuthService, type AuthService, type AuthUser } from './service'
+
+const user: AuthUser = { id: 'u1', email: 'allowed@example.test', emailVerified: true }
+
+function makeService(session: AuthUser | null): AuthService {
+  return {
+    getSession: vi.fn().mockResolvedValue(session),
+    signInWithPassword: vi.fn().mockResolvedValue(user),
+    sendPasswordResetCode: vi.fn().mockResolvedValue(undefined),
+    setPassword: vi.fn().mockResolvedValue(user),
+    signOut: vi.fn().mockResolvedValue(undefined),
+  }
+}
+
+function renderRoute(path: string, service: AuthService) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <AuthProvider serviceFactory={() => Promise.resolve(service)}>
+        <PlannerProvider storage={null}>
+          <AppRoutes />
+        </PlannerProvider>
+      </AuthProvider>
+    </MemoryRouter>,
+  )
+}
+
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+})
+
+/** Click a button once it is enabled: the form starts disabled while the auth service loads or a request flushes. */
+async function clickWhenEnabled(name: string) {
+  const button = (await screen.findByRole('button', { name })) as HTMLButtonElement
+  await waitFor(() => expect(button.disabled).toBe(false))
+  fireEvent.click(button)
+}
+
+async function requestCode(email: string) {
+  await clickWhenEnabled('Set or reset password')
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: email } })
+  await clickWhenEnabled('Email my password code')
+}
+
+describe('password reset code request', () => {
+  test.each(['allowed@example.test', 'stranger@nowhere.test'])('says the same thing for %s', async (email) => {
+    renderRoute('/sign-in', makeService(null))
+    await requestCode(email)
+    expect((await screen.findByRole('status', { name: '' })).textContent).toBe('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')
+    expect(screen.queryByText(email)).toBeNull() // never echoes the address back
+  })
+
+  test('the resend button is disabled with a visible 60 second countdown', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    renderRoute('/sign-in', makeService(null))
+    await requestCode('allowed@example.test')
+    const resend = await screen.findByRole('button', { name: 'Email me a new password code' }) as HTMLButtonElement
+    await act(async () => {}) // let the countdown's interval effect register before moving the clock
+    expect(resend.disabled).toBe(true)
+    expect(screen.getByText('You can request another code in 60 seconds.')).toBeTruthy()
+
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(screen.getByText('You can request another code in 59 seconds.')).toBeTruthy()
+    act(() => { vi.advanceTimersByTime(58_000) })
+    expect(screen.getByText('You can request another code in 1 second.')).toBeTruthy()
+    expect(resend.disabled).toBe(true)
+
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(resend.disabled).toBe(false)
+    expect(screen.queryByText(/You can request another code/)).toBeNull()
+  })
+
+  test('resending starts a fresh countdown', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    const service = makeService(null)
+    renderRoute('/sign-in', service)
+    await requestCode('allowed@example.test')
+    await screen.findByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')
+    await act(async () => {}) // let the countdown's interval effect register before moving the clock
+    act(() => { vi.advanceTimersByTime(60_000) })
+    const resend = screen.getByRole('button', { name: 'Email me a new password code' }) as HTMLButtonElement
+    await waitFor(() => expect(resend.disabled).toBe(false))
+    await act(async () => { fireEvent.click(resend) })
+    expect(service.sendPasswordResetCode).toHaveBeenCalledTimes(2)
+    expect((screen.getByRole('button', { name: 'Email me a new password code' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('You can request another code in 60 seconds.')).toBeTruthy()
+  })
+
+  test('going back and requesting again cannot skip the cooldown', async () => {
+    const service = makeService(null)
+    renderRoute('/sign-in', service)
+    await requestCode('allowed@example.test')
+    await screen.findByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')
+    // The route's pending flag may still be flushing, which keeps the buttons disabled for a tick.
+    const back = screen.getByRole('button', { name: 'Back to sign in' }) as HTMLButtonElement
+    await waitFor(() => expect(back.disabled).toBe(false))
+    fireEvent.click(back)
+    const reset = screen.getByRole('button', { name: 'Set or reset password' }) as HTMLButtonElement
+    await waitFor(() => expect(reset.disabled).toBe(false))
+    fireEvent.click(reset)
+    expect(((await screen.findByRole('button', { name: 'Email my password code' })) as HTMLButtonElement).disabled).toBe(true)
+    expect(service.sendPasswordResetCode).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('sign-out and session expiry notices', () => {
+  test('signing out returns to sign-in with "You\'re signed out."', async () => {
+    renderRoute('/week', makeService(user))
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
+    expect((await screen.findByText('You\'re signed out.')).getAttribute('role')).toBe('status')
+  })
+
+  test('an ended session sends the person to sign-in with the expiry message, then back to the page they were on', async () => {
+    const service = makeService(user)
+    renderRoute('/recipes', service)
+    expect(await screen.findByRole('heading', { name: 'our recipes' })).toBeTruthy()
+
+    vi.mocked(service.getSession).mockResolvedValue(null)
+    // The re-check listens for focus once its effect has run; keep nudging until it has.
+    await waitFor(async () => {
+      await act(async () => { window.dispatchEvent(new Event('focus')) })
+      expect(screen.getByText('Your session ended. Sign in again.')).toBeTruthy()
+    })
+    expect(screen.getByRole('heading', { name: 'what’s for dinner?' })).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'allowed@example.test' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'private-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Open my fridge' }))
+    expect(await screen.findByRole('heading', { name: 'our recipes' })).toBeTruthy()
+    expect(screen.queryByText('Your session ended. Sign in again.')).toBeNull()
+  })
+
+  test('a failed session check (offline, server error) does not sign the person out', async () => {
+    const service = makeService(user)
+    renderRoute('/week', service)
+    await screen.findByRole('heading', { name: 'this week’s dinners' })
+    await act(async () => {}) // Flush the signed-in effect before dispatching focus.
+    vi.mocked(service.getSession).mockRejectedValue(new Error('network down'))
+    await act(async () => { window.dispatchEvent(new Event('focus')) })
+    await waitFor(() => expect(service.getSession).toHaveBeenCalledTimes(2))
+    expect(screen.getByRole('heading', { name: 'this week’s dinners' })).toBeTruthy()
+    expect(screen.queryByText('Your session ended. Sign in again.')).toBeNull()
+  })
+
+  test('the session is also re-checked when the tab becomes visible', async () => {
+    const service = makeService(user)
+    renderRoute('/week', service)
+    await screen.findByRole('heading', { name: 'this week’s dinners' })
+    vi.mocked(service.getSession).mockResolvedValue(null)
+    await waitFor(async () => {
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+      expect(screen.getByText('Your session ended. Sign in again.')).toBeTruthy()
+    })
+  })
+
+  test('wrong credentials still use the generic copy and keep no stale notice', async () => {
+    const service = makeService(user)
+    renderRoute('/week', service)
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
+    await screen.findByText('You\'re signed out.')
+    vi.mocked(service.signInWithPassword).mockRejectedValue(new AuthCredentialsError())
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'allowed@example.test' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'nope' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Open my fridge' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('That email and password did not match.')
+  })
+})
+
+describe('returning to the page after sign-in', () => {
+  async function signInFrom(path: string) {
+    const { createMemoryRouter, RouterProvider } = await import('react-router-dom')
+    const service = makeService(null)
+    const router = createMemoryRouter(
+      [{
+        path: '*',
+        element: (
+          <AuthProvider serviceFactory={() => Promise.resolve(service)}>
+            <PlannerProvider storage={null}><AppRoutes /></PlannerProvider>
+          </AuthProvider>
+        ),
+      }],
+      { initialEntries: [path] },
+    )
+    render(<RouterProvider router={router} />)
+    fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'allowed@example.test' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'private-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Open my fridge' }))
+    await waitFor(() => expect(router.state.location.pathname).not.toBe('/sign-in'))
+    return router
+  }
+
+  test('keeps the query string', async () => {
+    const router = await signInFrom('/cook?day=3')
+    expect(router.state.location.pathname).toBe('/cook')
+    expect(router.state.location.search).toBe('?day=3')
+  })
+
+  test('keeps the hash too', async () => {
+    const router = await signInFrom('/recipes?q=soup#results')
+    expect(router.state.location.pathname).toBe('/recipes')
+    expect(router.state.location.search).toBe('?q=soup')
+    expect(router.state.location.hash).toBe('#results')
+  })
+
+  test('falls back to This week when there was no page to return to', async () => {
+    const router = await signInFrom('/sign-in')
+    expect(router.state.location.pathname).toBe('/week')
+  })
+})
+
+describe('reset-code outcome is uniform', () => {
+  const upstream = [
+    ['throttled (429)', Object.assign(new Error('Too many requests'), { status: 429 })],
+    ['not found (404)', Object.assign(new Error('USER_NOT_FOUND'), { status: 404, code: 'USER_NOT_FOUND' })],
+    ['rejected (400)', Object.assign(new Error('Bad request'), { status: 400 })],
+    ['server error (500)', Object.assign(new Error('Internal error'), { status: 500 })],
+    ['unavailable (503)', Object.assign(new Error('Service unavailable'), { status: 503 })],
+    ['an arbitrary failure', new Error('boom')],
+  ] as const
+
+  test.each(upstream.flatMap(([name, failure]) => [
+    [`approved address, ${name}`, 'allowed@example.test', failure] as const,
+    [`unapproved address, ${name}`, 'stranger@nowhere.test', failure] as const,
+  ]))('%s: neutral message and the same 60s cooldown', async (_name, email, failure) => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    const service = makeService(null)
+    vi.mocked(service.sendPasswordResetCode).mockRejectedValue(failure)
+    renderRoute('/sign-in', service)
+    await requestCode(email)
+    expect(await screen.findByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByText('You can request another code in 60 seconds.')).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/check the address|couldn.t reach/i)
+  })
+
+  test('success looks identical (same message, same cooldown)', async () => {
+    renderRoute('/sign-in', makeService(null))
+    await requestCode('allowed@example.test')
+    expect(await screen.findByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')).toBeTruthy()
+    expect(screen.getByText('You can request another code in 60 seconds.')).toBeTruthy()
+  })
+
+  test('only a client-side network failure gets its own message, with no cooldown and the form still usable', async () => {
+    const service = makeService(null)
+    vi.mocked(service.sendPasswordResetCode).mockRejectedValue(new AuthNetworkError())
+    renderRoute('/sign-in', service)
+    await requestCode('allowed@example.test')
+    expect((await screen.findByRole('alert')).textContent).toBe('We couldn’t reach the server. Try again.')
+    expect(screen.queryByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')).toBeNull()
+    expect(screen.queryByText(/You can request another code/)).toBeNull()
+    expect(((await screen.findByRole('button', { name: 'Email my password code' })) as HTMLButtonElement).disabled).toBe(false)
+    expect(document.body.textContent).not.toMatch(/check the address/i)
+  })
+})
+
+describe('returning to the page after sign-in', () => {
+  async function signInFrom(path: string) {
+    const { createMemoryRouter, RouterProvider } = await import('react-router-dom')
+    const service = makeService(null)
+    const router = createMemoryRouter(
+      [{
+        path: '*',
+        element: (
+          <AuthProvider serviceFactory={() => Promise.resolve(service)}>
+            <PlannerProvider storage={null}><AppRoutes /></PlannerProvider>
+          </AuthProvider>
+        ),
+      }],
+      { initialEntries: [path] },
+    )
+    render(<RouterProvider router={router} />)
+    fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'allowed@example.test' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'private-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Open my fridge' }))
+    await waitFor(() => expect(router.state.location.pathname).not.toBe('/sign-in'))
+    return router
+  }
+
+  test('keeps the query string', async () => {
+    const router = await signInFrom('/cook?day=3')
+    expect(router.state.location.pathname).toBe('/cook')
+    expect(router.state.location.search).toBe('?day=3')
+  })
+
+  test('keeps the hash too', async () => {
+    const router = await signInFrom('/recipes?q=soup#results')
+    expect(router.state.location.pathname).toBe('/recipes')
+    expect(router.state.location.search).toBe('?q=soup')
+    expect(router.state.location.hash).toBe('#results')
+  })
+
+  test('falls back to This week when there was no page to return to', async () => {
+    const router = await signInFrom('/sign-in')
+    expect(router.state.location.pathname).toBe('/week')
+  })
+})
+
+describe('reset-code failures never enumerate accounts', () => {
+  test.each([
+    ['an unknown-account style error', new Error('USER_NOT_FOUND')],
+    ['a rate-limit style error', Object.assign(new Error('Too many requests'), { status: 429 })],
+    ['an arbitrary failure', new Error('boom')],
+  ])('%s looks exactly like success', async (_name, failure) => {
+    const service = makeService(null)
+    vi.mocked(service.sendPasswordResetCode).mockRejectedValue(failure)
+    renderRoute('/sign-in', service)
+    await requestCode('stranger@nowhere.test')
+    expect(await screen.findByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(document.body.textContent).not.toMatch(/check the address/i)
+  })
+
+  test('only a network failure gets its own message, and it stays on the email step', async () => {
+    const service = makeService(null)
+    vi.mocked(service.sendPasswordResetCode).mockRejectedValue(new AuthNetworkError())
+    renderRoute('/sign-in', service)
+    await requestCode('allowed@example.test')
+    expect((await screen.findByRole('alert')).textContent).toBe('We couldn’t reach the server. Try again.')
+    expect(screen.queryByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Email my password code' })).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/check the address/i)
+  })
+})
+
+test.each([400, 401, 403, 404, 429, 500, 503])('real adapter HTTP %s stays neutral even with network wording and an offline hint', async (status) => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ message: 'Network error contacting the mail provider' }), {
+    status, headers: { 'Content-Type': 'application/json' },
+  })))
+  vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+  const configFetch = vi.fn(async () => new Response(JSON.stringify({ enabled: true, baseUrl: '/api/auth-proxy' }), {
+    headers: { 'Content-Type': 'application/json' },
+  })) as unknown as typeof fetch
+  const adapter = await loadAuthService(configFetch, 'https://meal.example.test')
+  const service = makeService(null)
+  service.sendPasswordResetCode = adapter!.sendPasswordResetCode
+  renderRoute('/sign-in', service)
+  await requestCode('allowed@example.test')
+  expect(await screen.findByText('If this email has access, we’ll send a code. This is a private project; contact the owner to request access.')).toBeTruthy()
+  expect(screen.getByText('You can request another code in 60 seconds.')).toBeTruthy()
+  expect(screen.queryByRole('alert')).toBeNull()
+  vi.restoreAllMocks()
+})
