@@ -87,7 +87,7 @@ func AuthProxy(config AuthProxyConfig) http.Handler {
 func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConfig) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	baseURL, err := normalizeManagedAuthBaseURL(config.BaseURL, config.ExpectedEndpoint)
+	baseURL, err := normalizeAuthPolicy(config.BaseURL, config.ExpectedEndpoint, config.AllowedEmail)
 	if err != nil {
 		http.Error(w, "authentication proxy is not configured", http.StatusServiceUnavailable)
 		return

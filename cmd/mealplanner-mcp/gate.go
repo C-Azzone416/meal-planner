@@ -10,9 +10,7 @@ import (
 	"time"
 )
 
-// maxTrackedLine bounds the partial-line buffer used to spot request frames. A longer line (4 MiB,
-// far above MaxInputBytes, so no legitimate frame) is still passed through to the SDK untouched; it
-// is just not tracked, so the gate never waits for it.
+// maxTrackedLine caps a complete protocol frame before any bytes reach the SDK.
 const maxTrackedLine = 4 << 20
 
 // frameGate sits between stdin/stdout and the SDK transport. The SDK treats stdin EOF as the end
@@ -29,9 +27,9 @@ const maxTrackedLine = 4 << 20
 // the request id, and only then makes the line available to the SDK reader, so a response can
 // never be written for a request that is not yet counted (the SDK's JSON decoder may consume a
 // complete object before its newline arrives). At EOF an unterminated final frame is registered and
-// then delivered, followed by the EOF. Bytes reach the SDK unmodified. The one exception is a line
-// longer than maxTrackedLine: it is passed through as it arrives, untracked, so it can be delivered
-// before it is complete and is never waited on.
+// then delivered, followed by EOF. Accepted bytes reach the SDK unmodified.
+// Unsupported IDs, ambiguous envelope keys and overlong frames terminate input
+// before SDK delivery. Earlier accepted requests still get their shutdown grace.
 type frameGate struct {
 	grace time.Duration
 
@@ -39,8 +37,8 @@ type frameGate struct {
 	cond     *sync.Cond
 	queue    bytes.Buffer   // registered bytes the SDK may read
 	lineBuf  []byte         // incomplete line held back until its newline (or EOF) arrives
-	skipLine bool           // the current line exceeded maxTrackedLine
 	pending  map[string]int // request id -> responses still owed (a client may reuse an id)
+	inputErr error          // non-EOF input failure, reported after accepted requests drain
 	inEOF    bool           // underlying reader ended
 	stopped  bool           // Stop was called (signal)
 	graceOn  bool           // the grace period started
@@ -71,15 +69,22 @@ func (g *frameGate) start(src io.Reader) {
 					return // after Stop nothing new is accepted
 				}
 				g.admit(buf[:n])
+				if g.inputErr != nil {
+					g.cond.Broadcast()
+					g.mu.Unlock()
+					return
+				}
 				g.cond.Broadcast()
 				g.mu.Unlock()
 			}
 			if err != nil {
 				g.mu.Lock()
-				if !g.stopped && !g.skipLine && len(g.lineBuf) > 0 {
-					g.line(g.lineBuf) // register first ...
-					g.queue.Write(g.lineBuf)
-					g.lineBuf = nil // ... then deliver the unterminated final frame
+				if !g.stopped && len(g.lineBuf) > 0 {
+					g.deliver(g.lineBuf) // validate and register before delivery
+					g.lineBuf = nil      // ... then deliver the unterminated final frame
+				}
+				if err != io.EOF {
+					g.inputErr = err
 				}
 				g.inEOF = true
 				g.cond.Broadcast()
@@ -95,37 +100,22 @@ func (g *frameGate) start(src io.Reader) {
 func (g *frameGate) admit(b []byte) {
 	for len(b) > 0 {
 		i := bytes.IndexByte(b, '\n')
-		if g.skipLine { // an over-long line: pass through untracked
-			if i < 0 {
-				g.queue.Write(b)
-				return
-			}
-			g.queue.Write(b[:i+1])
-			g.skipLine = false
-			b = b[i+1:]
-			continue
-		}
 		if i < 0 {
 			if len(g.lineBuf)+len(b) > maxTrackedLine {
-				g.skipLine = true
-				g.queue.Write(g.lineBuf)
-				g.queue.Write(b)
-				g.lineBuf = nil
+				g.rejectInput(errFrameTooLarge)
 			} else {
 				g.lineBuf = append(g.lineBuf, b...)
 			}
 			return
 		}
-		if len(g.lineBuf)+i > maxTrackedLine { // over-long: untracked
-			g.queue.Write(g.lineBuf)
-			g.queue.Write(b[:i+1])
-			g.lineBuf = g.lineBuf[:0]
-			b = b[i+1:]
-			continue
+		if len(g.lineBuf)+i > maxTrackedLine {
+			g.rejectInput(errFrameTooLarge)
+			return
 		}
 		g.lineBuf = append(g.lineBuf, b[:i+1]...)
-		g.line(g.lineBuf[:len(g.lineBuf)-1])
-		g.queue.Write(g.lineBuf)
+		if !g.deliver(g.lineBuf) {
+			return
+		}
 		g.lineBuf = g.lineBuf[:0]
 		b = b[i+1:]
 	}
@@ -134,9 +124,7 @@ func (g *frameGate) admit(b []byte) {
 type frame struct {
 	Method *string         `json:"method"`
 	ID     json.RawMessage `json:"id"`
-	Params struct {
-		RequestID json.RawMessage `json:"requestId"`
-	} `json:"params"`
+	Params json.RawMessage `json:"params"`
 }
 
 // idKey returns the canonical form of a JSON-RPC id, so a request id and its response id match even
@@ -179,7 +167,13 @@ func (g *frameGate) line(l []byte) {
 	if key, ok := idKey(f.ID); ok {
 		g.pending[key]++
 	} else if *f.Method == "notifications/cancelled" {
-		if key, ok := idKey(f.Params.RequestID); ok {
+		var params struct {
+			RequestID json.RawMessage `json:"requestId"`
+		}
+		if json.Unmarshal(f.Params, &params) != nil {
+			return
+		}
+		if key, ok := idKey(params.RequestID); ok {
 			g.release(key)
 		}
 	}
@@ -218,6 +212,9 @@ func (g *frameGate) Read(p []byte) (int, error) {
 					g.expired = true
 					close(g.expiredC)
 				}
+				if g.inputErr != nil {
+					return 0, g.inputErr
+				}
 				return 0, io.EOF
 			}
 		}
@@ -230,15 +227,15 @@ func (g *frameGate) Read(p []byte) (int, error) {
 // read.
 func (g *frameGate) Stop() {
 	g.mu.Lock()
-	if !g.stopped && !g.skipLine && len(g.lineBuf) > 0 {
+	if !g.stopped && len(g.lineBuf) > 0 {
 		// Same as EOF: a partial line that is already a complete JSON value is a frame whose newline
 		// has not arrived. Register it, then deliver it with the newline added so the SDK can
 		// process it now. A partial line that is not valid JSON is dropped (a truncated frame would
 		// only make the SDK fail), and nothing waits on it.
 		if b := g.lineBuf; json.Valid(b) {
-			g.line(b)
-			g.queue.Write(b)
-			g.queue.WriteByte('\n')
+			if g.deliver(b) {
+				g.queue.WriteByte('\n')
+			}
 		}
 		g.lineBuf = nil
 	}
@@ -306,3 +303,10 @@ func (r *responseWriter) answered(l []byte) {
 }
 
 func (*responseWriter) Close() error { return nil }
+
+// InputError reports a rejected input frame after the server has stopped.
+func (g *frameGate) InputError() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.inputErr
+}

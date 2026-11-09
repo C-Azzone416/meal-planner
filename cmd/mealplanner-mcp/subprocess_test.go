@@ -339,9 +339,8 @@ func TestSubprocessEndToEnd(t *testing.T) {
 	q.assertStdoutClean()
 }
 
-// With the pinned SDK (v1.8.0) a line that is not valid JSON ends the session: Run returns the
-// decode error, the server exits 1 and writes nothing malformed to stdout. This pins that behavior
-// and that no handler ran and nothing was stored.
+// The input gate rejects malformed JSON before the SDK can execute it. The server exits 1
+// and writes nothing malformed to stdout. Previously committed work remains intact.
 func TestSubprocessMalformedFrameEndsSessionWithoutMutation(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "data")
 	p := start(t, dir)
@@ -586,7 +585,7 @@ func TestSubprocessInvalidIDDoesNotDelayEOF(t *testing.T) {
 	if time.Since(started) > 3*time.Second {
 		t.Fatalf("exit took %v", time.Since(started))
 	}
-	if code != 0 {
+	if code != 1 || !strings.Contains(p.stderr.String(), "unsupported request id") {
 		t.Fatalf("exit code = %d, stderr:\n%s", code, p.stderr.String())
 	}
 	p.assertStdoutClean()

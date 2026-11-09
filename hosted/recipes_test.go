@@ -228,3 +228,90 @@ func TestRecipeContentBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestRecipeAPIRejectsAmbiguousJSONBeforeStorage(t *testing.T) {
+	content := syntheticRecipeContent()
+	content.PrepAhead = []RecipePrepAhead{{ID: "p1", Text: "Prep", Minutes: 1, StorageNote: "Refrigerate"}}
+	content.PrepTonight = []RecipePrepTonight{{ID: "p2", Text: "Prep now", Minutes: 1}}
+	valid := recipeBody(t, content)
+	cases := map[string]string{
+		"wrapper case alias":           strings.Replace(valid, `"content":`, `"Content":`, 1),
+		"duplicate wrapper":            strings.Replace(valid, `{"content":`, `{"content":{},"content":`, 1),
+		"content case alias":           strings.Replace(valid, `"title":`, `"Title":"different","title":`, 1),
+		"case alias replaces required": strings.Replace(valid, `"title":`, `"Title":`, 1),
+		"duplicate title":              strings.Replace(valid, `"title":`, `"title":"different","title":`, 1),
+		"escaped duplicate title":      strings.Replace(valid, `"title":`, `"\u0074itle":"different","title":`, 1),
+		"duplicate ingredient":         strings.Replace(valid, `"name":`, `"name":"different","name":`, 1),
+		"ingredient case alias":        strings.Replace(valid, `"isPantry":`, `"IsPantry":true,"isPantry":`, 1),
+		"prep-ahead case alias":        strings.Replace(valid, `"storageNote":`, `"StorageNote":"different","storageNote":`, 1),
+		"prep-tonight duplicate":       strings.Replace(valid, `"text":"Prep now"`, `"text":"different","text":"Prep now"`, 1),
+		"cook duplicate":               strings.Replace(valid, `"timerSeconds":`, `"timerSeconds":10,"timerSeconds":`, 1),
+		"create null revision":         valid[:len(valid)-1] + `,"expectedRevision":null}`,
+		"create revision":              valid[:len(valid)-1] + `,"expectedRevision":1}`,
+		"invalid UTF-8":                strings.Replace(valid, "Synthetic test dish", "Synthetic\xffdish", 1),
+		"two documents":                valid + `{}`,
+		"trailing garbage":             valid + `!`,
+		"null":                         `null`,
+		"array":                        `[]`,
+		"missing content":              `{}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := &recipeFake{}
+			rec := recipeRequest(t, store, "POST", "/api/recipes", body)
+			if rec.Code != 400 || store.calls != 0 {
+				t.Fatalf("status=%d calls=%d body=%s", rec.Code, store.calls, rec.Body)
+			}
+		})
+	}
+	for _, revisionFields := range []string{`"expectedRevision":null`, `"expectedRevision":1,"expectedRevision":2`, `"expectedRevision":1,"ExpectedRevision":2`, `"expectedRevision":"1"`, `"expectedRevision":true`} {
+		store := &recipeFake{}
+		body := valid[:len(valid)-1] + `,` + revisionFields + `}`
+		rec := recipeRequest(t, store, "PUT", "/api/recipes?id="+recipeTestID, body)
+		if rec.Code != 400 || store.calls != 0 {
+			t.Fatalf("%s status=%d calls=%d", revisionFields, rec.Code, store.calls)
+		}
+	}
+}
+
+func TestRecipeAPIRejectsMalformedQueriesBeforeStorage(t *testing.T) {
+	valid := recipeBody(t, syntheticRecipeContent())
+	for _, method := range []string{"GET", "POST", "PUT"} {
+		for _, query := range []string{"unexpected=%zz", "id=%zz", "id=", "after=", "limit=", "id=" + recipeTestID + "&unexpected=%zz", "id=" + recipeTestID + ";owner=other", "%zz=ignored", "id=" + recipeTestID + "&id="} {
+			store := &recipeFake{}
+			rec := recipeRequest(t, store, method, "/api/recipes?"+query, valid)
+			if rec.Code != 400 || store.calls != 0 {
+				t.Fatalf("%s ?%s status=%d calls=%d", method, query, rec.Code, store.calls)
+			}
+		}
+	}
+}
+
+func TestRecipeAPIWholeBodySizeLimit(t *testing.T) {
+	valid := recipeBody(t, syntheticRecipeContent())
+	for _, chunked := range []bool{false, true} {
+		for _, suffix := range []string{" ", "x", "{}"} {
+			store := &recipeFake{}
+			body := valid + strings.Repeat(suffix, (maxRecipeRequestBytes-len(valid))/len(suffix)+1)
+			req := httptest.NewRequest("POST", "/api/recipes", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Idempotency-Key", recipeTestKey)
+			req = req.WithContext(context.WithValue(req.Context(), bearerContextKey{}, UserIdentity{Issuer: testIssuer, Subject: "account-a"}))
+			if chunked {
+				req.ContentLength = -1
+			}
+			rec := httptest.NewRecorder()
+			RecipesHandler(store).ServeHTTP(rec, req)
+			if rec.Code != 413 || store.calls != 0 {
+				t.Fatalf("chunked=%v suffix=%q status=%d calls=%d", chunked, suffix, rec.Code, store.calls)
+			}
+		}
+	}
+	for _, size := range []int{maxRecipeRequestBytes - 1, maxRecipeRequestBytes} {
+		store := &recipeFake{}
+		rec := recipeRequest(t, store, "POST", "/api/recipes", valid+strings.Repeat(" ", size-len(valid)))
+		if rec.Code != 201 || store.calls != 1 {
+			t.Fatalf("valid boundary size=%d status=%d calls=%d", size, rec.Code, store.calls)
+		}
+	}
+}

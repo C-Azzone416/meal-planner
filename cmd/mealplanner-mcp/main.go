@@ -7,8 +7,10 @@
 // Shutdown: on stdin EOF, SIGINT or SIGTERM the server stops reading, but first answers every
 // request it has already read (see frameGate): the SDK is not told about the EOF until each such
 // request has a response on stdout, or until shutdownGrace (5 s) has passed. It exits 0 when
-// everything was answered and 1 if the grace period ran out. A line that is not valid JSON ends the
-// session (SDK behavior): the server exits 1 and nothing it had not yet read is processed.
+// everything was answered and 1 if the grace period ran out. Malformed or ambiguous envelope
+// frames, unsupported request IDs and frames over 4 MiB are rejected before SDK decoding.
+// Earlier accepted requests drain within the grace period, then the process exits 1 with a
+// fixed diagnostic (see ids.go); the rejected frame and later frames are not executed.
 // Data-directory resolution or store errors exit 2 before any protocol traffic. --help prints usage
 // to stdout and exits 0.
 package main
@@ -115,6 +117,13 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdin i
 		code := 0
 		if runErr != nil && !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, io.EOF) {
 			logger.Error("server stopped", "error_type", fmt.Sprintf("%T", runErr))
+			code = 1
+		}
+		if inputErr := gate.InputError(); inputErr != nil {
+			// These diagnostics are fixed strings, never input data or paths.
+			if errors.Is(inputErr, errUnsupportedID) || errors.Is(inputErr, errFrameTooLarge) || errors.Is(inputErr, errAmbiguousEnvelope) {
+				logger.Error(inputErr.Error())
+			}
 			code = 1
 		}
 		if gate.Expired() {

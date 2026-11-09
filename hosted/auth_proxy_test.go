@@ -170,7 +170,7 @@ func TestAuthProxyEmailRoutesFailClosedWithoutAllowedIdentity(t *testing.T) {
 
 func TestAuthProxyRejectsUnknownRoutes(t *testing.T) {
 	rec := httptest.NewRecorder()
-	AuthProxy(AuthProxyConfig{BaseURL: "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth", ExpectedEndpoint: testEndpointID}).ServeHTTP(
+	AuthProxy(AuthProxyConfig{BaseURL: "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth", ExpectedEndpoint: testEndpointID, AllowedEmail: testAllowedEmail}).ServeHTTP(
 		rec,
 		httptest.NewRequest(http.MethodPost, "/api/auth-proxy?path=admin/create-user", nil),
 	)
@@ -211,7 +211,7 @@ func TestAuthProxyRejectsCrossOriginRequest(t *testing.T) {
 	req.Host = "meal.invalid"
 	req.Header.Set("Origin", "https://evil.invalid")
 	rec := httptest.NewRecorder()
-	AuthProxy(AuthProxyConfig{BaseURL: "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth", ExpectedEndpoint: testEndpointID}).ServeHTTP(rec, req)
+	AuthProxy(AuthProxyConfig{BaseURL: "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth", ExpectedEndpoint: testEndpointID, AllowedEmail: testAllowedEmail}).ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
 	}
@@ -222,6 +222,7 @@ func TestAuthProxySynthesizesOriginForOriginlessSessionGet(t *testing.T) {
 	config := AuthProxyConfig{
 		BaseURL:          "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
 		ExpectedEndpoint: testEndpointID,
+		AllowedEmail:     testAllowedEmail,
 		Client: authProxyDoer(func(request *http.Request) (*http.Response, error) {
 			upstreamOrigin = request.Header.Get("Origin")
 			return &http.Response{
@@ -247,6 +248,7 @@ func TestAuthProxyDoesNotEmitSessionHeadersWhenCookieValidationFails(t *testing.
 	config := AuthProxyConfig{
 		BaseURL:          "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
 		ExpectedEndpoint: testEndpointID,
+		AllowedEmail:     testAllowedEmail,
 		Client: authProxyDoer(func(*http.Request) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
@@ -376,7 +378,7 @@ func TestAuthProxyForwardsCanonicalEmailAndSDKFields(t *testing.T) {
 				config := AuthProxyConfig{
 					BaseURL:          "https://ep-test-environment.neonauth.c-4.us-west-2.aws.neon.tech/neondb/auth",
 					ExpectedEndpoint: testEndpointID,
-					AllowedEmail:     " allowed@example.invalid ",
+					AllowedEmail:     "allowed@example.invalid",
 					Client: authProxyDoer(func(request *http.Request) (*http.Response, error) {
 						calls++
 						forwarded, err := io.ReadAll(request.Body)

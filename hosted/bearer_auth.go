@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -53,8 +54,8 @@ type bearerHeader struct {
 type bearerClaims struct {
 	Issuer             string          `json:"iss"`
 	Audience           json.RawMessage `json:"aud"`
-	Expiration         json.Number     `json:"exp"`
-	NotBefore          json.Number     `json:"nbf"`
+	Expiration         json.RawMessage `json:"exp"`
+	NotBefore          json.RawMessage `json:"nbf"`
 	Subject            string          `json:"sub"`
 	Email              string          `json:"email"`
 	EmailVerifiedCamel *bool           `json:"emailVerified"`
@@ -106,8 +107,8 @@ func UserFromContext(ctx context.Context) (UserIdentity, bool) {
 // VerifyBearer validates a Neon Ed25519 JWT and the app's environment-specific
 // identity restrictions.
 func VerifyBearer(ctx context.Context, authorization string, config BearerAuthConfig) (UserIdentity, error) {
-	baseURL, err := normalizeManagedAuthBaseURL(config.BaseURL, config.ExpectedEndpoint)
-	if err != nil || strings.TrimSpace(config.AllowedEmail) == "" {
+	baseURL, err := normalizeAuthPolicy(config.BaseURL, config.ExpectedEndpoint, config.AllowedEmail)
+	if err != nil {
 		return UserIdentity{}, ErrAuthConfiguration
 	}
 	parsedBaseURL, err := url.Parse(baseURL)
@@ -175,14 +176,16 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 	if config.Now != nil {
 		now = config.Now
 	}
-	nowUnix := now().Unix()
+	instant := now()
+	nowUnix := new(big.Rat).SetInt64(instant.Unix())
+	nowUnix.Add(nowUnix, new(big.Rat).SetFrac64(int64(instant.Nanosecond()), 1_000_000_000))
 	expiration, err := numericDate(claims.Expiration)
-	if err != nil || expiration <= nowUnix {
+	if err != nil || expiration.Cmp(nowUnix) <= 0 {
 		return UserIdentity{}, ErrInvalidBearer
 	}
-	if string(claims.NotBefore) != "" {
+	if len(claims.NotBefore) != 0 {
 		notBefore, err := numericDate(claims.NotBefore)
-		if err != nil || notBefore > nowUnix {
+		if err != nil || notBefore.Cmp(nowUnix) > 0 {
 			return UserIdentity{}, ErrInvalidBearer
 		}
 	}
@@ -219,16 +222,37 @@ func audienceContains(raw json.RawMessage, expected string) bool {
 	return false
 }
 
-func numericDate(number json.Number) (int64, error) {
-	if string(number) == "" {
-		return 0, errors.New("numeric date is missing")
+// numericDate accepts JSON numbers only and compares exact decimal values.
+// Bound representation size/exponents and Unix-second range before arithmetic
+// to avoid overflow and disproportionate allocations from attacker input.
+func numericDate(raw json.RawMessage) (*big.Rat, error) {
+	invalid := errors.New("invalid numeric date")
+	if len(raw) == 0 || len(raw) > 128 {
+		return nil, invalid
 	}
-	if integer, err := number.Int64(); err == nil {
-		return integer, nil
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, invalid
 	}
-	floating, err := strconv.ParseFloat(string(number), 64)
-	if err != nil {
-		return 0, err
+	number, ok := value.(json.Number)
+	if !ok {
+		return nil, invalid
 	}
-	return int64(floating), nil
+	if err := decoder.Decode(&value); err != io.EOF {
+		return nil, invalid
+	}
+	text := string(number)
+	if i := strings.IndexAny(text, "eE"); i >= 0 {
+		exponent, err := strconv.Atoi(text[i+1:])
+		if err != nil || exponent < -1000 || exponent > 1000 {
+			return nil, invalid
+		}
+	}
+	date, ok := new(big.Rat).SetString(text)
+	if !ok || date.Cmp(new(big.Rat).SetInt64(-1<<63)) < 0 || date.Cmp(new(big.Rat).SetInt64(1<<63-1)) > 0 {
+		return nil, invalid
+	}
+	return date, nil
 }

@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -61,6 +62,9 @@ var _ draft.Store = (*Store)(nil)
 // Open returns a store rooted at dataDir, which must be absolute. It creates nothing on disk:
 // directories and the lock file appear on the first Create.
 func Open(dataDir string, opts Options) (*Store, error) {
+	if runtime.GOOS == "js" || runtime.GOOS == "plan9" {
+		return nil, ioError(draft.CodeDataDirUnavailable, "secure local storage is unavailable on this platform", nil)
+	}
 	if !filepath.IsAbs(dataDir) {
 		return nil, newError(draft.CategoryInvalidArgument, draft.CodeInvalidDataDir, "the data directory must be an absolute path", nil)
 	}
@@ -75,35 +79,42 @@ func (s *Store) draftsDir() string         { return filepath.Join(s.root, dirNam
 func (s *Store) lockPath() string          { return filepath.Join(s.root, lockName) }
 func (s *Store) filePath(id string) string { return filepath.Join(s.draftsDir(), id+".json") }
 
-// draftsDirState reports whether drafts/ exists. A symlink or non-directory there is refused, so
-// nothing is ever read or written through it.
-func (s *Store) draftsDirState() (exists bool, err error) {
-	fi, err := os.Lstat(s.draftsDir())
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
+// openDirs pins both directories for the entire operation. All subsequent filesystem
+// operations are relative to these handles, never to a re-resolved pathname. The
+// user-selected root may be a symlink; nothing below it may escape the boundary.
+func (s *Store) openDirs(create bool) (*os.Root, *os.Root, error) {
+	if create {
+		if err := os.MkdirAll(s.root, 0700); err != nil {
+			return nil, nil, ioError(draft.CodeDataDirUnavailable, "cannot create the data directory", err)
 		}
-		return false, ioError(draft.CodeDataDirUnavailable, "the drafts directory cannot be read", err)
+	}
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return nil, nil, err
+	}
+	fail := func(err error) (*os.Root, *os.Root, error) { root.Close(); return nil, nil, err }
+	if create {
+		if err := root.Mkdir(dirName, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+			return fail(err)
+		}
+	}
+	fi, err := root.Lstat(dirName)
+	if err != nil {
+		return fail(err)
 	}
 	if !fi.IsDir() {
-		return false, ioError(draft.CodeDataDirUnavailable, "the drafts location is not a plain directory", errors.New("drafts path is not a directory"))
+		return fail(errors.New("drafts location is not a plain directory"))
 	}
-	return true, nil
-}
-
-// ensureDirs creates the data root and drafts directory (0700) if missing.
-func (s *Store) ensureDirs() error {
-	if err := os.MkdirAll(s.root, 0o700); err != nil {
-		return ioError(draft.CodeDataDirUnavailable, "cannot create the data directory", err)
+	dir, err := root.OpenRoot(dirName)
+	if err != nil {
+		return fail(err)
 	}
-	if err := os.Mkdir(s.draftsDir(), 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-		return ioError(draft.CodeDataDirUnavailable, "cannot create the drafts directory", err)
+	actual, err := dir.Stat(".")
+	if err != nil || !os.SameFile(fi, actual) {
+		dir.Close()
+		return fail(errors.New("drafts directory changed while opening"))
 	}
-	_, err := s.draftsDirState()
-	if err == nil {
-		return nil
-	}
-	return err
+	return root, dir, nil
 }
 
 // Create implements draft.Store.
@@ -124,18 +135,21 @@ func (s *Store) Create(ctx context.Context, d draft.Draft) error {
 	if err != nil {
 		return err
 	}
-	if err := s.ensureDirs(); err != nil {
-		return err
+	root, dir, err := s.openDirs(true)
+	if err != nil {
+		return ioError(draft.CodeDataDirUnavailable, "cannot open the drafts directory", err)
 	}
-	return s.commit(ctx, d.ID, data, func() error {
-		n, err := s.countFiles()
+	defer root.Close()
+	defer dir.Close()
+	return s.commit(ctx, root, dir, d.ID, data, func() error {
+		n, err := countFiles(dir)
 		if err != nil {
 			return err
 		}
 		if n >= draft.MaxStoredDrafts {
 			return newError(draft.CategoryLimitExceeded, draft.CodeStoreFull, "the draft store is full", nil)
 		}
-		if _, err := os.Lstat(s.filePath(d.ID)); err == nil {
+		if _, err := dir.Lstat(d.ID + ".json"); err == nil {
 			return newError(draft.CategoryConflict, draft.CodeAlreadyExists, "a draft with that id already exists", nil)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return ioError(draft.CodeIOError, "cannot check for an existing draft", err)
@@ -158,19 +172,21 @@ func (s *Store) Replace(ctx context.Context, id string, expectedRevision int64, 
 	if err := checkEnvelope(next); err != nil {
 		return err
 	}
-	exists, err := s.draftsDirState()
-	if err != nil {
-		return err
-	}
-	if !exists {
+	root, dir, err := s.openDirs(false)
+	if errors.Is(err, os.ErrNotExist) {
 		return notFound()
 	}
+	if err != nil {
+		return ioError(draft.CodeDataDirUnavailable, "cannot open the drafts directory", err)
+	}
+	defer root.Close()
+	defer dir.Close()
 	data, err := s.prepare(next)
 	if err != nil {
 		return err
 	}
-	return s.commit(ctx, id, data, func() error {
-		cur, err := readDraftFile(s.filePath(id), id)
+	return s.commit(ctx, root, dir, id, data, func() error {
+		cur, err := readDraftFile(dir, id+".json", id)
 		if err != nil {
 			return err
 		}
@@ -208,25 +224,25 @@ func (s *Store) prepare(d draft.Draft) ([]byte, error) {
 // commit writes data to a temp file, takes the lock, runs check, then renames the temp file over
 // the target. Everything before the rename leaves the target untouched; the temp file is removed on
 // any failure.
-func (s *Store) commit(ctx context.Context, id string, data []byte, check func() error) (err error) {
-	tmp, err := s.writeTemp(data)
+func (s *Store) commit(ctx context.Context, root, dir *os.Root, id string, data []byte, check func() error) (err error) {
+	tmp, err := s.writeTemp(dir, data)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		if err != nil {
-			_ = os.Remove(tmp)
+			_ = dir.Remove(tmp)
 		}
 	}()
 	if h := s.hooks.beforeLock; h != nil {
 		h()
 	}
-	release, err := acquireLock(ctx, s.lockPath(), s.lockTimeout)
+	release, err := acquireRootLock(ctx, root, s.lockTimeout)
 	if err != nil {
 		return asDraftError(err)
 	}
 	defer release()
-	s.sweepTemps()
+	s.sweepTemps(dir)
 	if err := check(); err != nil {
 		return asDraftError(err)
 	}
@@ -238,15 +254,22 @@ func (s *Store) commit(ctx context.Context, id string, data []byte, check func()
 			return ioError(draft.CodeIOError, "the draft could not be written", err)
 		}
 	}
-	if err := os.Rename(tmp, s.filePath(id)); err != nil {
+	if err := dir.Rename(tmp, id+".json"); err != nil {
 		return ioError(draft.CodeIOError, "the draft could not be written", err)
 	}
 	// The rename is the commit point. Nothing after it may report failure.
-	sync := syncDir
+	var syncErr error
 	if s.hooks.syncDir != nil {
-		sync = s.hooks.syncDir
+		syncErr = s.hooks.syncDir(s.draftsDir())
+	} else if runtime.GOOS != "windows" {
+		f, err := dir.Open(".")
+		syncErr = err
+		if err == nil {
+			syncErr = f.Sync()
+			f.Close()
+		}
 	}
-	if err := sync(s.draftsDir()); err != nil {
+	if syncErr != nil {
 		s.logf("localstore: directory sync after commit failed; the draft was written")
 	}
 	return nil
@@ -265,8 +288,8 @@ var tempNameRe = regexp.MustCompile(`^\.tmp-[0-9a-f]{16}$`)
 // sweepTemps removes the store's own stale temp files (a crash can leave them). It removes only
 // regular files matching the temp-name pattern and older than 24 hours, never anything else, and
 // ignores errors. Called under the lock so a live writer's fresh temp file is never touched.
-func (s *Store) sweepTemps() {
-	entries, err := os.ReadDir(s.draftsDir())
+func (s *Store) sweepTemps(dir *os.Root) {
+	entries, err := fs.ReadDir(dir.FS(), ".")
 	if err != nil {
 		return
 	}
@@ -275,36 +298,36 @@ func (s *Store) sweepTemps() {
 		if !tempNameRe.MatchString(e.Name()) {
 			continue
 		}
-		p := filepath.Join(s.draftsDir(), e.Name())
-		if fi, err := os.Lstat(p); err == nil && fi.Mode().IsRegular() && fi.ModTime().Before(cutoff) {
-			_ = os.Remove(p)
+		p := e.Name()
+		if fi, err := dir.Lstat(p); err == nil && fi.Mode().IsRegular() && fi.ModTime().Before(cutoff) {
+			_ = dir.Remove(p)
 		}
 	}
 }
 
 // writeTemp writes data to a new 0600 file in the drafts directory and syncs it.
-func (s *Store) writeTemp(data []byte) (string, error) {
+func (s *Store) writeTemp(dir *os.Root, data []byte) (string, error) {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", internal("cannot generate a temp file name", err)
 	}
-	path := filepath.Join(s.draftsDir(), tempPrefix+hex.EncodeToString(b[:]))
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	path := tempPrefix + hex.EncodeToString(b[:])
+	f, err := dir.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return "", ioError(draft.CodeIOError, "cannot write to the drafts directory; check that it is writable", err)
 	}
 	if _, err := f.Write(data); err != nil {
 		f.Close()
-		_ = os.Remove(path)
+		_ = dir.Remove(path)
 		return "", ioError(draft.CodeIOError, "cannot write the draft", err)
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
-		_ = os.Remove(path)
+		_ = dir.Remove(path)
 		return "", ioError(draft.CodeIOError, "cannot flush the draft to disk", err)
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(path)
+		_ = dir.Remove(path)
 		return "", ioError(draft.CodeIOError, "cannot write the draft", err)
 	}
 	return path, nil
@@ -312,7 +335,16 @@ func (s *Store) writeTemp(data []byte) (string, error) {
 
 // countFiles counts entries named like draft files. Called under the lock.
 func (s *Store) countFiles() (int, error) {
-	entries, err := os.ReadDir(s.draftsDir())
+	root, dir, err := s.openDirs(false)
+	if err != nil {
+		return 0, err
+	}
+	defer root.Close()
+	defer dir.Close()
+	return countFiles(dir)
+}
+func countFiles(dir *os.Root) (int, error) {
+	entries, err := fs.ReadDir(dir.FS(), ".")
 	if err != nil {
 		return 0, ioError(draft.CodeIOError, "cannot read the drafts directory", err)
 	}
@@ -333,14 +365,16 @@ func (s *Store) Get(ctx context.Context, id string) (draft.Draft, error) {
 	if !idRe.MatchString(id) {
 		return draft.Draft{}, invalidID()
 	}
-	exists, err := s.draftsDirState()
-	if err != nil {
-		return draft.Draft{}, err
-	}
-	if !exists {
+	root, dir, err := s.openDirs(false)
+	if errors.Is(err, os.ErrNotExist) {
 		return draft.Draft{}, notFound()
 	}
-	d, err := readDraftFile(s.filePath(id), id)
+	if err != nil {
+		return draft.Draft{}, ioError(draft.CodeDataDirUnavailable, "cannot open the drafts directory", err)
+	}
+	defer root.Close()
+	defer dir.Close()
+	d, err := readDraftFile(dir, id+".json", id)
 	if err != nil {
 		return draft.Draft{}, asDraftError(err)
 	}
@@ -350,14 +384,19 @@ func (s *Store) Get(ctx context.Context, id string) (draft.Draft, error) {
 // List implements draft.Store. Entries that cannot be used are described, never repaired.
 func (s *Store) List(ctx context.Context) (draft.ListResult, error) {
 	res := draft.ListResult{Drafts: []draft.Draft{}, Skipped: []draft.SkippedEntry{}}
-	exists, err := s.draftsDirState()
-	if err != nil {
-		return res, err
-	}
-	if !exists {
+	root, dir, err := s.openDirs(false)
+	if errors.Is(err, os.ErrNotExist) {
 		return res, nil
 	}
-	entries, err := os.ReadDir(s.draftsDir())
+	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			return res, ioError(draft.CodeIOError, "cannot read the drafts directory", err)
+		}
+		return res, ioError(draft.CodeDataDirUnavailable, "cannot open the drafts directory", err)
+	}
+	defer root.Close()
+	defer dir.Close()
+	entries, err := fs.ReadDir(dir.FS(), ".")
 	if err != nil {
 		return res, ioError(draft.CodeIOError, "cannot read the drafts directory", err)
 	}
@@ -373,7 +412,7 @@ func (s *Store) List(ctx context.Context) (draft.ListResult, error) {
 			return res, ctxError(err)
 		}
 		id := m[1]
-		d, err := readDraftFile(s.filePath(id), id)
+		d, err := readDraftFile(dir, id+".json", id)
 		if err != nil {
 			de := asDraftError(err)
 			if de.Category == draft.CategoryNotFound {

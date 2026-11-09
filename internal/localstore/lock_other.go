@@ -4,6 +4,7 @@ package localstore
 
 import (
 	"context"
+	"os"
 	"time"
 )
 
@@ -13,6 +14,7 @@ const crossProcessLock = false
 
 // openNoFollow is unavailable here; the Lstat check still applies.
 const openNoFollow = 0
+const openNonblock = 0
 
 var procLock = make(chan struct{}, 1)
 
@@ -28,4 +30,8 @@ func acquireLock(ctx context.Context, path string, timeout time.Duration) (relea
 	case <-t.C:
 		return nil, lockTimeout(context.DeadlineExceeded)
 	}
+}
+
+func acquireRootLock(ctx context.Context, root *os.Root, timeout time.Duration) (func(), error) {
+	return acquireLock(ctx, "", timeout)
 }

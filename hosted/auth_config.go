@@ -30,14 +30,14 @@ func AuthConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	configured := strings.TrimSpace(os.Getenv("NEON_AUTH_BASE_URL"))
-	allowedEmail := strings.TrimSpace(os.Getenv("AUTH_ALLOWED_EMAIL"))
+	allowedEmail := os.Getenv("AUTH_ALLOWED_EMAIL")
 	endpointID := strings.TrimSpace(os.Getenv("NEON_AUTH_ENDPOINT_ID"))
-	if configured == "" || allowedEmail == "" || endpointID == "" {
+	if configured == "" || strings.TrimSpace(allowedEmail) == "" || endpointID == "" {
 		_ = json.NewEncoder(w).Encode(AuthConfigResponse{Enabled: false})
 		return
 	}
 
-	_, err := normalizeManagedAuthBaseURL(configured, endpointID)
+	_, err := normalizeAuthPolicy(configured, endpointID, allowedEmail)
 	if err != nil {
 		http.Error(w, "authentication is not configured correctly", http.StatusInternalServerError)
 		return
@@ -50,6 +50,10 @@ func AuthConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 var (
+	// Keep this conservative single-user policy aligned with allowed_email_re
+	// and the byte limits in tools/deploy/check-pulled-env.sh. Runtime must
+	// validate the actual Secret value, never the pull-only [SENSITIVE] marker.
+	allowedAuthEmailPattern    = regexp.MustCompile(`^[a-z0-9_%+-]+(\.[a-z0-9_%+-]+)*@[a-z0-9]+(-[a-z0-9]+)*(\.[a-z0-9]+(-[a-z0-9]+)*)*\.[a-z]{2,63}$`)
 	managedAuthEndpointPattern = regexp.MustCompile(`^ep-[a-z0-9-]+$`)
 	managedAuthHostPattern     = regexp.MustCompile(`^([a-z0-9-]+)\.neonauth\.c-[0-9]+\.[a-z0-9-]+\.aws\.neon\.tech$`)
 	managedAuthDatabasePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -85,7 +89,7 @@ func normalizeAuthBaseURL(value string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.Contains(value, "#") {
 		return "", &url.Error{Op: "parse", URL: value, Err: errInvalidAuthBaseURL}
 	}
 	parsed.Path = strings.TrimRight(parsed.Path, "/")
@@ -99,3 +103,13 @@ func (e authConfigError) Error() string { return string(e) }
 
 const errInvalidAuthBaseURL = authConfigError("invalid auth base URL")
 const errInvalidManagedAuthBaseURL = authConfigError("invalid managed auth base URL")
+
+// normalizeAuthPolicy is shared by browser configuration, proxying, and bearer
+// verification so incomplete or malformed identity policy never enables auth.
+func normalizeAuthPolicy(baseURL, endpoint, allowedEmail string) (string, error) {
+	local, _, _ := strings.Cut(allowedEmail, "@")
+	if len(allowedEmail) > 254 || len(local) > 64 || !allowedAuthEmailPattern.MatchString(allowedEmail) {
+		return "", ErrAuthConfiguration
+	}
+	return normalizeManagedAuthBaseURL(baseURL, endpoint)
+}

@@ -92,7 +92,21 @@ Automatic Preview runs from `ci.yml` on every push to `develop` that changes hos
 
 **Red develop CI.** A red `CI / required` on a develop commit can mean "deployed, but the alias was not moved" (alias step failed). Check the run's alias step and summary before redeploying.
 
-**Alias stuck after a force-push to `develop`.** The move-forward rule fails closed when the commit the alias currently serves is not in `develop` history (for example after a force-push removed it), and every later run then fails the same way. To recover, reassign the alias by hand to the newest good Preview deployment: `curl -X POST "https://api.vercel.com/v2/deployments/<deployment-id>/aliases?teamId=<team>" -H "Authorization: Bearer $VERCEL_TOKEN" -H 'Content-Type: application/json' -d '{"alias":"<PREVIEW_ALIAS>"}'` (omit `teamId` for a personal account; the deployment ID is in that run's Preview summary). Confirm with `GET /v4/aliases/<PREVIEW_ALIAS>`, then re-run the failed develop job or push the next commit. Do this from a trusted machine, not a workflow.
+**Alias stuck after a force-push to `develop`.** The move-forward rule fails closed when the commit the alias currently serves is not in `develop` history (for example after a force-push removed it), and every later run then fails the same way. After approval, reassign the alias by hand to the newest good Preview deployment. Use the deployment ID from that run's Preview summary, replace the placeholders, and omit `teamId` for a personal account. Run on a trusted machine with the existing token in the environment; never put the token in command arguments or enable shell tracing.
+
+```bash
+# begin token-safe preview alias repair
+set +x
+: "${VERCEL_TOKEN:?Set VERCEL_TOKEN through the approved secret mechanism}"
+printf 'header = "Authorization: Bearer %s"\n' "$VERCEL_TOKEN" |
+  curl -fsS --max-time 30 --config - --request POST \
+    'https://api.vercel.com/v2/deployments/<deployment-id>/aliases?teamId=<team>' \
+    --header 'Content-Type: application/json' \
+    --data '{"alias":"<PREVIEW_ALIAS>"}'
+# end token-safe preview alias repair
+```
+
+Confirm with `GET /v4/aliases/<PREVIEW_ALIAS>` using the same stdin-header pattern, then re-run the failed develop job or push the next commit. Do this from a trusted machine, not a workflow. `tools/deploy/runbook-token_test.sh` executes this example with a fake curl and a synthetic token to check that authentication reaches stdin but never argv.
 
 ## 3. Production release
 

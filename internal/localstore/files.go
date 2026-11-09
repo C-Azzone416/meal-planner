@@ -52,8 +52,21 @@ func normalize(d draft.Draft) draft.Draft {
 // readDraftFile reads and fully checks one stored draft. It never modifies anything. A missing file
 // is not_found; a symlink or non-regular file, an oversize file, bad JSON, an unknown schema, or a
 // failed envelope check is corrupt or unsupported_schema.
-func readDraftFile(path, id string) (draft.Draft, error) {
-	fi, err := os.Lstat(path)
+var errEntryChanged = errors.New("entry changed while opening")
+
+func readDraftFile(dir *os.Root, path, id string) (draft.Draft, error) {
+	// Atomic replacement by another legitimate writer can race the metadata check.
+	// Retry without reading the new handle until its identity has been verified.
+	for i := 0; i < 3; i++ {
+		d, err := readDraftFileOnce(dir, path, id)
+		if !errors.Is(err, errEntryChanged) {
+			return d, err
+		}
+	}
+	return draft.Draft{}, ioError(draft.CodeIOError, "the draft entry kept changing while opening", nil)
+}
+func readDraftFileOnce(dir *os.Root, path, id string) (draft.Draft, error) {
+	fi, err := dir.Lstat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return draft.Draft{}, notFound()
@@ -66,17 +79,24 @@ func readDraftFile(path, id string) (draft.Draft, error) {
 	if fi.Size() > draft.MaxStoredFileBytes {
 		return draft.Draft{}, corrupt(draft.CodeFileTooLarge, "the draft file is larger than the allowed size", nil)
 	}
-	f, err := os.OpenFile(path, os.O_RDONLY|openNoFollow, 0)
+	f, err := dir.OpenFile(path, os.O_RDONLY|openNoFollow|openNonblock, 0)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return draft.Draft{}, notFound()
 		}
-		if fi2, lerr := os.Lstat(path); lerr == nil && !fi2.Mode().IsRegular() {
+		if fi2, lerr := dir.Lstat(path); lerr == nil && !fi2.Mode().IsRegular() {
 			return draft.Draft{}, corrupt(draft.CodeNotRegularFile, "the draft entry is not a regular file", nil)
 		}
 		return draft.Draft{}, ioError(draft.CodeIOError, "cannot read the draft file", err)
 	}
 	defer f.Close()
+	actual, err := f.Stat()
+	if err != nil || !actual.Mode().IsRegular() {
+		return draft.Draft{}, corrupt(draft.CodeNotRegularFile, "the draft entry changed while opening", err)
+	}
+	if !os.SameFile(fi, actual) {
+		return draft.Draft{}, errEntryChanged
+	}
 	raw, err := io.ReadAll(io.LimitReader(f, draft.MaxStoredFileBytes+1))
 	if err != nil {
 		return draft.Draft{}, ioError(draft.CodeIOError, "cannot read the draft file", err)

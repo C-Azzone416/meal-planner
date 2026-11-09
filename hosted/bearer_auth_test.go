@@ -2,6 +2,7 @@ package hosted
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -228,4 +229,78 @@ func TestRequireUserRejectsMissingBearer(t *testing.T) {
 
 func errorsIs(err, target error) bool {
 	return err != nil && (err == target || errors.Is(err, target))
+}
+
+func TestVerifyBearerNumericDateSemantics(t *testing.T) {
+	f := newBearerFixture(t)
+	tests := []struct {
+		name, claim string
+		value       any
+		nanos       int
+		valid       bool
+	}{
+		{"future fractional nbf", "nbf", json.Number("1800000000.9"), 0, false},
+		{"nbf equality", "nbf", json.Number("1800000000.9"), 900000000, true},
+		{"nbf before fraction", "nbf", json.Number("1800000000.9"), 899999999, false},
+		{"nbf after fraction", "nbf", json.Number("1800000000.9"), 900000001, true},
+		{"subnanosecond nbf", "nbf", json.Number("1800000000.0000000001"), 0, false},
+		{"fractional exp", "exp", json.Number("1800000000.9"), 0, true},
+		{"exp equality", "exp", json.Number("1800000000.9"), 900000000, false},
+		{"exp before fraction", "exp", json.Number("1800000000.9"), 899999999, true},
+		{"exp after fraction", "exp", json.Number("1800000000.9"), 900000001, false},
+		{"subnanosecond exp", "exp", json.Number("1800000000.0000000001"), 0, true},
+		{"scientific exp", "exp", json.Number("1.8000000009e9"), 0, true},
+		{"negative nbf", "nbf", json.Number("-0.9"), 0, true},
+	}
+	for _, claim := range []string{"exp", "nbf"} {
+		for _, value := range []any{"4102444800", "1", nil, true, []int{1}, map[string]int{"value": 1}, json.Number("1e1000"), json.Number("-1e1000"), json.Number("1e1001"), json.Number("1e-1001"), json.Number("9223372036854775808"), json.Number("-9223372036854775809")} {
+			tests = append(tests, struct {
+				name, claim string
+				value       any
+				nanos       int
+				valid       bool
+			}{"invalid type or range", claim, value, 0, false})
+		}
+	}
+	for _, tc := range tests {
+		t.Run(tc.claim+"/"+tc.name, func(t *testing.T) {
+			f.now = time.Unix(1800000000, int64(tc.nanos))
+			claims := f.claims()
+			claims[tc.claim] = tc.value
+			_, err := VerifyBearer(context.Background(), "Bearer "+f.token(t, claims), f.config())
+			if tc.valid && err != nil {
+				t.Fatalf("valid date rejected: %v", err)
+			}
+			if !tc.valid && !errors.Is(err, ErrInvalidBearer) {
+				t.Fatalf("invalid date %v accepted: %v", tc.value, err)
+			}
+		})
+	}
+	t.Run("nbf optional", func(t *testing.T) {
+		claims := f.claims()
+		delete(claims, "nbf")
+		if _, err := VerifyBearer(context.Background(), "Bearer "+f.token(t, claims), f.config()); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("exp required", func(t *testing.T) {
+		claims := f.claims()
+		delete(claims, "exp")
+		if _, err := VerifyBearer(context.Background(), "Bearer "+f.token(t, claims), f.config()); !errors.Is(err, ErrInvalidBearer) {
+			t.Fatalf("error: %v", err)
+		}
+	})
+}
+
+func TestNumericDateRepresentationBounds(t *testing.T) {
+	for _, raw := range []string{"9223372036854775807", "-9223372036854775808", "1e-1000", "-0", "1.5e+1"} {
+		if _, err := numericDate(json.RawMessage(raw)); err != nil {
+			t.Errorf("valid %s: %v", raw, err)
+		}
+	}
+	for _, raw := range []string{"9223372036854775807.000000001", "-9223372036854775808.000000001", "1e999999999", "1e-999999999", "NaN", "Infinity", "1 2", "01", "1/2", "0." + strings.Repeat("0", 128) + "1"} {
+		if _, err := numericDate(json.RawMessage(raw)); err == nil {
+			t.Errorf("accepted invalid %s", raw)
+		}
+	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -51,7 +52,6 @@ func TestGateIgnoresNotificationsBatchesAndGarbage(t *testing.T) {
 	g.start(strings.NewReader(`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n" +
 		`[{"jsonrpc":"2.0","id":1,"method":"x"}]` + "\n" +
 		"not json\n" +
-		`{"jsonrpc":"2.0","id":null,"method":"x"}` + "\n" +
 		`{"jsonrpc":"2.0","id":7,"result":{}}` + "\n"))
 	select {
 	case <-readAllAsync(g):
@@ -118,8 +118,8 @@ func TestGateTracksAnUnterminatedFinalFrame(t *testing.T) {
 	<-done
 }
 
-func TestGateCanonicalizesNumericIDs(t *testing.T) {
-	for _, c := range []struct{ req, resp string }{{"2.0", "2"}, {"1e0", "1"}, {"3", "3.0"}, {`"7"`, `"7"`}} {
+func TestGateMatchesSupportedNumericIDs(t *testing.T) {
+	for _, c := range []struct{ req, resp string }{{"2", "2"}, {"-1", "-1"}, {"0", "0"}, {`"7"`, `"7"`}} {
 		g := newFrameGate(5 * time.Second)
 		g.start(strings.NewReader(`{"jsonrpc":"2.0","id":` + c.req + `,"method":"x"}` + "\n"))
 		done := readAllAsync(g)
@@ -167,17 +167,13 @@ func TestGateDuplicateClientIDsNeedEveryResponse(t *testing.T) {
 	}
 }
 
-func TestGateOnlyAwaitsStringOrIntegerIDs(t *testing.T) {
-	for _, id := range []string{"1.5", "true", "[1]", `{"a":1}`, "null"} {
+func TestGateRejectsUnsupportedIDsWithoutAwaiting(t *testing.T) {
+	for _, id := range []string{"1.5", "true", "[1]", `{"a":1}`, "null", "-0", "2.0", "1e0", "9007199254740993"} {
 		g := newFrameGate(5 * time.Second)
 		g.start(strings.NewReader(`{"jsonrpc":"2.0","id":` + id + `,"method":"x"}` + "\n"))
-		select {
-		case <-readAllAsync(g):
-		case <-time.After(2 * time.Second):
-			t.Fatalf("id %s: the gate waited for an invalid id", id)
-		}
-		if g.Expired() {
-			t.Fatalf("id %s: Expired", id)
+		b, err := io.ReadAll(g)
+		if !errors.Is(err, errUnsupportedID) || len(b) != 0 || g.Expired() {
+			t.Fatalf("id=%s bytes=%q err=%v expired=%v", id, b, err, g.Expired())
 		}
 	}
 }
@@ -295,7 +291,7 @@ func TestGateUnterminatedFinalFrameIsRegisteredBeforeDelivery(t *testing.T) {
 }
 
 func TestGateDeliversBytesUnmodified(t *testing.T) {
-	in := `{"jsonrpc":"2.0","id":1,"method":"x"}` + "\r\n" + `{"jsonrpc":"2.0","method":"n"}` + "\n" + `tail without newline`
+	in := `{"jsonrpc":"2.0","id":1,"method":"x"}` + "\r\n" + `{"jsonrpc":"2.0","method":"n"}` + "\n" + `{"jsonrpc":"2.0","method":"tail"}`
 	g := newFrameGate(100 * time.Millisecond)
 	g.start(strings.NewReader(in))
 	go func() {
@@ -308,20 +304,13 @@ func TestGateDeliversBytesUnmodified(t *testing.T) {
 	}
 }
 
-func TestGateLongLinesPassThroughUntracked(t *testing.T) {
+func TestGateLongLinesAreRejectedBeforeDelivery(t *testing.T) {
 	long := `{"jsonrpc":"2.0","id":1,"method":"x","pad":"` + strings.Repeat("a", maxTrackedLine) + `"}` + "\n"
-	g := newFrameGate(5 * time.Second)
+	g := newFrameGate(time.Second)
 	g.start(strings.NewReader(long + `{"jsonrpc":"2.0","id":2,"method":"y"}` + "\n"))
-	waitPending(t, g, 1)
-	io.WriteString(g.wrapWriter(io.Discard), `{"jsonrpc":"2.0","id":2,"result":{}}`+"\n")
-	done := readAllAsync(g)
-	select {
-	case b := <-done:
-		if !strings.HasPrefix(b, long) || g.Expired() {
-			t.Fatalf("len=%d expired=%v", len(b), g.Expired())
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("the gate waited on an untracked line (or on a tracked one after it)")
+	b, err := io.ReadAll(g)
+	if !errors.Is(err, errFrameTooLarge) || len(b) != 0 || g.Expired() {
+		t.Fatalf("bytes=%d err=%v expired=%v", len(b), err, g.Expired())
 	}
 }
 

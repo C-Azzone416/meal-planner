@@ -20,6 +20,8 @@ The application will keep user data private even though the source repository is
 
 ## Planning documents
 
+- [November UI release scope](docs/releases/ui-auth-disabled-2026-11.md) — complete included surfaces, dependencies, judge regressions and code-only deployment gates.
+
 - [Product plan](docs/product-plan.md) — settled product decisions, proposed launch scope, unresolved rules, and deferred ideas.
 - [Architecture plan](docs/architecture.md) — system boundaries, conceptual API shape, security posture, and verification checkpoints.
 - [Setup and delivery plan](docs/setup-and-delivery-plan.md) — provider setup, implementation phases, and release gates.

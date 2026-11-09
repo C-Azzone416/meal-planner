@@ -2,6 +2,11 @@ openapi: 3.1.0
 info:
   title: Meal Planner API
   version: 0.1.0
+  description: >-
+    Recipe request objects reject unknown, case-variant and duplicate property names,
+    including nested objects. Query encoding must be valid; unknown, repeated and
+    empty query parameters are rejected. JSON write bodies, including whitespace,
+    are limited to 256 KiB.
 paths:
   /api/health:
     get:
@@ -35,6 +40,7 @@ paths:
                 oneOf:
                   - {$ref: "#/components/schemas/RecipeEnvelope"}
                   - {$ref: "#/components/schemas/RecipePage"}
+        "400": {description: Invalid query}
         "401": {description: Missing or invalid session}
         "404": {description: Recipe not found, including another owner's ID}
         "503": {description: Authentication or storage unavailable}
@@ -104,6 +110,8 @@ paths:
         "401": {description: Missing or invalid session}
         "404": {description: Recipe not found, including another owner's ID}
         "409": {description: Stale revision; reload without discarding unsaved form}
+        "413": {description: JSON body exceeds 256 KiB}
+        "415": {description: Content type is not application/json}
         "503": {description: Storage unavailable; outcome may be uncertain}
 components:
   securitySchemes:
