@@ -8,7 +8,7 @@ This document describes the full change being promoted to main by release PR #56
 - Restricted authentication code: exact identity policy, same-origin proxy, bearer verification, signed before-create webhook, password-code notice and controlled activation runbook. Production authentication stays disabled for this code release.
 - Manual recipe HTTP API and reviewed Neon/Postgres schema files, ownership and revision checks, idempotent create receipts, bounded responses, and recipe detail/edit rewrites. The code release does not apply migrations or install runtime credentials.
 - **Local recipe-draft epic #19**, including `cmd/mealplanner`, `cmd/mealplanner-mcp`, `internal/core/draft`, `internal/localstore`, `internal/mcpadapter`, their contracts, tests and local-setup documentation. This is a separate included product surface, not the paused hosted-draft bridge #55. The CLI provides read-only validation/list/show; the stdio MCP server supports local draft creation and revision-controlled updates in a private local directory (the default per-user configuration directory, or an explicit override). These tools have no hosted route and are not started by Vercel.
-- Existing main CI bootstrap infrastructure (#65). Application Framebriar integration #66/#54 is excluded.
+- Current-main CI bootstrap and reviewed-evidence infrastructure (#65 and the CI-only #66 split), refreshed through `dfeda615d21cbe1ece12a39bd9378d44191f1c49`. Framebriar application integration (#54), the deferred private Preview exporter, and runtime activation are excluded. Private-dependency Preview targets remain blocked without a direct-build fallback.
 
 ## Dependency and publication boundary
 

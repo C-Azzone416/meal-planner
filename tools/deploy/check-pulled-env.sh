@@ -36,6 +36,8 @@
 # behavior: https://vercel.com/changelog/environment-variables-now-use-config-and-secret-types). The auth names may
 # therefore contain that exact marker instead of the literal value. Literal Config values still receive the shape
 # checks below; the deployed runtime and fail-closed application config are responsible for validating Secret values.
+# Framebriar exact settings: docs/runbooks/framebriar.md and issue #52. No
+# FRAMEBRIAR_* prefix allowlist; package reader credentials are not runtime settings.
 # MEAL_RECIPES_DATABASE_URL is a server-only database credential and MUST be a Vercel Secret.
 # Only the exact write-only [SENSITIVE] marker is accepted on pull, never a literal DSN.
 # The same Vercel Secret behavior cited above applies; no value goes into build artifacts.
@@ -65,7 +67,7 @@
 set -euo pipefail
 export LC_ALL=C # byte semantics, so ${#var} counts bytes for the NUL check
 
-allowed_exact=" VERCEL CI NX_DAEMON TURBO_CACHE TURBO_DOWNLOAD_LOCAL_ENABLED TURBO_REMOTE_ONLY TURBO_RUN_SUMMARY NEON_AUTH_BASE_URL NEON_AUTH_ENDPOINT_ID AUTH_ALLOWED_EMAIL MEAL_RECIPES_DATABASE_URL "
+allowed_exact=" VERCEL CI NX_DAEMON TURBO_CACHE TURBO_DOWNLOAD_LOCAL_ENABLED TURBO_REMOTE_ONLY TURBO_RUN_SUMMARY NEON_AUTH_BASE_URL NEON_AUTH_ENDPOINT_ID AUTH_ALLOWED_EMAIL FRAMEBRIAR_ENABLED FRAMEBRIAR_ENVIRONMENT FRAMEBRIAR_ALLOWED_ORIGIN FRAMEBRIAR_APP_ID FRAMEBRIAR_BUILD_SHA FRAMEBRIAR_SCREENSHOTS FRAMEBRIAR_DATABASE_URL FRAMEBRIAR_CREDENTIAL_KEYS MEAL_RECIPES_DATABASE_URL "
 turbo_cache_re='^(local|remote):(rw|r|w)?(,(local|remote):(rw|r|w)?)*$'
 neon_auth_base_re='^https://(ep-[a-z0-9]+(-[a-z0-9]+)*)\.neonauth\.c-[0-9]+\.[a-z0-9]+(-[a-z0-9]+)*\.aws\.neon\.tech/neondb/auth$'
 neon_endpoint_re='^ep-[a-z0-9]+(-[a-z0-9]+)*$'
@@ -101,6 +103,14 @@ check_file() {
       NX_DAEMON) [[ $2 == false ]] ;;
       TURBO_CACHE) [[ ${#2} -le 32 && $2 =~ $turbo_cache_re ]] ;;
       TURBO_DOWNLOAD_LOCAL_ENABLED | TURBO_REMOTE_ONLY | TURBO_RUN_SUMMARY) [[ $2 == true || $2 == false || $2 == 1 || $2 == 0 ]] ;;
+      FRAMEBRIAR_ENABLED|FRAMEBRIAR_SCREENSHOTS) [[ $2 == 0 || $2 == 1 ]] ;;
+      FRAMEBRIAR_ENVIRONMENT) [[ $2 == preview || $2 == production ]] ;;
+      FRAMEBRIAR_APP_ID) [[ $2 == meal-planner || $2 == meal-planner-preview ]] ;;
+      FRAMEBRIAR_BUILD_SHA) [[ $2 =~ ^[0-9a-f]{40}$ ]] ;;
+      FRAMEBRIAR_ALLOWED_ORIGIN) [[ $2 =~ ^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?$ ]] ;;
+      # Secrets must be Secret type in Vercel. Literal credentials are refused,
+      # never printed or handed to the build job. Runtime validates their shape.
+      FRAMEBRIAR_DATABASE_URL|FRAMEBRIAR_CREDENTIAL_KEYS) [[ $2 == "$secret_placeholder" ]] ;;
       NEON_AUTH_BASE_URL) [[ $2 == "$secret_placeholder" || (${#2} -le 255 && $2 =~ $neon_auth_base_re) ]] ;;
       NEON_AUTH_ENDPOINT_ID) [[ $2 == "$secret_placeholder" || (${#2} -le 63 && $2 =~ $neon_endpoint_re) ]] ;;
       MEAL_RECIPES_DATABASE_URL) [[ $2 == "$secret_placeholder" ]] ;;

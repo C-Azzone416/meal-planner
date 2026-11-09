@@ -471,6 +471,32 @@ expect 1 setting-nul "$work/setting-nul.env"
 printf 'NX_DAEMON="false"\r\nTURBO_REMOTE_ONLY=true\r\n' > "$work/setting-crlf.env"
 expect 0 setting-crlf "$work/setting-crlf.env"
 
+# Framebriar public config is allowlisted, runtime credentials only as redacted Secrets.
+fixture framebriar/.env << EOF
+FRAMEBRIAR_ENABLED="0"
+FRAMEBRIAR_ENVIRONMENT="preview"
+FRAMEBRIAR_ALLOWED_ORIGIN="https://preview.example.test"
+FRAMEBRIAR_APP_ID="meal-planner-preview"
+FRAMEBRIAR_BUILD_SHA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+FRAMEBRIAR_SCREENSHOTS="0"
+FRAMEBRIAR_DATABASE_URL="[SENSITIVE]"
+FRAMEBRIAR_CREDENTIAL_KEYS="[SENSITIVE]"
+MEAL_RECIPES_DATABASE_URL="[SENSITIVE]"
+EOF
+expect 0 framebriar "$work/framebriar/.env"
+fixture framebriar-secret/.env << EOF
+FRAMEBRIAR_DATABASE_URL="$secret"
+FRAMEBRIAR_CREDENTIAL_KEYS="$secret"
+FRAMEBRIAR_PACKAGE_READ_TOKEN="$secret"
+EOF
+expect 1 framebriar-secret "$work/framebriar-secret/.env"
+check "framebriar-secret: no secret output" lacks framebriar-secret "$secret"
+fixture framebriar-bad/.env << EOF
+FRAMEBRIAR_ENABLED="true"
+FRAMEBRIAR_ALLOWED_ORIGIN="https://*.example.test"
+FRAMEBRIAR_BUILD_SHA="dev"
+EOF
+expect 1 framebriar-bad "$work/framebriar-bad/.env"
 # Recipe DB credentials are runtime-only Secrets, not Config or build inputs.
 fixture recipe-secret/.env << EOF
 MEAL_RECIPES_DATABASE_URL="[SENSITIVE]"

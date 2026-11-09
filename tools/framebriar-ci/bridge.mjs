@@ -1,8 +1,8 @@
-// Unwired read-only verifier. No package credentials or target code execution.
+// Read-only CI evidence verifier. No package credentials, target execution or deployment artifacts.
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { sha256, validateBridge, workflowPath, manifestEntries, validateManifests } from './policy.mjs'
+import { sha256, validateBridge, workflowPath, manifestEntries, validateManifests, validateIncludedBase } from './policy.mjs'
 const MAX_ARCHIVE=131072, MAX_API=1048576
 const sha = value => assert.match(value ?? '', /^[a-f0-9]{40}$/)
 const integer = value => assert.ok(Number.isSafeInteger(value) && value > 0)
@@ -35,6 +35,13 @@ export function parseArchive(bytes, digest) {
 function relevantRuns(runs, prNumber) {
   return runs.flatMap(run=>{
     const title=run.display_title ?? ''
+    if(prNumber===0) {
+      if(!title.startsWith('Reviewed develop')) return []
+      const match=/^Reviewed develop at ([a-f0-9]{40})$/.exec(title)
+      assert.ok(match,'Malformed develop subject title'); integer(run.id);integer(run.run_attempt)
+      const created=Date.parse(run.created_at);assert.ok(Number.isFinite(created))
+      return [{run,pr:0,target:match[1],created}]
+    }
     // Attribute first. A malformed unrelated title must not poison every PR.
     const identity=/^Reviewed PR ([0-9]+)/.exec(title)
     const associated=run.pull_requests?.some(pr=>pr.number===prNumber) ?? false
@@ -124,18 +131,25 @@ async function list(client, route, field, maximum=300) {
   }
   throw new Error('Incomplete bounded inventory')
 }
-export async function verifyEvidence({repository,prNumber,targetSha,trustedWorkflowSha,token}, fetcher=fetch) {
-  integer(prNumber);sha(targetSha);sha(trustedWorkflowSha)
+export async function verifyEvidence({repository,prNumber,targetSha,trustedWorkflowSha,token,subject='pr'}, fetcher=fetch) {
+  assert.ok(['pr','develop'].includes(subject))
+  if(subject==='pr') integer(prNumber); else assert.equal(prNumber,0)
+  sha(targetSha);sha(trustedWorkflowSha)
   const client=createClient(repository,token,fetcher)
   const repo=await client.json('')
   assert.equal(repo.full_name,repository);assert.equal(repo.owner.type,'User');integer(repo.id)
-  const pr=await client.json(`pulls/${prNumber}`)
-  assert.equal(pr.number,prNumber);assert.equal(pr.state,'open')
-  assert.equal(pr.head.repo?.full_name,repository);assert.equal(pr.base.repo?.full_name,repository)
-  assert.ok(['main','develop'].includes(pr.base.ref));assert.equal(pr.head.sha,targetSha)
+  const pr=subject==='pr' ? await client.json(`pulls/${prNumber}`) : null
+  if(subject==='pr') {
+    assert.equal(pr.number,prNumber);assert.equal(pr.state,'open')
+    assert.equal(pr.head.repo?.full_name,repository);assert.equal(pr.base.repo?.full_name,repository)
+    assert.ok(['main','develop'].includes(pr.base.ref));assert.equal(pr.head.sha,targetSha)
+  }
   const main=await client.json('branches/main')
   assert.equal(main.commit.sha,trustedWorkflowSha,'Main changed: explicitly review/update trusted pin')
-  const currentBase=await client.json(`branches/${pr.base.ref}`)
+  const branch=subject==='pr' ? pr.base.ref : 'develop'
+  const currentBase=await client.json(`branches/${branch}`)
+  if(subject==='develop') assert.equal(currentBase.commit.sha,targetSha,'Develop evidence cannot reuse a PR/ancestor SHA')
+  else validateIncludedBase(await client.json(`compare/${currentBase.commit.sha}...${targetSha}`),currentBase.commit.sha,targetSha)
   const runs=await list(client,`actions/workflows/framebriar-reviewed-ci.yml/runs?event=workflow_dispatch&branch=main`,'workflow_runs')
   const selected=await selectVerified(client,runs,prNumber)
   assert.equal(selected.target,targetSha,'Latest reviewed attempt targets a different head')
@@ -158,12 +172,13 @@ export async function verifyEvidence({repository,prNumber,targetSha,trustedWorkf
   const bytes=await client.archive(artifact.id)
   const evidence=parseArchive(bytes,artifact.digest)
   // Strict schema: reject ambiguous extra content as well as missing metadata.
-  assert.deepEqual(Object.keys(evidence).sort(),['sha','workflow_sha','package_sha256','lock_sha256','outcome','informational_only','repository','pr','base_sha','run_id','run_attempt','coverage'].sort())
-  validateBridge({repository,owner:repo.owner.login,pr,currentBase,trustedWorkflowSha,run,jobs,artifact,evidence})
+  assert.deepEqual(Object.keys(evidence).filter(key=>key!=='subject').sort(),['sha','workflow_sha','package_sha256','lock_sha256','outcome','informational_only','repository','pr','base_sha','run_id','run_attempt','coverage'].sort())
+  validateBridge({repository,owner:repo.owner.login,pr,currentBase,trustedWorkflowSha,run,jobs,artifact,evidence,subject})
   // Bind reported manifest hashes to the target's actual inert regular blobs.
   const commit=await client.json(`git/commits/${targetSha}`)
   sha(commit.tree?.sha)
-  const entries=manifestEntries(await client.json(`git/trees/${commit.tree.sha}?recursive=1`))
+  const tree=await client.json(`git/trees/${commit.tree.sha}?recursive=1`)
+  const entries=manifestEntries(tree)
   const blobs=[]
   for(const entry of entries) {
     const blob=await client.json(`git/blobs/${entry.sha}`)
@@ -173,9 +188,12 @@ export async function verifyEvidence({repository,prNumber,targetSha,trustedWorkf
   const hashes=validateManifests(...blobs)
   assert.equal(hashes.package_sha256,evidence.package_sha256);assert.equal(hashes.lock_sha256,evidence.lock_sha256)
   // Close head/base/pin/run/artifact races before returning any success.
-  const freshPr=await client.json(`pulls/${prNumber}`),freshBase=await client.json(`branches/${pr.base.ref}`),freshMain=await client.json('branches/main')
-  assert.equal(freshPr.state,'open');assert.equal(freshPr.head.sha,targetSha);assert.equal(freshPr.head.repo?.full_name,repository)
-  assert.equal(freshPr.base.ref,pr.base.ref);assert.equal(freshPr.base.repo?.full_name,repository)
+  const freshPr=subject==='pr' ? await client.json(`pulls/${prNumber}`) : null
+  const freshBase=await client.json(`branches/${branch}`),freshMain=await client.json('branches/main')
+  if(subject==='pr') {
+    assert.equal(freshPr.state,'open');assert.equal(freshPr.head.sha,targetSha);assert.equal(freshPr.head.repo?.full_name,repository)
+    assert.equal(freshPr.base.ref,pr.base.ref);assert.equal(freshPr.base.repo?.full_name,repository)
+  }
   assert.equal(freshBase.commit.sha,currentBase.commit.sha);assert.equal(freshMain.commit.sha,trustedWorkflowSha)
   const freshRun=await client.json(`actions/runs/${run.id}`)
   assert.equal(freshRun.run_attempt,run.run_attempt);assert.equal(freshRun.status,'completed');assert.equal(freshRun.conclusion,'success')
@@ -184,11 +202,15 @@ export async function verifyEvidence({repository,prNumber,targetSha,trustedWorkf
   const freshArtifacts=await list(client,`actions/runs/${run.id}/artifacts`,'artifacts')
   const fresh=freshArtifacts.filter(item=>item.name===name)
   assert.equal(fresh.length,1);assert.equal(fresh[0].id,artifact.id);assert.equal(fresh[0].digest,artifact.digest);assert.equal(fresh[0].expired,false)
-  return {sha:targetSha,workflow_sha:trustedWorkflowSha,run_id:run.id,run_attempt:run.run_attempt,artifact_id:artifact.id}
+  return {subject,sha:targetSha,workflow_sha:trustedWorkflowSha,run_id:run.id,run_attempt:run.run_attempt,artifact_id:artifact.id}
 }
 if(process.argv[1] && fileURLToPath(import.meta.url)===process.argv[1]) {
+  if(process.env.PREBUILD_REQUIRED==='1') {
+    console.error('::error::Private Preview export is not implemented')
+    process.exit(1)
+  }
   try {
-    const result=await verifyEvidence({repository:process.env.GITHUB_REPOSITORY,prNumber:Number(process.env.PR_NUMBER),targetSha:process.env.TARGET_SHA,trustedWorkflowSha:process.env.TRUSTED_WORKFLOW_SHA,token:process.env.GH_TOKEN})
+    const result=await verifyEvidence({repository:process.env.GITHUB_REPOSITORY,subject:process.env.SUBJECT ?? 'pr',prNumber:process.env.SUBJECT==='develop' ? 0 : Number(process.env.PR_NUMBER),targetSha:process.env.TARGET_SHA,trustedWorkflowSha:process.env.TRUSTED_WORKFLOW_SHA,token:process.env.GH_TOKEN})
     console.log(`Verified exact-SHA frontend evidence for ${result.sha}; trusted run ${result.run_id}, attempt ${result.run_attempt}.`)
   } catch {
     // Never print tokens, signed URLs, API bodies, ZIP bytes or assertion values.
