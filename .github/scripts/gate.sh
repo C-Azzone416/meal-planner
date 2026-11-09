@@ -2,6 +2,7 @@
 # Fail-closed evaluation for the `CI / required` job.
 #
 # Env: AFFECTED_RESULT                       result of the `affected` job
+#      RES_SECRETS, RES_HYGIENE              results of the always-on scan jobs; must be success
 #      SEL_<NAME>                            classifier output (true|false) for each gated job
 #      RES_<NAME>                            result of that job (success|failure|cancelled|skipped)
 #      SEL_DOCS, SEL_RELEASE_METADATA        informational only
@@ -22,6 +23,21 @@ upper() { tr '[:lower:]-' '[:upper:]_' <<<"$1"; }
 if [[ "${AFFECTED_RESULT:-}" != "success" ]]; then
   fail "affected job result is '${AFFECTED_RESULT:-<unset>}', expected success"
 fi
+
+# The scans always run, never depend on classification, and must pass.
+SCANS="${SCANS:-secrets hygiene}"
+for n in $SCANS; do
+  u="$(upper "$n")"
+  res_var="RES_$u"
+  res="${!res_var:-}"
+  verdict="ok"
+  evaluated=$((evaluated + 1))
+  if [[ "$res" != "success" ]]; then
+    verdict="FAIL (result '${res:-<unset>}')"
+    fail "$n scan result is '${res:-<unset>}', expected success"
+  fi
+  rows+="| $n | always | ${res:-—} | $verdict |"$'\n'
+done
 
 for n in $NAMES; do
   u="$(upper "$n")"
