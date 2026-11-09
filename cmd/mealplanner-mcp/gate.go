@@ -27,28 +27,29 @@ const maxTrackedLine = 4 << 20
 // the request id, and only then makes the line available to the SDK reader, so a response can
 // never be written for a request that is not yet counted (the SDK's JSON decoder may consume a
 // complete object before its newline arrives). At EOF an unterminated final frame is registered and
-// then delivered, followed by EOF. Accepted bytes reach the SDK unmodified.
+// then delivered, followed by EOF. The JSON object bytes reach the SDK unchanged;
+// outer JSON whitespace is removed and exactly one LF delimiter is appended.
 // Unsupported IDs, ambiguous envelope keys and overlong frames terminate input
 // before SDK delivery. Earlier accepted requests still get their shutdown grace.
 type frameGate struct {
 	grace time.Duration
 
-	mu       sync.Mutex
-	cond     *sync.Cond
-	queue    bytes.Buffer   // registered bytes the SDK may read
-	lineBuf  []byte         // incomplete line held back until its newline (or EOF) arrives
-	pending  map[string]int // request id -> responses still owed (a client may reuse an id)
-	inputErr error          // non-EOF input failure, reported after accepted requests drain
-	inEOF    bool           // underlying reader ended
-	stopped  bool           // Stop was called (signal)
-	graceOn  bool           // the grace period started
-	timedOut bool           // the grace period elapsed
-	expired  bool           // input was released with requests still unanswered
-	expiredC chan struct{}  // closed when expired becomes true
+	mu        sync.Mutex
+	cond      *sync.Cond
+	queue     bytes.Buffer   // registered bytes the SDK may read
+	lineBuf   []byte         // incomplete line held back until its newline (or EOF) arrives
+	pending   map[string]int // request id -> responses still owed (a client may reuse an id)
+	inputErr  error          // non-EOF input failure, reported after accepted requests drain
+	inEOF     bool           // underlying reader ended
+	stopped   bool           // Stop was called (signal)
+	graceOn   bool           // the grace period started
+	timedOut  bool           // the grace period elapsed
+	expired   bool           // input was released with requests still unanswered
+	deadlineC chan struct{}  // closes at the session deadline, even after cancellation removes pending IDs
 }
 
 func newFrameGate(grace time.Duration) *frameGate {
-	g := &frameGate{grace: grace, pending: map[string]int{}, expiredC: make(chan struct{})}
+	g := &frameGate{grace: grace, pending: map[string]int{}, deadlineC: make(chan struct{})}
 	g.cond = sync.NewCond(&g.mu)
 	return g
 }
@@ -87,6 +88,7 @@ func (g *frameGate) start(src io.Reader) {
 					g.inputErr = err
 				}
 				g.inEOF = true
+				g.startGrace()
 				g.cond.Broadcast()
 				g.mu.Unlock()
 				return
@@ -189,6 +191,23 @@ func (g *frameGate) release(id string) {
 	g.cond.Broadcast()
 }
 
+// startGrace starts the session deadline when input ends, not only when the
+// SDK next asks for bytes. Even a stalled transport/handler must remain bounded.
+// g.mu must be held. Repeated EOF, rejection and Stop signals share one timer.
+func (g *frameGate) startGrace() {
+	if g.graceOn {
+		return
+	}
+	g.graceOn = true
+	time.AfterFunc(g.grace, func() {
+		g.mu.Lock()
+		g.timedOut = true
+		close(g.deadlineC)
+		g.cond.Broadcast()
+		g.mu.Unlock()
+	})
+}
+
 // Read implements io.Reader for the SDK transport.
 func (g *frameGate) Read(p []byte) (int, error) {
 	g.mu.Lock()
@@ -198,19 +217,10 @@ func (g *frameGate) Read(p []byte) (int, error) {
 			return g.queue.Read(p)
 		}
 		if g.inEOF || g.stopped {
-			if !g.graceOn {
-				g.graceOn = true
-				time.AfterFunc(g.grace, func() {
-					g.mu.Lock()
-					g.timedOut = true
-					g.cond.Broadcast()
-					g.mu.Unlock()
-				})
-			}
+			g.startGrace()
 			if len(g.pending) == 0 || g.timedOut {
 				if len(g.pending) > 0 && !g.expired {
 					g.expired = true
-					close(g.expiredC)
 				}
 				if g.inputErr != nil {
 					return 0, g.inputErr
@@ -233,13 +243,12 @@ func (g *frameGate) Stop() {
 		// process it now. A partial line that is not valid JSON is dropped (a truncated frame would
 		// only make the SDK fail), and nothing waits on it.
 		if b := g.lineBuf; json.Valid(b) {
-			if g.deliver(b) {
-				g.queue.WriteByte('\n')
-			}
+			g.deliver(b)
 		}
 		g.lineBuf = nil
 	}
 	g.stopped = true
+	g.startGrace()
 	g.cond.Broadcast()
 	g.mu.Unlock()
 }
@@ -251,8 +260,10 @@ func (g *frameGate) Expired() bool {
 	return g.expired
 }
 
-// ExpiredC is closed when the grace period ran out with requests unanswered.
-func (g *frameGate) ExpiredC() <-chan struct{} { return g.expiredC }
+// DeadlineC bounds the whole SDK session shutdown, not just response tracking.
+// A valid cancellation can remove the last pending ID while its handler is
+// still unwinding; that must not make an uncooperative handler unbounded.
+func (g *frameGate) DeadlineC() <-chan struct{} { return g.deadlineC }
 
 func (g *frameGate) Close() error { return nil }
 

@@ -54,8 +54,8 @@ var (
 	// and the byte limits in tools/deploy/check-pulled-env.sh. Runtime must
 	// validate the actual Secret value, never the pull-only [SENSITIVE] marker.
 	allowedAuthEmailPattern    = regexp.MustCompile(`^[a-z0-9_%+-]+(\.[a-z0-9_%+-]+)*@[a-z0-9]+(-[a-z0-9]+)*(\.[a-z0-9]+(-[a-z0-9]+)*)*\.[a-z]{2,63}$`)
-	managedAuthEndpointPattern = regexp.MustCompile(`^ep-[a-z0-9-]+$`)
-	managedAuthHostPattern     = regexp.MustCompile(`^([a-z0-9-]+)\.neonauth\.c-[0-9]+\.[a-z0-9-]+\.aws\.neon\.tech$`)
+	managedAuthEndpointPattern = regexp.MustCompile(`^ep-[a-z0-9]+(-[a-z0-9]+)*$`)
+	managedAuthHostPattern     = regexp.MustCompile(`^(ep-[a-z0-9]+(?:-[a-z0-9]+)*)\.neonauth\.c-[0-9]+\.[a-z0-9]+(?:-[a-z0-9]+)*\.aws\.neon\.tech$`)
 	managedAuthDatabasePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 )
 
@@ -69,10 +69,18 @@ func normalizeManagedAuthBaseURL(value, expectedEndpoint string) (string, error)
 		return "", err
 	}
 	endpoint := strings.TrimSpace(expectedEndpoint)
-	hostMatches := managedAuthHostPattern.FindStringSubmatch(strings.ToLower(parsed.Hostname()))
+	// Match the whole authority, not Hostname()/Port(): an empty explicit
+	// port ("host:") has Port() == "" but is not the provider's JWT origin.
+	// Reject Unicode before lowercasing, which maps e.g. Kelvin sign to k.
+	for i := range len(parsed.Host) {
+		if parsed.Host[i] >= 0x80 {
+			return "", errInvalidManagedAuthBaseURL
+		}
+	}
+	parsed.Host = strings.ToLower(parsed.Host)
+	hostMatches := managedAuthHostPattern.FindStringSubmatch(parsed.Host)
 	pathParts := strings.Split(strings.TrimPrefix(parsed.Path, "/"), "/")
-	if !managedAuthEndpointPattern.MatchString(endpoint) ||
-		parsed.Port() != "" ||
+	if len(baseURL) > 255 || len(endpoint) > 63 || !managedAuthEndpointPattern.MatchString(endpoint) ||
 		parsed.RawPath != "" ||
 		len(hostMatches) != 2 ||
 		hostMatches[1] != endpoint ||
@@ -81,7 +89,12 @@ func normalizeManagedAuthBaseURL(value, expectedEndpoint string) (string, error)
 		pathParts[1] != "auth" {
 		return "", errInvalidManagedAuthBaseURL
 	}
-	return baseURL, nil
+	for _, label := range strings.Split(parsed.Host, ".") {
+		if len(label) > 63 {
+			return "", errInvalidManagedAuthBaseURL
+		}
+	}
+	return parsed.String(), nil
 }
 
 func normalizeAuthBaseURL(value string) (string, error) {
@@ -112,4 +125,16 @@ func normalizeAuthPolicy(baseURL, endpoint, allowedEmail string) (string, error)
 		return "", ErrAuthConfiguration
 	}
 	return normalizeManagedAuthBaseURL(baseURL, endpoint)
+}
+
+// The configured allowlist is ASCII. Unicode SimpleFold aliases such as the
+// Kelvin sign and long s must not identify the same account as ASCII k and s.
+func authEmailMatches(email, allowed string) bool {
+	email = strings.TrimSpace(email)
+	for i := range len(email) {
+		if email[i] >= 0x80 {
+			return false
+		}
+	}
+	return email != "" && strings.EqualFold(email, allowed)
 }

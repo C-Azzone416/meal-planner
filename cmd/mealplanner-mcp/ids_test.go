@@ -322,7 +322,7 @@ func TestValidUnicodeCancellationCorrelation(t *testing.T) {
 			`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":` + pair[1] + `}}`
 		g.start(strings.NewReader(input))
 		got, err := io.ReadAll(g)
-		if err != nil || g.Expired() || string(got) != input {
+		if err != nil || g.Expired() || string(got) != input+"\n" {
 			t.Fatalf("valid cancellation failed: err=%v expired=%v bytes=%d/%d", err, g.Expired(), len(got), len(input))
 		}
 	}

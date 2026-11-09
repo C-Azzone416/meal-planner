@@ -24,6 +24,13 @@ The full repository promotion includes the pinned Go MCP SDK `github.com/modelco
 6. Confirm exact supported JSON-RPC ID correlation, rejection of unsupported numeric representations and malformed-Unicode string IDs before SDK dispatch, no rejected/later tool execution, and bounded orderly shutdown. Review compatibility implications for configured MCP clients.
 7. Execute the runbook's token-safe alias recovery example with a fake curl, proving a synthetic token travels only through stdin and not process arguments. No live alias or credential change is part of the test.
 
+## Follow-up parsing-boundary review
+
+- Treat the complete managed-provider authority as policy, including empty/explicit ports and canonical issuer handling. Test every runtime auth entry point, not only literal deployment-config validation.
+- Require case-sensitive, unambiguous auth JSON before typed decoding: registered JWT claims/headers and adjacent webhook/JWKS/proxy identity fields must not be overwritten by case aliases, duplicate decoded keys, malformed Unicode or null coercion. Verify supported provider extensions and exact identity matching still work.
+- Check every recipe string and object key before lossy JSON decoding. Invalid UTF-8 and unpaired surrogate escapes must produce 400 on POST/PUT with no repository call; valid Unicode must survive unchanged within content limits.
+- Exercise the pinned MCP SDK after initialization with padded frames, split writes, LF/CRLF and EOF. Only outer JSON whitespace is normalized; IDs and object contents stay unchanged. Original input size limits, malformed-frame rejection, prior-response drain and no later dispatch remain enforced. Include SDK wire-parser preflight and cancellation parameter validation, and prove that cancelled handlers cannot evade the overall session deadline.
+
 ## Remaining deployment and acceptance gates
 
 - Review all application and local-tool regressions, full CI, workflow/shell checks and disposable-Postgres integration on the exact final head. A clean incremental whitespace diff is not a claim about intentionally truncated historical JSON fixtures in the full release diff.

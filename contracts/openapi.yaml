@@ -6,7 +6,8 @@ info:
     Recipe request objects reject unknown, case-variant and duplicate property names,
     including nested objects. Query encoding must be valid; unknown, repeated and
     empty query parameters are rejected. JSON write bodies, including whitespace,
-    are limited to 256 KiB.
+    are limited to 256 KiB. String values and property names require valid UTF-8
+    and paired Unicode surrogate escapes; malformed Unicode is rejected before storage.
 paths:
   /api/health:
     get:

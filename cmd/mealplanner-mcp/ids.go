@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/C-Azzone416/meal-planner/internal/core/draft"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 var errUnsupportedID = errors.New("unsupported request id: use a valid Unicode string or a canonical integer between -9007199254740991 and 9007199254740991")
@@ -90,6 +92,13 @@ func (g *frameGate) deliver(line []byte) bool {
 			return false
 		}
 		if f != nil {
+			// The SDK treats method:null as an empty request method, while Go's
+			// *string decoder treats it as absent. Reject invalid method types
+			// rather than letting response tracking disagree with dispatch.
+			if method, exists := f["method"]; exists && !draft.ValidJSONString(method) {
+				g.rejectInput(errAmbiguousEnvelope)
+				return false
+			}
 			if id, exists := f["id"]; exists && !supportedID(id) {
 				g.rejectInput(errUnsupportedID)
 				return false
@@ -97,7 +106,9 @@ func (g *frameGate) deliver(line []byte) bool {
 			var method string
 			if json.Unmarshal(f["method"], &method) == nil && method == "notifications/cancelled" {
 				params, err := strictMembers(f["params"], "requestId", "reason", "_meta")
-				if err != nil {
+				_, hasID := f["id"]
+				_, hasTarget := params["requestId"]
+				if err != nil || params == nil || hasID || !hasTarget {
 					g.rejectInput(errAmbiguousEnvelope)
 					return false
 				}
@@ -105,16 +116,37 @@ func (g *frameGate) deliver(line []byte) bool {
 					g.rejectInput(errUnsupportedID)
 					return false
 				}
+				// Only release a tracked target for parameters the SDK canceller
+				// can decode. Invalid reason/_meta must not prematurely expose EOF.
+				var cancellation mcp.CancelledParams
+				if json.Unmarshal(f["params"], &cancellation) != nil {
+					g.rejectInput(errAmbiguousEnvelope)
+					return false
+				}
 			}
 		}
 	}
+	// Preflight the exact pinned SDK wire parser only after raw IDs and
+	// duplicate keys have been checked. Wrong versions/types or excessive
+	// nesting must not reach the transport and abort earlier accepted work.
+	if _, err := jsonrpc.DecodeMessage(line); err != nil {
+		g.rejectInput(errAmbiguousEnvelope)
+		return false
+	}
+	// The SDK requires LF/CR immediately after the JSON value and otherwise
+	// rejects valid trailing JSON whitespace. Normalize only frame-boundary
+	// whitespace after validating the entire original line; preserve the JSON
+	// object's bytes (including ID spellings and tool arguments) unchanged.
+	line = bytes.Trim(line, " \t\r\n")
 	g.line(line)
 	g.queue.Write(line)
+	g.queue.WriteByte('\n')
 	return true
 }
 
 func (g *frameGate) rejectInput(err error) {
 	g.inputErr = err
 	g.stopped = true
+	g.startGrace()
 	g.lineBuf = nil
 }

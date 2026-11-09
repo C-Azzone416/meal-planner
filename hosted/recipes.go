@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/C-Azzone416/meal-planner/internal/core/draft"
 )
 
 // RecipeOwner is derived only from the verified token. The issuer namespace
@@ -375,12 +377,17 @@ func recipeObjectFields(raw json.RawMessage, allowed map[string]bool) (map[strin
 	}
 	fields := make(map[string]json.RawMessage)
 	for decoder.More() {
+		start := decoder.InputOffset()
 		token, err := decoder.Token()
 		if err != nil {
 			return nil, bad
 		}
+		// Token replaces malformed Unicode escapes. Check the original key
+		// before using its decoded spelling for the allowlist or duplicates.
+		rawKey := bytes.TrimSpace(raw[start:decoder.InputOffset()])
+		rawKey = bytes.TrimPrefix(rawKey, []byte(","))
 		key, ok := token.(string)
-		if !ok || !allowed[key] {
+		if !ok || !draft.ValidJSONString(rawKey) || !allowed[key] {
 			return nil, bad
 		}
 		if _, exists := fields[key]; exists {
@@ -434,6 +441,12 @@ func requiredRecipeFields(raw json.RawMessage, t reflect.Type) error {
 			if err := requiredRecipeFields(value, f.Type); err != nil {
 				return err
 			}
+		}
+	} else if t.Kind() == reflect.String {
+		// Validate every string, including nested fields and array elements,
+		// before Unmarshal can silently replace unpaired surrogate escapes.
+		if !draft.ValidJSONString(raw) {
+			return bad
 		}
 	} else if t.Kind() == reflect.Slice {
 		var items []json.RawMessage

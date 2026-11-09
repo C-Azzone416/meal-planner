@@ -69,20 +69,20 @@ type beforeCreatePayload struct {
 	} `json:"user"`
 }
 
-type detachedJWSHeader struct {
-	Algorithm string `json:"alg"`
-	KeyID     string `json:"kid"`
-}
+type detachedJWSHeader = bearerHeader
 
 type jwksDocument struct {
 	Keys []jwk `json:"keys"`
 }
 
 type jwk struct {
-	KeyType string `json:"kty"`
-	Curve   string `json:"crv"`
-	KeyID   string `json:"kid"`
-	X       string `json:"x"`
+	KeyType       string   `json:"kty"`
+	Curve         string   `json:"crv"`
+	KeyID         string   `json:"kid"`
+	X             string   `json:"x"`
+	Algorithm     *string  `json:"alg,omitempty"`
+	Use           *string  `json:"use,omitempty"`
+	KeyOperations []string `json:"key_ops,omitempty"`
 }
 
 type beforeCreateResponse struct {
@@ -170,7 +170,7 @@ func serveAuthBeforeCreate(w http.ResponseWriter, r *http.Request, config AuthWe
 	}
 
 	var payload beforeCreatePayload
-	if err := json.Unmarshal(rawBody, &payload); err != nil {
+	if err := decodeAuthJSON(rawBody, authWebhookFields, &payload); err != nil {
 		http.Error(w, "invalid webhook payload", http.StatusBadRequest)
 		return
 	}
@@ -191,7 +191,7 @@ func serveAuthBeforeCreate(w http.ResponseWriter, r *http.Request, config AuthWe
 
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
-	if !strings.EqualFold(email, strings.TrimSpace(config.AllowedEmail)) {
+	if !authEmailMatches(email, config.AllowedEmail) {
 		_ = json.NewEncoder(w).Encode(beforeCreateResponse{
 			Allowed:      false,
 			ErrorMessage: "This app is private and is not accepting signups for this email.",
@@ -204,7 +204,7 @@ func serveAuthBeforeCreate(w http.ResponseWriter, r *http.Request, config AuthWe
 
 func verifyDetachedWebhookSignature(rawBody []byte, timestamp, compactSignature, expectedKeyID string, publicKey ed25519.PublicKey) error {
 	parts := strings.Split(compactSignature, ".")
-	if len(parts) != 3 || parts[1] != "" {
+	if len(parts) != 3 || parts[1] != "" || len(parts[0]) > base64.RawURLEncoding.EncodedLen(maxBearerTokenBytes) {
 		return errors.New("expected detached JWS")
 	}
 	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
@@ -212,10 +212,13 @@ func verifyDetachedWebhookSignature(rawBody []byte, timestamp, compactSignature,
 		return fmt.Errorf("decode JWS header: %w", err)
 	}
 	var header detachedJWSHeader
-	if err := json.Unmarshal(headerBytes, &header); err != nil {
+	if len(headerBytes) > maxBearerTokenBytes {
+		return errors.New("JWS header is too large")
+	}
+	if err := decodeAuthJSON(headerBytes, authHeaderFields, &header); err != nil {
 		return fmt.Errorf("parse JWS header: %w", err)
 	}
-	if header.Algorithm != "EdDSA" || header.KeyID == "" || header.KeyID != expectedKeyID {
+	if !header.supported() || header.KeyID != expectedKeyID {
 		return errors.New("unexpected JWS header")
 	}
 	signatureBytes, err := base64.RawURLEncoding.DecodeString(parts[2])
@@ -258,21 +261,33 @@ func fetchEd25519PublicKey(ctx context.Context, client HTTPDoer, jwksURL, keyID 
 		return nil, errors.New("JWKS response is too large")
 	}
 	var document jwksDocument
-	if err := json.Unmarshal(body, &document); err != nil {
+	if err := decodeAuthJSON(body, authJWKSFields, &document); err != nil {
 		return nil, err
 	}
+	var publicKey ed25519.PublicKey
 	for _, candidate := range document.Keys {
 		if candidate.KeyID != keyID {
 			continue
 		}
+		if publicKey != nil {
+			return nil, errors.New("ambiguous signing key ID")
+		}
 		if candidate.KeyType != "OKP" || candidate.Curve != "Ed25519" {
 			return nil, errors.New("signing key has an unexpected type")
+		}
+		if (candidate.Algorithm != nil && *candidate.Algorithm != "EdDSA") ||
+			(candidate.Use != nil && *candidate.Use != "sig") ||
+			(candidate.KeyOperations != nil && (len(candidate.KeyOperations) != 1 || candidate.KeyOperations[0] != "verify")) {
+			return nil, errors.New("signing key does not permit EdDSA verification")
 		}
 		decoded, err := base64.RawURLEncoding.DecodeString(candidate.X)
 		if err != nil || len(decoded) != ed25519.PublicKeySize {
 			return nil, errors.New("signing key is invalid")
 		}
-		return ed25519.PublicKey(decoded), nil
+		publicKey = ed25519.PublicKey(decoded)
+	}
+	if publicKey != nil {
+		return publicKey, nil
 	}
 	return nil, errSigningKeyNotFound
 }

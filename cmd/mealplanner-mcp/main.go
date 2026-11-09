@@ -131,9 +131,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdin i
 			code = 1
 		}
 		return code
-	case <-gate.ExpiredC():
-		// A stuck call would keep Run from returning; the grace period is the bound.
-		logger.Error("shutdown grace period elapsed with requests unanswered")
+	case <-gate.DeadlineC():
+		// A cancelled call may no longer owe a response but still keep Run
+		// waiting. Bound session completion independently of pending IDs.
+		logger.Error("shutdown grace period elapsed before session completed")
 		return 1
 	}
 }

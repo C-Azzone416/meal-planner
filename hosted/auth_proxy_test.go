@@ -410,3 +410,18 @@ func TestAuthProxyForwardsCanonicalEmailAndSDKFields(t *testing.T) {
 		}
 	}
 }
+
+func TestAuthProxyRejectsLossyOrDeepExtraJSON(t *testing.T) {
+	for _, value := range []string{
+		`"\ud800"`, `"\udfff"`, `"` + string([]byte{0xff}) + `"`,
+		`{"key":1,"key":2}`, `[ {"key":1,"\u006bey":2} ]`,
+		strings.Repeat(`[`, maxAuthJSONDepth) + `null` + strings.Repeat(`]`, maxAuthJSONDepth),
+	} {
+		if _, accepted := authProxyEmailPayload([]byte(`{"email":"allowed@example.invalid","extra":`+value+`}`), testAllowedEmail); accepted {
+			t.Errorf("ambiguous provider payload forwarded: %s", value)
+		}
+	}
+	if _, accepted := authProxyEmailPayload([]byte(`{"email":"allowed@example.invalid","extra":{"nullable":null,"emoji":"\ud83c\udf7d"}}`), testAllowedEmail); !accepted {
+		t.Fatal("valid provider extension rejected")
+	}
+}

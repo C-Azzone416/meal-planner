@@ -47,8 +47,12 @@ type UserIdentity struct {
 type bearerContextKey struct{}
 
 type bearerHeader struct {
-	Algorithm string `json:"alg"`
-	KeyID     string `json:"kid"`
+	Algorithm   string   `json:"alg"`
+	KeyID       string   `json:"kid"`
+	Type        string   `json:"typ,omitempty"`
+	ContentType string   `json:"cty,omitempty"`
+	Critical    []string `json:"crit,omitempty"`
+	Base64      *bool    `json:"b64,omitempty"`
 }
 
 type bearerClaims struct {
@@ -56,6 +60,8 @@ type bearerClaims struct {
 	Audience           json.RawMessage `json:"aud"`
 	Expiration         json.RawMessage `json:"exp"`
 	NotBefore          json.RawMessage `json:"nbf"`
+	IssuedAt           json.RawMessage `json:"iat,omitempty"`
+	JWTID              string          `json:"jti,omitempty"`
 	Subject            string          `json:"sub"`
 	Email              string          `json:"email"`
 	EmailVerifiedCamel *bool           `json:"emailVerified"`
@@ -131,7 +137,7 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 		return UserIdentity{}, ErrInvalidBearer
 	}
 	var header bearerHeader
-	if err := json.Unmarshal(headerBytes, &header); err != nil || header.Algorithm != "EdDSA" || header.KeyID == "" {
+	if err := decodeAuthJSON(headerBytes, authHeaderFields, &header); err != nil || !header.supported() {
 		return UserIdentity{}, ErrInvalidBearer
 	}
 
@@ -159,13 +165,8 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 	if err != nil {
 		return UserIdentity{}, ErrInvalidBearer
 	}
-	decoder := json.NewDecoder(bytes.NewReader(claimsBytes))
-	decoder.UseNumber()
 	var claims bearerClaims
-	if err := decoder.Decode(&claims); err != nil {
-		return UserIdentity{}, ErrInvalidBearer
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+	if err := decodeAuthJSON(claimsBytes, authClaimFields, &claims); err != nil {
 		return UserIdentity{}, ErrInvalidBearer
 	}
 	if claims.Issuer != expectedOrigin || !audienceContains(claims.Audience, expectedOrigin) {
@@ -189,6 +190,13 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 			return UserIdentity{}, ErrInvalidBearer
 		}
 	}
+	// iat is optional and is not an activation time, but when present it must
+	// retain the registered NumericDate type rather than being ignored.
+	if len(claims.IssuedAt) != 0 {
+		if _, err := numericDate(claims.IssuedAt); err != nil {
+			return UserIdentity{}, ErrInvalidBearer
+		}
+	}
 
 	email := strings.TrimSpace(claims.Email)
 	emailVerified := claims.EmailVerifiedCamel != nil && *claims.EmailVerifiedCamel
@@ -199,10 +207,16 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 			emailVerified = *claims.EmailVerifiedSnake
 		}
 	}
-	if claims.Subject == "" || !emailVerified || email == "" || !strings.EqualFold(email, strings.TrimSpace(config.AllowedEmail)) {
+	if claims.Subject == "" || !emailVerified || !authEmailMatches(email, config.AllowedEmail) {
 		return UserIdentity{}, ErrInvalidBearer
 	}
 	return UserIdentity{Issuer: claims.Issuer, Subject: claims.Subject, Email: email}, nil
+}
+
+func (header bearerHeader) supported() bool {
+	// No critical extensions or unencoded payloads are implemented. Ordinary
+	// provider metadata is allowed but never selects the signing key's source.
+	return header.Algorithm == "EdDSA" && header.KeyID != "" && header.Critical == nil && (header.Base64 == nil || *header.Base64)
 }
 
 func audienceContains(raw json.RawMessage, expected string) bool {

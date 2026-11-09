@@ -135,6 +135,34 @@ func TestAuthPolicyFailsClosedAcrossRuntimeEntryPoints(t *testing.T) {
 		{"bare query", validURL + "?", testEndpointID, testAllowedEmail, 500},
 		{"bare fragment", validURL + "#", testEndpointID, testAllowedEmail, 500},
 		{"query", validURL + "?a=b", testEndpointID, testAllowedEmail, 500},
+		{"empty port", testIssuer + ":/neondb/auth", testEndpointID, testAllowedEmail, 500},
+		{"default port", testIssuer + ":443/neondb/auth", testEndpointID, testAllowedEmail, 500},
+		{"double colon", testIssuer + "::/neondb/auth", testEndpointID, testAllowedEmail, 500},
+		{"trailing host dot", testIssuer + "./neondb/auth", testEndpointID, testAllowedEmail, 500},
+		{"bracketed host", "https://[" + strings.TrimPrefix(testIssuer, "https://") + "]/neondb/auth", testEndpointID, testAllowedEmail, 500},
+		{"userinfo", strings.Replace(validURL, "https://", "https://user@", 1), testEndpointID, testAllowedEmail, 500},
+		{"escaped authority", strings.Replace(validURL, "ep-test", "%65p-test", 1), testEndpointID, testAllowedEmail, 500},
+		{"Unicode authority", strings.Replace(validURL, "west", "weſt", 1), testEndpointID, testAllowedEmail, 500},
+		{"Unicode lowercasing authority", strings.Replace(validURL, testEndpointID, "ep-Kelvin", 1), "ep-kelvin", testAllowedEmail, 500},
+		{"escaped Unicode authority", strings.Replace(validURL, testEndpointID, "ep-%E2%84%AAelvin", 1), "ep-kelvin", testAllowedEmail, 500},
+		{"authority suffix", strings.Replace(validURL, ".tech/", ".tech.evil.invalid/", 1), testEndpointID, testAllowedEmail, 500},
+		{"backslash authority", testIssuer + `\evil.invalid/neondb/auth`, testEndpointID, testAllowedEmail, 500},
+		{"endpoint repeated hyphen", strings.Replace(validURL, testEndpointID, "ep--test", 1), "ep--test", testAllowedEmail, 500},
+		{"endpoint trailing hyphen", strings.Replace(validURL, testEndpointID, "ep-test-", 1), "ep-test-", testAllowedEmail, 500},
+		{"endpoint leading hyphen", strings.Replace(validURL, testEndpointID, "-ep-test", 1), "-ep-test", testAllowedEmail, 500},
+		{"endpoint length", strings.Replace(validURL, testEndpointID, "ep-"+strings.Repeat("x", 61), 1), "ep-" + strings.Repeat("x", 61), testAllowedEmail, 500},
+		{"uppercase endpoint policy", validURL, strings.ToUpper(testEndpointID), testAllowedEmail, 500},
+		{"region repeated hyphen", strings.Replace(validURL, "us-west", "us--west", 1), testEndpointID, testAllowedEmail, 500},
+		{"region leading hyphen", strings.Replace(validURL, "us-west", "-us-west", 1), testEndpointID, testAllowedEmail, 500},
+		{"region trailing hyphen", strings.Replace(validURL, "west-2", "west-2-", 1), testEndpointID, testAllowedEmail, 500},
+		{"region label length", strings.Replace(validURL, "us-west-2", strings.Repeat("a", 64), 1), testEndpointID, testAllowedEmail, 500},
+		{"escaped database", testIssuer + "/%6eeondb/auth", testEndpointID, testAllowedEmail, 500},
+		{"escaped path slash", testIssuer + "/neondb%2fauth", testEndpointID, testAllowedEmail, 500},
+		{"dot path", testIssuer + "/../auth", testEndpointID, testAllowedEmail, 500},
+		{"double path slash", testIssuer + "//neondb/auth", testEndpointID, testAllowedEmail, 500},
+		{"uppercase auth path", testIssuer + "/neondb/Auth", testEndpointID, testAllowedEmail, 500},
+		{"internal whitespace", strings.Replace(validURL, ".neonauth", " .neonauth", 1), testEndpointID, testAllowedEmail, 500},
+		{"URL length", testIssuer + "/" + strings.Repeat("x", 256) + "/auth", testEndpointID, testAllowedEmail, 500},
 		{"endpoint mismatch", validURL, "ep-wrong", testAllowedEmail, 500},
 		{"uppercase local", validURL, testEndpointID, "Allowed@example.invalid", 500},
 		{"uppercase domain", validURL, testEndpointID, "allowed@EXAMPLE.invalid", 500},
@@ -193,6 +221,56 @@ func TestAuthPolicyFailsClosedAcrossRuntimeEntryPoints(t *testing.T) {
 	}
 }
 
+func TestAuthPolicyCanonicalURLAcrossRuntimeEntryPoints(t *testing.T) {
+	for _, baseURL := range []string{
+		testIssuer + "/neondb/auth", "  " + testIssuer + "/neondb/auth/\n",
+		strings.ToUpper(testIssuer) + "/neondb/auth///",
+		testIssuer + "/custom_DB-2/auth/",
+	} {
+		t.Run(baseURL, func(t *testing.T) {
+			canonical, err := normalizeAuthPolicy(baseURL, " "+testEndpointID+" ", testAllowedEmail)
+			if err != nil || !strings.HasPrefix(canonical, testIssuer+"/") || strings.HasSuffix(canonical, "/") {
+				t.Fatalf("canonical URL = %q, %v", canonical, err)
+			}
+			t.Setenv("NEON_AUTH_BASE_URL", baseURL)
+			t.Setenv("NEON_AUTH_ENDPOINT_ID", testEndpointID)
+			t.Setenv("AUTH_ALLOWED_EMAIL", testAllowedEmail)
+			rec := httptest.NewRecorder()
+			AuthConfig(rec, httptest.NewRequest("GET", "/api/auth-config", nil))
+			if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"enabled":true`) {
+				t.Fatalf("config: %d %s", rec.Code, rec.Body.String())
+			}
+			f := newBearerFixture(t)
+			config := f.config()
+			config.BaseURL = baseURL
+			if _, err := VerifyBearer(t.Context(), "Bearer "+f.token(t, f.claims()), config); err != nil {
+				t.Fatalf("canonical provider issuer rejected: %v", err)
+			}
+			proxyCalls := 0
+			proxyConfig := AuthProxyConfig{BaseURL: baseURL, ExpectedEndpoint: testEndpointID, AllowedEmail: testAllowedEmail, Client: authProxyDoer(func(r *http.Request) (*http.Response, error) {
+				proxyCalls++
+				if r.URL.String() != canonical+"/get-session" {
+					t.Errorf("proxy URL = %s", r.URL)
+				}
+				return f.client.Do(r)
+			})}
+			rec = httptest.NewRecorder()
+			AuthProxy(proxyConfig).ServeHTTP(rec, httptest.NewRequest("GET", "https://meal.invalid/api/auth-proxy/get-session", nil))
+			if proxyCalls != 1 || rec.Code != 200 {
+				t.Fatalf("proxy calls/status = %d/%d", proxyCalls, rec.Code)
+			}
+			webhook := newWebhookFixture(t)
+			webhookConfig := webhook.config()
+			webhookConfig.BaseURL = baseURL
+			rec = httptest.NewRecorder()
+			AuthBeforeCreate(webhookConfig).ServeHTTP(rec, webhook.request(webhook.payload(testAllowedEmail)))
+			if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"allowed":true`) {
+				t.Fatalf("webhook: %d %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestAuthPolicyAcceptsDeploymentEmailShape(t *testing.T) {
 	for _, email := range []string{
 		"allowed@example.invalid", "first.last+tag_123%test-x@sub-domain.example.invalid",
@@ -202,5 +280,49 @@ func TestAuthPolicyAcceptsDeploymentEmailShape(t *testing.T) {
 		if _, err := normalizeAuthPolicy(testIssuer+"/neondb/auth", testEndpointID, email); err != nil {
 			t.Errorf("deployment-valid email rejected: %v", err)
 		}
+	}
+}
+
+func TestAuthEmailIdentityRejectsUnicodeCaseFoldAcrossEntryPoints(t *testing.T) {
+	for _, tc := range []struct {
+		allowed, email string
+		accepted       bool
+	}{
+		{"kelvin@example.invalid", "Kelvin@example.invalid", false},
+		{"sam@example.invalid", "ſam@example.invalid", false},
+		{"sam@example.invalid", "sam@exampⅼe.invalid", false},
+		{"kelvin@example.invalid", "  KELVIN@example.invalid  ", true},
+		{"sam@example.invalid", "SAM@example.invalid", true},
+	} {
+		t.Run(tc.email, func(t *testing.T) {
+			bearer := newBearerFixture(t)
+			claims := bearer.claims()
+			claims["email"] = tc.email
+			config := bearer.config()
+			config.AllowedEmail = tc.allowed
+			_, err := VerifyBearer(t.Context(), "Bearer "+bearer.token(t, claims), config)
+			if (err == nil) != tc.accepted {
+				t.Errorf("bearer: %v", err)
+			}
+			webhook := newWebhookFixture(t)
+			webhookConfig := webhook.config()
+			webhookConfig.AllowedEmail = tc.allowed
+			rec := httptest.NewRecorder()
+			AuthBeforeCreate(webhookConfig).ServeHTTP(rec, webhook.request(webhook.payload(tc.email)))
+			var response beforeCreateResponse
+			if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &response) != nil || response.Allowed != tc.accepted {
+				t.Errorf("webhook: %d %s", rec.Code, rec.Body.String())
+			}
+			for route := range authProxyEmailRoutes {
+				calls := 0
+				proxy := AuthProxyConfig{BaseURL: testIssuer + "/neondb/auth", ExpectedEndpoint: testEndpointID, AllowedEmail: tc.allowed, Client: authProxyDoer(func(r *http.Request) (*http.Response, error) { calls++; return bearer.client.Do(r) })}
+				body, _ := json.Marshal(map[string]string{"email": tc.email})
+				rec = httptest.NewRecorder()
+				AuthProxy(proxy).ServeHTTP(rec, httptest.NewRequest("POST", "https://meal.invalid/api/auth-proxy/"+route, strings.NewReader(string(body))))
+				if (calls == 1) != tc.accepted {
+					t.Errorf("proxy %s: calls=%d", route, calls)
+				}
+			}
+		})
 	}
 }

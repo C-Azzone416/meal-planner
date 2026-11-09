@@ -290,7 +290,7 @@ func TestGateUnterminatedFinalFrameIsRegisteredBeforeDelivery(t *testing.T) {
 	}
 }
 
-func TestGateDeliversBytesUnmodified(t *testing.T) {
+func TestGatePreservesObjectBytesAndNormalizesDelimiters(t *testing.T) {
 	in := `{"jsonrpc":"2.0","id":1,"method":"x"}` + "\r\n" + `{"jsonrpc":"2.0","method":"n"}` + "\n" + `{"jsonrpc":"2.0","method":"tail"}`
 	g := newFrameGate(100 * time.Millisecond)
 	g.start(strings.NewReader(in))
@@ -299,8 +299,9 @@ func TestGateDeliversBytesUnmodified(t *testing.T) {
 		io.WriteString(g.wrapWriter(io.Discard), `{"jsonrpc":"2.0","id":1,"result":{}}`+"\n")
 	}()
 	b, _ := io.ReadAll(g)
-	if string(b) != in {
-		t.Fatalf("got %q", b)
+	want := strings.ReplaceAll(in, "\r\n", "\n") + "\n"
+	if string(b) != want {
+		t.Fatalf("got %q want %q", b, want)
 	}
 }
 
