@@ -50,7 +50,6 @@ export function inspectAsset(name, bytes) {
   if (/\.json$/i.test(name)) {
     const value = JSON.parse(text)
     assert.ok(value?.name !== '@masra91/framebriar', 'Raw private SDK package manifest in artifact')
-    inspectHeaders(value)
   }
   return text
 }
@@ -60,34 +59,85 @@ function inspectMarkers(text) {
   assert.ok(!/FRAMEBRIAR_FAKE_SERVICE|FRAMEBRIAR_TEST_SECRET|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|-----BEGIN (?:RSA |EC )?PRIVATE KEY-----/.test(text), 'Forbidden credential or fixture marker in artifact')
 }
 
-// Inspect actual response-header containers rather than every object with a
-// `key`: request predicates and transform targets are not {key,value} headers.
-// Shapes: https://vercel.com/docs/build-output-api/configuration
-function inspectHeaders(value) {
-  if (!value || typeof value !== 'object') return
-  for (const [key, child] of Object.entries(value)) {
-    if (key === 'headers') inspectHeaderCollection(child)
-    else if (key === 'transforms') {
-      assert.ok(Array.isArray(child), 'Transforms must be an array')
-      for (const transform of child) inspectTransform(transform)
-    } else if (key === 'contentType') inspectContentType(child)
-    else inspectHeaders(child)
+// Deployment semantics are path- and schema-specific. The ordinary asset
+// scanner must not treat application data named headers/contentType as config.
+// The caller supplies a path relative to .vercel/output, never just a basename.
+export function inspectBuildOutputAsset(outputPath, bytes) {
+  const text = inspectAsset(outputPath, bytes)
+  let parts = outputPath.split('/')
+  // Vercel service outputs contain one standard Build Output subtree each.
+  // Strip exactly this reserved prefix, never a similarly named static asset
+  // or a path inside a function bundle. Services cannot nest.
+  const serviceScope = parts[0] === 'services' && parts.length > 2
+  if (serviceScope) {
+    parts = parts.slice(2)
+    assert.notEqual(parts[0], 'services', 'Nested service output is unsupported')
+  }
+  if (parts.length === 1 && parts[0] === 'config.json') {
+    const config = JSON.parse(text)
+    if (serviceScope) {
+      object(config, 'Service config')
+      for (const key of ['services', 'experimentalServices', 'experimentalServicesV2']) {
+        assert.ok(!Object.hasOwn(config, key), 'Nested service declarations are unsupported')
+      }
+    }
+    inspectOutputConfig(config)
+  }
+  else {
+    // Vercel stops directory traversal at each .func bundle. JSON files inside
+    // that bundle are function data, not sibling prerender declarations.
+    if (parts[0] === 'functions' && parts.at(-1).endsWith('.prerender-config.json') &&
+        !parts.slice(1, -1).some(part => part.endsWith('.func'))) {
+      inspectPrerenderConfig(JSON.parse(text))
+    }
+  }
+  return text
+}
+
+function object(value, label) {
+  assert.ok(value && typeof value === 'object' && !Array.isArray(value), `${label} must be an object`)
+}
+
+// Only these schema-defined properties affect response headers. Do not recurse
+// into unrelated flags, request predicates, metadata, or arbitrary JSON values.
+// https://vercel.com/docs/build-output-api/configuration
+function inspectOutputConfig(config) {
+  object(config, 'Build Output config')
+  if (Object.hasOwn(config, 'routes')) {
+    assert.ok(Array.isArray(config.routes), 'Routes must be an array')
+    for (const route of config.routes) {
+      object(route, 'Route')
+      if (Object.hasOwn(route, 'headers')) inspectHeaderMap(route.headers)
+      if (Object.hasOwn(route, 'transforms')) {
+        assert.ok(Array.isArray(route.transforms), 'Transforms must be an array')
+        for (const transform of route.transforms) inspectTransform(transform)
+      }
+    }
+  }
+  if (Object.hasOwn(config, 'overrides')) {
+    object(config.overrides, 'Overrides')
+    for (const override of Object.values(config.overrides)) {
+      object(override, 'Override')
+      if (Object.hasOwn(override, 'contentType')) inspectContentType(override.contentType)
+    }
   }
 }
 
-function inspectHeaderCollection(headers) {
-  assert.ok(headers && typeof headers === 'object', 'Headers must be a map or list')
-  if (Array.isArray(headers)) {
-    for (const entry of headers) {
-      assert.ok(entry && typeof entry === 'object' && !Array.isArray(entry), 'Invalid header entry')
-      if (Object.hasOwn(entry, 'key')) inspectHeader(entry.key, entry.value)
-      else {
-        // vercel.json-style route groups wrap their header-pair list.
-        assert.ok(Object.hasOwn(entry, 'headers'), 'Missing header-pair list')
-        inspectHeaderCollection(entry.headers)
-      }
-    }
-  } else for (const [key, value] of Object.entries(headers)) inspectHeader(key, value)
+// Prerender metadata is separate from .vc-config.json and config.json.
+// initialHeaders supplies cached response headers; serialized fallback objects
+// can also select a media type. String fallback references introduce no header.
+function inspectPrerenderConfig(config) {
+  object(config, 'Prerender config')
+  if (Object.hasOwn(config, 'initialHeaders')) inspectHeaderMap(config.initialHeaders)
+  if (config.fallback !== undefined && config.fallback !== null && typeof config.fallback !== 'string') {
+    object(config.fallback, 'Prerender fallback')
+    if (Object.hasOwn(config.fallback, 'contentType')) inspectContentType(config.fallback.contentType)
+  }
+}
+
+function inspectHeaderMap(headers) {
+  object(headers, 'Response headers')
+  for (const [key, value] of Object.entries(headers)) inspectHeader(key, value)
 }
 
 function inspectHeader(key, value) {

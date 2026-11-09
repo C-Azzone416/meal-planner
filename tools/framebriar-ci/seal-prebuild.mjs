@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import {execFileSync} from 'node:child_process'
 import {fileURLToPath} from 'node:url'
 import {sha256} from './policy.mjs'
-import {inspectAsset} from './artifact-tools/asset-policy.mjs'
+import {inspectBuildOutputAsset} from './artifact-tools/asset-policy.mjs'
 const tools=fileURLToPath(new URL('../',import.meta.url))
 try {
   const directory=process.env.PREBUILD_DIRECTORY
@@ -30,12 +30,16 @@ try {
     const project=JSON.parse(fs.readFileSync(path.join(unpack,'.vercel/project.json'),'utf8'))
     assert.ok(process.env.VERCEL_PROJECT_ID&&process.env.VERCEL_ORG_ID)
     assert.equal(project.projectId,process.env.VERCEL_PROJECT_ID);assert.equal(project.orgId,process.env.VERCEL_ORG_ID)
+    const outputRoot = path.join(unpack,'.vercel/output')
     function inspect(dir) {
       for(const item of fs.readdirSync(dir,{withFileTypes:true})) {
         assert.ok(!item.isSymbolicLink())
         assert.ok(!/^\.env|node_modules|\.npmrc$|\.map$|package-lock\.json$/i.test(item.name),'Raw dependencies/config/source maps must not be exported')
         if(item.isDirectory())inspect(path.join(dir,item.name))
-        else inspectAsset(item.name,fs.readFileSync(path.join(dir,item.name)))
+        else {
+          const file = path.join(dir,item.name)
+          inspectBuildOutputAsset(path.relative(outputRoot,file).split(path.sep).join('/'),fs.readFileSync(file))
+        }
       }
     }
     inspect(path.join(unpack,'.vercel'))

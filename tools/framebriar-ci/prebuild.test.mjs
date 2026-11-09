@@ -97,7 +97,7 @@ test('clean seal scans function assets and rejects encoded rewritten routes',()=
   f.pack();assert.notEqual(f.run().status,0,encoding)
  })
  fixture(f=>{
-  fs.writeFileSync(path.join(f.source,'.vercel/output/config.json'),JSON.stringify({headers:[{source:'/style.css',headers:[{key:'Content-Encoding',value:'br'}]}]}))
+  fs.writeFileSync(path.join(f.source,'.vercel/output/config.json'),JSON.stringify({version:3,routes:[{src:'/style.css',headers:[{key:'Content-Encoding',value:'br'}]}]}))
   f.pack();assert.notEqual(f.run().status,0)
  })
 })
@@ -213,7 +213,7 @@ test('both gates accept UTF-8 declarations, ordinary whitespace and UTF-8 route 
  fs.writeFileSync(path.join(f.source,'.vercel/output/static/image.svg'),'<?xml version="1.0" encoding="UTF-8"?><svg/>')
  fs.writeFileSync(path.join(f.source,'.vercel/output/config.json'),JSON.stringify({version:3,overrides:{'image.svg':{contentType:'image/svg+xml; charset=utf-8'}},routes:[
   {src:'/style.css',headers:{'Content-Type':'text/css; charset="UTF-8"','Cache-Control':'public, max-age=3600'}},
-  {src:'/index.html',headers:[{key:'content-type',value:'text/html; charset=utf-8'}]},
+  {src:'/index.html',headers:{'content-type':'text/html; charset=utf-8'}},
   {src:'/image.svg',headers:{'Content-Type':'image/svg+xml'}},
  ]}))
  const check=f.check();assert.equal(check.status,0,check.stderr)
@@ -261,3 +261,80 @@ test('both artifact gates reject valid Wasm with a source-map custom section',()
  f.pack();assert.notEqual(f.run().status,0)
  assert.equal(fs.existsSync(f.env.SEALED_PREBUILD_JSON),false)
 }))
+
+// Both the pre-upload build job and clean reporter execute seal-prebuild.mjs.
+// Exercise their actual archive boundary with schema-realistic ISR artifacts.
+function addPrerender(f, metadata) {
+ const base=path.join(f.source,'.vercel/output/functions/blog/post')
+ fs.mkdirSync(`${base}.func`,{recursive:true})
+ fs.writeFileSync(path.join(`${base}.func`,'.vc-config.json'),JSON.stringify({runtime:'nodejs22.x',handler:'index.js'}))
+ fs.writeFileSync(path.join(`${base}.func`,'index.js'),'module.exports = (req, res) => res.end("synthetic");')
+ fs.writeFileSync(`${base}.prerender-fallback.html`,'<!doctype html><p>Synthetic fallback</p>')
+ fs.writeFileSync(`${base}.prerender-config.json`,JSON.stringify({expiration:60,initialStatus:200,fallback:{type:'FileFsRef',fsPath:'post.prerender-fallback.html',contentType:'text/html; charset=utf-8'},...metadata}))
+}
+for (const [label, metadata] of [
+ ['inline SourceMap',{initialHeaders:{SourceMap:headerMapData}}],
+ ['inline X-SourceMap',{initialHeaders:{'x-SOURCEMAP':headerMapData}}],
+ ['external SourceMap',{initialHeaders:{SourceMap:'/source-map'}}],
+ ['Shift_JIS Content-Type',{initialHeaders:{'content-type':'text/html; charset=Shift_JIS'}}],
+ ['ISO-2022-JP Content-Type',{initialHeaders:{'Content-Type':'text/html; charset=iso-2022-jp'}}],
+ ['Content-Encoding',{initialHeaders:{'Content-Encoding':'br'}}],
+ ['fallback Content-Type',{fallback:{type:'FileFsRef',fsPath:'post.prerender-fallback.html',contentType:'text/html; charset=Shift_JIS'}}],
+]) {
+ test(`shared pre-upload and clean sealer reject prerender ${label}`,()=>fixture(f=>{
+  addPrerender(f,metadata);f.pack()
+  assert.notEqual(f.run().status,0)
+  assert.equal(fs.existsSync(f.env.SEALED_PREBUILD_JSON),false)
+ }))
+}
+test('shared pre-upload and clean sealer accept UTF-8 prerender and ordinary JSON data',()=>fixture(f=>{
+ addPrerender(f,{initialHeaders:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'public, max-age=60'}})
+ const data=JSON.stringify({headers:[{column:'Recipe'}],contentType:'Recipe',transforms:'mash',initialHeaders:{'X-SourceMap':headerMapData,'Content-Type':'text/html; charset=Shift_JIS'}})
+ for(const file of ['static/recipes.json','static/config.json','static/page.prerender-config.json','functions/blog/post.func/config.json','functions/blog/post.func/nested/data.prerender-config.json']) {
+  const full=path.join(f.source,'.vercel/output',file);fs.mkdirSync(path.dirname(full),{recursive:true});fs.writeFileSync(full,data)
+ }
+ fs.writeFileSync(path.join(f.source,'.vercel/output/config.json'),JSON.stringify({version:3,routes:[{src:'/blog/post',headers:{'Content-Type':'text/html; charset=utf-8'}}],flags:JSON.parse(data)}))
+ assert.equal(f.check().status,0)
+ f.pack();const result=f.run();assert.equal(result.status,0,result.stderr)
+ assert.equal(JSON.parse(fs.readFileSync(f.env.SEALED_PREBUILD_JSON)).source_sha,sha)
+}))
+
+
+for(const [relative, metadata] of [
+ ['config.json',{version:3,routes:[{src:'/x',headers:{'X-SourceMap':headerMapData}}]}],
+ ['config.json',{version:3,routes:[{src:'/x',transforms:[{type:'response.headers',op:'set',target:{key:'Content-Type'},args:'text/html; charset=Shift_JIS'}]}]}],
+ ['config.json',{version:3,overrides:{x:{contentType:'text/html; charset=Shift_JIS'}}}],
+ ['functions/page.prerender-config.json',{expiration:60,initialHeaders:{'X-SourceMap':headerMapData}}],
+ ['functions/page.prerender-config.json',{expiration:60,fallback:{fsPath:'page.html',contentType:'text/html; charset=Shift_JIS'}}],
+]) {
+ test(`shared sealer rejects unsafe service metadata ${relative} ${JSON.stringify(metadata).slice(0,70)}`,()=>fixture(f=>{
+  const base=path.join(f.source,'.vercel/output/services/web')
+  fs.mkdirSync(path.join(base,'functions/page.func'),{recursive:true})
+  fs.writeFileSync(path.join(base,'functions/page.func/.vc-config.json'),'{}')
+  fs.writeFileSync(path.join(base,relative),JSON.stringify(metadata))
+  f.pack();assert.notEqual(f.run().status,0)
+  assert.equal(fs.existsSync(f.env.SEALED_PREBUILD_JSON),false)
+ }))
+}
+test('shared sealer accepts safe service metadata without interpreting service data JSON',()=>fixture(f=>{
+ const base=path.join(f.source,'.vercel/output/services/web')
+ fs.mkdirSync(path.join(base,'functions/page.func'),{recursive:true});fs.mkdirSync(path.join(base,'static'))
+ fs.writeFileSync(path.join(base,'functions/page.func/.vc-config.json'),'{}')
+ fs.writeFileSync(path.join(base,'config.json'),JSON.stringify({version:3,routes:[{src:'/x',headers:{'Content-Type':'text/html; charset=utf-8'}}]}))
+ fs.writeFileSync(path.join(base,'functions/page.prerender-config.json'),JSON.stringify({expiration:60,initialHeaders:{'Content-Type':'text/html; charset=utf-8'}}))
+ const data=JSON.stringify({headers:[],contentType:'Recipe',initialHeaders:{'X-SourceMap':headerMapData}})
+ fs.writeFileSync(path.join(base,'static/config.json'),data)
+ fs.writeFileSync(path.join(base,'functions/page.func/page.prerender-config.json'),data)
+ f.pack();const result=f.run();assert.equal(result.status,0,result.stderr)
+}))
+
+
+test('shared sealer explicitly rejects nested service declarations and layouts',()=>{
+ for(const relative of ['services/web/config.json','services/web/services/api/config.json']) fixture(f=>{
+  const full=path.join(f.source,'.vercel/output',relative)
+  fs.mkdirSync(path.dirname(full),{recursive:true})
+  fs.writeFileSync(full,JSON.stringify({version:3,services:[{name:'api'}]}))
+  f.pack();assert.notEqual(f.run().status,0)
+  assert.equal(fs.existsSync(f.env.SEALED_PREBUILD_JSON),false)
+ })
+})
