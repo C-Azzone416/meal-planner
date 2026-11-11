@@ -117,10 +117,3 @@ func (e authConfigError) Error() string { return string(e) }
 
 const errInvalidAuthBaseURL = authConfigError("invalid auth base URL")
 const errInvalidManagedAuthBaseURL = authConfigError("invalid managed auth base URL")
-
-// normalizeAuthPolicy retains the single-member policy entry point for callers
-// migrating to normalizeAuthMembership.
-func normalizeAuthPolicy(baseURL, endpoint, allowedEmail string) (string, error) {
-	baseURL, _, err := normalizeAuthMembership(baseURL, endpoint, allowedEmail, nil)
-	return baseURL, err
-}

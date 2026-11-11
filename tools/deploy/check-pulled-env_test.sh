@@ -394,6 +394,16 @@ EOF
 expect 1 auth-members-conflict "$work/auth-members-conflict/.env"
 check "auth-members-conflict: exactly one format" has auth-members-conflict "must appear exactly once as a complete set"
 
+# Unlike runtime, a pulled env must omit the legacy setting entirely when using the new list.
+fixture auth-members-empty-legacy/.env << EOF
+NEON_AUTH_BASE_URL="[SENSITIVE]"
+NEON_AUTH_ENDPOINT_ID="[SENSITIVE]"
+AUTH_ALLOWED_EMAILS="[SENSITIVE]"
+AUTH_ALLOWED_EMAIL=""
+EOF
+expect 1 auth-members-empty-legacy "$work/auth-members-empty-legacy/.env"
+check "auth-members-empty-legacy: rejects empty legacy value" has auth-members-empty-legacy "AUTH_ALLOWED_EMAIL has an unexpected value"
+
 fixture auth-members-duplicate/.env << EOF
 NEON_AUTH_BASE_URL="[SENSITIVE]"
 NEON_AUTH_ENDPOINT_ID="[SENSITIVE]"

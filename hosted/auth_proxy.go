@@ -234,17 +234,6 @@ func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConf
 	_, _ = w.Write(responseBody)
 }
 
-// authProxyEmailPayload requires one unambiguous lowercase email field and
-// forwards the identity actually checked by the allowlist. A struct unmarshal
-// would accept case-insensitive keys, unlike the upstream JavaScript parser.
-func authProxyEmailPayload(body []byte, allowedEmail string) ([]byte, bool) {
-	members, err := parseAuthMembership(allowedEmail, nil)
-	if err != nil {
-		return nil, false
-	}
-	return authProxyMembershipPayload(body, members)
-}
-
 func authProxyMembershipPayload(body []byte, members authMembership) ([]byte, bool) {
 	payload := make(map[string]json.RawMessage)
 	if err := decodeAuthJSON(body, authEmailFields, &payload); err != nil {

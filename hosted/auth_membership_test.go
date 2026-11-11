@@ -107,6 +107,35 @@ func configureMembershipEnvironment(t *testing.T, raw string) {
 	t.Setenv("AUTH_ALLOWED_EMAILS", raw)
 }
 
+func TestAuthMembershipEmptyLegacyEnvironmentWithNewList(t *testing.T) {
+	for _, tc := range []struct {
+		name, legacy string
+		status       int
+	}{
+		{"empty legacy counts as absent", "", http.StatusOK},
+		{"single space conflicts", " ", http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			configureMembershipEnvironment(t, *membershipJSON(testAllowedEmail))
+			t.Setenv("AUTH_ALLOWED_EMAIL", tc.legacy)
+			config := BearerAuthConfigFromEnvironment()
+			_, members, err := normalizeAuthMembership(config.BaseURL, config.ExpectedEndpoint, config.AllowedEmail, config.AllowedEmailsJSON)
+			if tc.status == http.StatusOK {
+				if _, allowed := members.email(testAllowedEmail); err != nil || !allowed {
+					t.Fatalf("empty legacy rejected valid new membership: %v", err)
+				}
+			} else if !errors.Is(err, ErrAuthConfiguration) {
+				t.Fatalf("non-empty legacy did not fail closed: %v", err)
+			}
+			rec := httptest.NewRecorder()
+			AuthConfig(rec, httptest.NewRequest("GET", "/api/auth-config", nil))
+			if rec.Code != tc.status || strings.Contains(rec.Body.String(), `"enabled":true`) != (tc.status == http.StatusOK) {
+				t.Fatalf("readiness=%d %s want status=%d", rec.Code, rec.Body.String(), tc.status)
+			}
+		})
+	}
+}
+
 func TestAuthMembershipConfigurationFailsClosedEverywhere(t *testing.T) {
 	inputs := invalidMembershipInputs()
 	inputs["conflicting formats"] = *membershipJSON(testAllowedEmail, testOtherEmail)
