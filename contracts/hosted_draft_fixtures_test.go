@@ -184,6 +184,22 @@ func TestHostedDraftFixtureRoundTrips(t *testing.T) {
 			appRaw := readHostedDraftFixture(t, accepted.Name+".app.json")
 			app := decodeHostedDraftFixture[hostedDraftFixtureApp](t, appRaw)
 			equalHostedDraftJSON(t, appRaw, marshalHostedDraftFixture(t, app))
+			// Independent, pinned content goldens catch coordinated omissions from
+			// all five fixture copies, which hop-to-hop equality alone cannot.
+			for _, hop := range []struct {
+				name    string
+				content draft.Content
+			}{
+				{"local", local.Content},
+				{"submit", submit.Content},
+				{"app", app.Content},
+				{"hosted draft", hosted.Draft.Content},
+				{"hosted receipt", hosted.Receipt.SubmissionContent},
+			} {
+				t.Run(hop.name, func(t *testing.T) {
+					assertHostedDraftContentGolden(t, accepted.Name, hop.content)
+				})
+			}
 			if !reflect.DeepEqual(submit.Content, hosted.Draft.Content) ||
 				!reflect.DeepEqual(submit.Content, hosted.Receipt.SubmissionContent) ||
 				!reflect.DeepEqual(submit.Content, app.Content) {
@@ -231,7 +247,25 @@ func TestHostedDraftFixtureRoundTrips(t *testing.T) {
 	}
 }
 
-// Fixed expectations catch a field disappearing from every fixture hop at once.
+// These hashes pin the entire canonical Content, independently of fixture files.
+// A deliberate content change requires review of the content and golden together.
+func assertHostedDraftContentGolden(t *testing.T, name string, c draft.Content) {
+	t.Helper()
+	golden, ok := map[string]string{
+		"incomplete": "faaa71934c2baa0da95d2b672ef6c609d7ed4211e076976ae7cf1dd048d62ca9",
+		"full":       "89f4215565014aafbeb173155514a19b3e02ee0c8d6b93ab8a3df0c79a7066da",
+	}[name]
+	if !ok {
+		t.Fatalf("missing pinned content golden for %q", name)
+	}
+	canonical := canonicalHostedDraftFixtureJSON(t, c)
+	if got := fmt.Sprintf("%x", sha256.Sum256(canonical)); got != golden {
+		t.Fatalf("%s canonical content changed: SHA-256 = %s, want pinned %s\ncanonical content: %s", name, got, golden, canonical)
+	}
+}
+
+// Focused assertions give descriptive failures for selected preservation rules;
+// the independent goldens above pin every canonical field in both accepted cases.
 func assertHostedDraftPreservedFields(t *testing.T, c draft.Content) {
 	t.Helper()
 	if len(c.Ingredients) < 4 || c.Ingredients[0].Quantity != "1 1/2" ||
@@ -586,12 +620,33 @@ func TestHostedDraftFixtureRejections(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{"unsupported-version", "duplicate-source-id", "duplicate-estimate-value", "case-content-title", "case-content-title-pair", "case-estimate-active-minutes", "case-basis-kind", "case-root-content", "invalid-utf8", "missing-content", "oversized-body", "nul-character", "control-character", "raw-control-byte", "huge-version"} {
+	for _, name := range []string{"unsupported-version", "duplicate-source-id", "duplicate-estimate-value", "case-content-title", "case-content-title-pair", "case-estimate-active-minutes", "case-basis-kind", "case-root-content", "invalid-utf8", "missing-content", "missing-version", "oversized-body", "nul-character", "control-character", "raw-control-byte", "huge-version", "root-null", "root-array", "empty-body", "array-content", "string-content", "number-title", "string-ingredients"} {
 		if !seen["rejected/"+name+".json"] {
 			t.Fatalf("missing required rejection fixture: %s", name)
 		}
 	}
 	if !bytes.Contains(readHostedDraftFixture(t, "rejected/invalid-utf8.json"), []byte{0xff}) {
 		t.Fatal("invalid UTF-8 fixture must retain the literal raw byte, not an escape or replacement")
+	}
+}
+
+func TestHostedDraftFixtureWrapperUTF8(t *testing.T) {
+	// Keep the invalid byte outside content: core never sees this version field.
+	// Without the wrapper's raw UTF-8 check, encoding/json accepts/replaces the
+	// byte and the version type check returns invalid_type, not invalid_request.
+	for _, tc := range []struct {
+		name string
+		raw  string
+		code string
+	}{
+		{"valid UTF-8 wrong version type", "{\"content_schema_version\":\"x\",\"content\":{\"title\":\"Synthetic\"}}", "invalid_type"},
+		{"invalid UTF-8 in wrapper", "{\"content_schema_version\":\"\xff\",\"content\":{\"title\":\"Synthetic\"}}", "invalid_request"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, failure := checkHostedDraftFixtureSubmission([]byte(tc.raw))
+			if failure != (hostedDraftFixtureFailure{Status: 400, Code: tc.code}) {
+				t.Fatalf("got %+v; want status=400 code=%s", failure, tc.code)
+			}
+		})
 	}
 }

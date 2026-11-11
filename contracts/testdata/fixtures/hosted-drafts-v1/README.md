@@ -49,13 +49,24 @@ go test -count=1 ./contracts -run HostedDraft
 ```
 
 The test-only submission decoder checks the specified wrapper and calls existing
-core decode/validation. Typed round trips plus fixed assertions for quantities,
-locators, source refs,
-basis notes and explicit zero catch dropped content, including all-hop omissions.
+core decode/validation. Typed round trips detect differences between hops; selected
+field assertions explain quantity/provenance/zero preservation failures. Independent
+hard-coded SHA-256 goldens of `canonicalHostedDraftFixtureJSON(content)` pin the
+entire full and incomplete canonical content at all five copies: local, submit,
+app, hosted draft content and hosted receipt submission_content. These goldens
+catch coordinated content changes/omissions from all copies; equality between
+copies alone cannot. Core-equivalent optional null/empty forms intentionally share
+a canonical representation. Golden failures identify the accepted case/hop and
+show the actual hash and canonical content; deliberate content changes require
+review of the golden too. A focused wrapper UTF-8 test puts an invalid byte in
+the version field, outside core's content decoder, so removing the wrapper check
+changes the error code and fails independently of core.
 The snapshot-isolation check opens receipt content through the core deep clone
 and mutates nested edit state; replacing that clone with a shallow copy must fail.
 Digest tests cover language-independent encoding and string/array order changes;
 no hosted handler,
 store, migration, bridge, authentication or browser implementation is exercised.
+Header/query rejections are reserved for the later integration tests listed in
+contract section 8; raw-body rejection fixtures do not cover them.
 Later integration and owner Preview acceptance are in contract sections 4–5 and 8.
 Do not infer live acceptance from these synthetic checks.

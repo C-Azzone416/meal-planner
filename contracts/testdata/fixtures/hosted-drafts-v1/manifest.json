@@ -321,6 +321,41 @@
       "file": "rejected/huge-version.json",
       "status": 422,
       "code": "unsupported_content_schema"
+    },
+    {
+      "file": "rejected/root-null.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/root-array.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/empty-body.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/array-content.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/string-content.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/number-title.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/string-ingredients.json",
+      "status": 400,
+      "code": "invalid_type"
     }
   ]
 }

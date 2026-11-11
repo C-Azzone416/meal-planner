@@ -19,7 +19,7 @@ The title-only minimum and structural validation rules remain unchanged.
 | --- | --- | --- |
 | `/api/draft-v1` | Proposed hosted HTTP API major version | Separate from `/api/recipes`; never register these routes in this issue. |
 | `api_version: "draft-v1"` | Server response protocol marker | Required on draft/receipt responses. |
-| `content_schema_version: 1` | Submitted content version | Required request selector, not an assertion about stored state; supported value is 1 only. |
+| `content_schema_version: 1` | Canonical content version | Required selector on submission; persisted server-owned selector for subsequent operations (section 4). Supported value is 1 only. |
 | `schema_version: 1` | Server envelope version | Read-only; independent of local envelope and application build. |
 | `review.policy_version` | Approved review/projection policy | Server-configured version or null while unresolved; no client may choose it. |
 
@@ -41,10 +41,11 @@ capable credential, another owner's well-formed ID returns the same 404 as an
 absent ID. Never return their revision,
 title, receipt or existence. Signed out returns 401. Responses use `no-store`.
 
-The send credential may submit and read its own drafts/receipts, but cannot review,
-approve, or write manual recipes. Review and approval require the signed-in app
-owner through an app-authorized operation. This capability boundary needs #73's
-implementation design; the current manual token alone does not prove this split.
+The send credential may submit and read its own drafts/receipts, but PUT edits,
+review, approve, discard and archive require the signed-in app-owner capability.
+A send credential receives 403 `operation_not_allowed` on each of those operations
+for own, foreign and absent IDs, before lookup. It cannot write manual recipes.
+This capability boundary needs #73's implementation design; the current manual token alone does not prove this split.
 Thus a send credential attempting approval receives 403 even for another owner's
 ID; an app-owner credential attempting that same foreign ID receives 404.
 
@@ -67,7 +68,7 @@ trimming or joining repeated headers. Missing/empty is 400
 `invalid_idempotency_key`. #61's existing endpoints keep their UUID requirement.
 
 All object properties are exact-case. Reject duplicate keys at every depth,
-unknown properties, invalid Unicode, trailing JSON, wrong types, and root null.
+unknown properties, invalid Unicode, trailing JSON, wrong types, and non-object roots.
 Use the core raw decoder and structural validator on `content`, never a map that
 has already dropped duplicate keys. Root fields are both required and non-null;
 version must use JSON integer syntax (not a string, boolean, decimal, or exponent).
@@ -75,9 +76,24 @@ Only `1` is supported: **any other integer token**, including values beyond mach
 integer range, returns 422 `unsupported_content_schema`; do not parse it into a
 fixed-width integer before this comparison. Noninteger syntax/null returns 400
 `invalid_type`.
-Absent content returns 400 `invalid_request`; null content returns 400
-`invalid_type`; canonical content's optional null/absence rules still follow the
-local contract. Unknown fields are errors even if null.
+
+The exact single-fault shape/type outcomes are:
+
+| Request case | HTTP / code |
+| --- | --- |
+| Empty body or malformed JSON | 400 `invalid_request` |
+| Root `null`, array (including `[]`), string, number or boolean | 400 `invalid_request` |
+| Missing `content_schema_version` | 400 `invalid_request` |
+| Version `null`, string, boolean, array, object, decimal or exponent token | 400 `invalid_type` |
+| Integer-token version other than `1` | 422 `unsupported_content_schema` |
+| Missing `content` | 400 `invalid_request` |
+| `content:null`, `content:[]`, `content:"x"`, or any other non-object content | 400 `invalid_type` |
+| `content.title:5` or another non-string non-null title | 400 `invalid_type` |
+| `content.ingredients:"a"` or another non-array non-null ingredients value | 400 `invalid_type` |
+| Any other nested content value of the wrong schema type, including non-object/null list elements | 400 `invalid_type` |
+
+Canonical content's optional null/absence rules still follow the local contract;
+allowed nulls are not wrong-type errors. Unknown fields are errors even if null.
 
 Caller-supplied `owner`, `owner_issuer`, `owner_subject`, `approval`, `approved`,
 `status`, `origin`, `id`, `receipt_id`, `recipe_id`, `revision`, `created_at`,
@@ -191,7 +207,9 @@ normally `not_started`, `in_progress` or `ready`; exclude approved, discarded an
 archived under the proposed P4 lifecycle)
 as summaries `{id,title,status,revision,created_at,updated_at,
 review_state}` and `next_cursor` (opaque string or null). Limit is integer 1–100,
-default 25. Reject repeated/unknown query keys and invalid/foreign-filter cursors.
+default 25. Repeated/unknown query keys and malformed/out-of-range limits return
+400 `invalid_request`; invalid/foreign-filter cursors return 400 `invalid_cursor`.
+These query rules also apply to review GET below.
 Cursor binds API major, owner, environment, filter and last ordering key.
 **HD1 default (proposed), pending P1:** stable ascending UUID keyset ordering.
 P1 may instead choose newest-created or most-recently-edited first, each with UUID
@@ -218,8 +236,9 @@ Review audit/confirmations are stored separately, not charged against that cap.
 There is **no total required-review-item cap**: the former 512-item cap is removed.
 A valid maximum-size draft cannot become unapprovable because of its claim count.
 GET `/api/draft-v1/drafts/{id}/review?limit=100&after=…` enumerates all required items
-and stored confirmations with owner/draft/review/policy-bound cursors, limit 1–256,
-and the response byte bound above. Stale cursors return 409 `revision_mismatch`.
+and stored confirmations with owner/draft/review/policy-bound cursors, limit 1–256
+(default 100), and the response byte bound above. Stale cursors return
+409 `revision_mismatch`.
 The envelope's `review.confirmations` is the first bounded page; optional
 `confirmations_next_cursor` is present only when another page exists. Never derive
 readiness from this first page: approval checks every persisted item. Pagination
@@ -307,7 +326,21 @@ the complete body of a review/edit/approval operation.
 | Approval D then retry K/A | Return R + terminal D and approved_recipe_id; no second recipe, no new draft. |
 | Discard races with send replay/approval | Same owner+draft serialization; one terminal transition wins. Losing transition gets already_terminal or revision_mismatch. No half-approved recipe. |
 
-A body edit is PUT `/api/draft-v1/drafts/{id}`, accepting only
+After capability and owner checks, PUT, review, approve and discard select the
+canonical content schema from the persisted `draft.content_schema_version`, never
+from a client build, receipt, local envelope or inferred content shape. Their
+bodies carry no version selector; a supplied `content_schema_version` is 400
+`unknown_field`. PUT decodes its replacement content with that stored schema;
+review and approve interpret current content with the same schema. If this server
+cannot support that stored version, PUT (edit), review and approve return 422
+`unsupported_content_schema`, without a write, revision increment or coercion.
+Discard (and archive, if enabled) uses the stored version for retained metadata
+but does not decode or migrate content; an unsupported content version does not
+prevent the normal revision-checked lifecycle transition. None of these operations
+changes the persisted content schema or immutable receipt version.
+
+A body edit is PUT `/api/draft-v1/drafts/{id}`, requiring the app-owner capability
+(send credentials receive 403 `operation_not_allowed`) and accepting only
 `{expected_revision,expected_review_revision,content,candidate}`.
 **HD1 default (proposed), pending P3:** candidate is a complete manual-shaped
 planner projection validated against #61 bounds, or null. A broader versioned projection is the P3 alternative.
@@ -387,9 +420,10 @@ owner capability. The server checks the current enumerated items and stores
 `{path,claim_kind,draft_revision,policy_version,value_digest,confirmed,reviewer,
 confirmed_at}` with authenticated reviewer and server timestamp. Clients cannot
 supply reviewer/time/digest. Review writes increment only review.revision and derive
-review.state. Confirmation is reversible while still a draft. No bulk
-"confirm all" operation is implied. Unknown/stale paths, duplicates and arbitrary
-IDs are rejected; all-or-nothing review write.
+review.state. **HD1 default (proposed), pending P1:** confirmation is reversible
+while still a draft, and no bulk "confirm all" operation is offered. P1 must choose
+reversal and bulk-confirm policy before implementing this behavior. Unknown/stale
+paths, duplicates and arbitrary IDs are rejected; all-or-nothing review write.
 
 **HD1 default (proposed), pending P1:** any content, candidate, list order, source,
 basis or mapping edit increments draft revision and invalidates **all**
@@ -482,7 +516,7 @@ retired keys) are required regardless of choice.
 
 | ID / decision | Options | Recommendation | Blocks / change impact if another option is chosen |
 | --- | --- | --- | --- |
-| P1 Required review, copy and list order | Confirm every present claim vs five groups; unknown acknowledgment vs completion; invalidate all confirmations on edit vs dependency-scoped invalidation; exact labels; ascending UUID vs newest-created vs recently-edited list order. | HD1 default (proposed), pending P1: every claim separately; invalidate all on any edit; section 5 labels and send-success label "Saved to Preview as an unreviewed draft"; ascending UUID keyset as a simple deterministic first slice. Owner review never implies safety verification. | Sections 2, 3.1, 4–5 and 8; review `not_started/in_progress/ready/completed`, revision rebinding and cursor keys. Alternatives change Preview-1/2/4/6 and list-order acceptance; `preview-context.json`, `full.hosted.json` and `incomplete.hosted.json` must track chosen copy/state fields; app fixtures change if edit-state review binding changes. Invalidation changes require stable identities/dependency fixtures; list-order choice requires ordered pagination fixtures before implementation. |
+| P1 Required review, copy and list order | Confirm every present claim vs five groups; unknown acknowledgment vs completion; invalidate all confirmations on edit vs dependency-scoped invalidation; reversible confirmations vs final confirmations; individual-only vs bulk confirm; exact labels; ascending UUID vs newest-created vs recently-edited list order. | HD1 default (proposed), pending P1: every claim separately with no bulk confirm; allow reversal while draft; invalidate all on any edit; section 5 labels and send-success label "Saved to Preview as an unreviewed draft"; ascending UUID keyset as a simple deterministic first slice. Owner review never implies safety verification. | Sections 2, 3.1, 4–5 and 8; review `not_started/in_progress/ready/completed`, revision rebinding and cursor keys. Alternatives change Preview-1/2/4/6 and list-order acceptance; `preview-context.json`, `full.hosted.json` and `incomplete.hosted.json` must track chosen copy/state fields; app fixtures change if edit-state review binding changes. Reversal/bulk choices change section 5 review writes and Preview-4, and need explicit acceptance scenarios. Invalidation changes require stable identities/dependency fixtures; list-order choice requires ordered pagination fixtures before implementation. |
 | P2 Sourcing/safety policy | Require owner-checked qualified sources for prep-ahead/storage/safety; allow labeled unverified guidance after acknowledgment; exclude such guidance from approved use. Decide acceptable sources, evidence and reviewer meaning. | Keep all guidance unverified until owner checks an acceptable reference; exclude unresolved guidance from planner/prep use with explicit visible disposition. | Approval of safety/storage/prep-ahead claims, evidence UI and any reviewed/safe wording. Structural validation cannot settle this. |
 | P3 Planner projection and unknowns | Owner completes #61 fields explicitly; expand approved recipe/planner schema for unknowns/text quantities; limit first slice to representable recipes. Decide time/keeping/quantity/phase/classification/cosmetic defaults. | HD1 default (proposed), pending P3: PUT accepts a complete manual-shaped projection or null; PUT and approve apply #61 bounds; retain full canonical content. Broaden the schema before planning with honest unknowns. | Sections 3 mapping/bounds, 4 PUT, 5 approval/candidate, 6 adapters and 8 Preview-4; candidate wire format, `ready` and approved recipe shape. Broader schema changes require versioned projection/approval fixtures and mapping tests; full/incomplete accepted content stays lossless but planner-readiness expectations and Preview-2/4 change. No approved candidate fixture currently selects a policy. |
 | P4 Discard/archive/privacy/retention | Permanent discard vs undo window; archive vs omit; indefinite vs finite content/receipt retention; lifetime tombstones vs expiring namespaces; account deletion. | HD1 default (proposed), pending P4: terminal discard/archive, no restore, finite content retention chosen by Caroline and consumed-key/namespace protection. | Sections 2 envelope/GET, 3.1 active filter, 4 transitions/replay/purge, 5 states, 6 storage and 8 Preview-7; undo adds `discard_pending`/optional `archive_pending`, `undo_until` and revision-checked restore. Lifecycle/replay/retirement acceptance fixtures must change for undo/expiry or omitted archive; `full.hosted.json`/`incomplete.hosted.json` initial `draft` fixtures remain unchanged unless pending/deadline envelope fields become required. Retention duration and purge/account-deletion work remain blocked. |
@@ -498,13 +532,30 @@ exercised, **not approved or safe or planner-ready**. Both remain unreviewed.
 Rejection files exercise owner/approval/authoritative ID/time/revision injection
 at root and content, unsupported version, duplicates and structural errors.
 `contracts/hosted_draft_fixtures_test.go` tests canonical core validity, semantic
-content equality through typed encode/decode at every hop, snapshot isolation
+content equality through typed encode/decode at every hop, plus independent pinned
+SHA-256 goldens of `canonicalHostedDraftFixtureJSON(content)` for **both** full and
+incomplete content at local, submit, app, hosted draft and hosted receipt hops.
+The goldens detect changes to canonical content even if all five copies change
+together; typed equality alone does not. Equivalent optional null/empty forms are
+intentionally normalized by core. Tests also check snapshot isolation
 through the core deep clone used to model app editing, missing-vs-zero and
 per-claim provenance, and strict request rejection.
 Its wrapper validator exists only in `_test.go`; it is not an endpoint or production
 bridge. It does not execute auth, concurrency, policy, database or browser behavior.
 The scenarios in sections 4–5 and the pack below are later integration acceptance,
-not claims that synthetic Go checks prove a hosted system works.
+not claims that synthetic Go checks prove a hosted system works. In particular,
+these header/query boundary rejections are assigned to later integration tests;
+they are not exercised by raw-body fixtures:
+
+- Non-JSON Content-Type: 415 `unsupported_media_type`.
+- Missing/empty Idempotency-Key: 400 `missing_idempotency_key`.
+- Repeated, non-ASCII, overlong or nonmatching Idempotency-Key: 400
+  `invalid_idempotency_key`.
+- Repeated or unknown query keys on list/review GET: 400 `invalid_request`.
+- Invalid/foreign-owner/environment/filter cursor: 400 `invalid_cursor`;
+  stale revision-bound review cursor: 409 `revision_mismatch`.
+- Malformed or out-of-range `limit`: 400 `invalid_request` (list 1–100,
+  default 25; review 1–256, default 100).
 
 ### 8.1 Run record and prerequisites
 
@@ -542,12 +593,12 @@ owner run, record exact resolved values in a private execution report:
 | Preview-1 Local → explicit send | Caroline creates incomplete fixture through the local MCP draft tool. Local-only save shows no hosted receipt. She sees exact Preview origin/account label and chooses the explicit send action. Capture one 201 receipt and working owner-authenticated draft/receipt links. No background send on create/update/validate. |
 | Preview-2 Honest incomplete display | Open receipt link in Preview app. Show "Saved draft · unreviewed" (P1 copy), original title/notes, unknown times/servings as Unknown, no numeric placeholders serialized, missing-content warnings and structural-only notice. It cannot enter Recipes/planner or approve while required values/policy are missing. Reload: same ID/content/review state. |
 | Preview-3 Full provenance and zero | Send full fixture. Display every ingredient raw/structured component, ordered/unclassified steps, source kind/label/locator/link, basis note and source_ref next to every whole/phase estimate and guidance. Explicit zero phase active time shows 0 min; incomplete unknown shows Unknown. `sourced` remains unverified; no URLs are fetched by ingestion. |
-| Preview-4 Review/edit/approval/reload | Caroline edits full draft into an explicitly representable candidate under approved P1–P3, confirms each required claim across all review pages/batches (include a maximum-content case exceeding 512 items), then edits a source/step/order. Under the HD1 default (proposed), pending P1, all confirmations become stale; adapt to the chosen dependency policy. Stale approve fails; she re-reviews and approves. Capture one recipe ID, completed audit and receipt→recipe link; reload app and receipt, confirm approved recipe remains and draft is out of review queue. Planner sees only the approved projection, with canonical provenance available. |
+| Preview-4 Review/edit/approval/reload | Caroline edits full draft into an explicitly representable candidate under approved P1–P3, confirms each required claim across all review pages/batches (include a multi-page review case and multiple confirmation batches), then edits a source/step/order. Under the HD1 default (proposed), pending P1, all confirmations become stale; adapt to the chosen dependency policy. Stale approve fails; she re-reviews and approves. Capture one recipe ID, completed audit and receipt→recipe link; reload app and receipt, confirm approved recipe remains and draft is out of review queue. Planner sees only the approved projection, with canonical provenance available. |
 | Preview-5 Duplicate send and revised snapshot | Retry exact captured key/body before and after web edit and after approval: 200 same receipt/current work, no reset, no extra draft/recipe. Same key with changed content: 409. HD1 default (proposed), pending P5: local edit + explicit new send with new key creates a distinct unreviewed draft/receipt, original snapshot unchanged; exercise explicit replacement instead if P5 chooses it. Double-click/concurrent identical sends create exactly one. |
-| Preview-6 Concurrent review | Two app tabs read same revisions. One edits, the other confirms/edits/approves: 409, preserve unsaved input; reload shows first writer and invalidated confirmations. Approve twice/race discard: one terminal winner and no orphan or duplicate recipe. |
+| Preview-6 Concurrent review | Two app tabs read same revisions. One edits, the other confirms/edits/approves: 409, preserve unsaved input; reload shows first writer and, under the HD1 default (proposed), pending P1, invalidated confirmations; adapt invalidation evidence to the chosen P1 policy. Approve twice/race discard: one terminal winner and no orphan or duplicate recipe. |
 | Preview-7 Discard and late retry | Discard an unapproved draft, reload and follow receipt. HD1 default (proposed), pending P4: active queue excludes it, terminal status remains, no restore. If P4 selects undo, observe pending status/deadline, restore before expiry and test expiry/restore race; no purge during the undo window. Retry old captured send: same discarded receipt or 410 retired summary, never recreated. Repeat after any P4 retention purge/expiry test clock; archive if enabled. Explicit new key creates new work only after a new send decision. |
-| Preview-8 Cross-user and environment isolation | Sign out, links/API yield 401. Sign in as independently provisioned owner B with app-owner capability; A's draft/receipt/recipe IDs yield 404 across get/review/edit/discard/approve. A send-only credential gets 403 on review/approve for own, foreign and absent IDs, before lookup; B's list is empty of A. Same operation key under B creates only B-owned work, with no A content. Switch back A: A data unchanged, no B cache bleed. Test equal subject/different trusted issuer in isolated auth tests; Preview token/receipt is unusable in Production. |
-| Preview-9 Rejected inputs and failure | Run each rejected fixture through later submit boundary; match section 3 errors, no write/receipt. Simulate timeout/503 after possible commit; UI says outcome unknown, retries same captured key/body and converges on one receipt. Unsupported version cannot say saved. |
+| Preview-8 Cross-user and environment isolation | Sign out, links/API yield 401. Sign in as independently provisioned owner B with app-owner capability; A's draft/receipt/recipe IDs yield 404 across get/review/edit/discard/approve and archive if enabled. A send-only credential gets 403 on PUT edit, review, approve, discard and archive (if enabled) for own, foreign and absent IDs, before lookup; B's list is empty of A. Same operation key under B creates only B-owned work, with no A content. Switch back A: A data unchanged, no B cache bleed. Test equal subject/different trusted issuer in isolated auth tests; Preview token/receipt is unusable in Production. |
+| Preview-9 Rejected inputs and failure | Run each rejected fixture and the header/query rejection cases listed above through their later integration boundaries; match sections 2–3 errors, no write/receipt. Simulate timeout/503 after possible commit; UI says outcome unknown, retries same captured key/body and converges on one receipt. Unsupported version cannot say saved. |
 
 #25 records expected/actual, private exact labels/links, owner-operated steps,
 reload evidence and any failures; shared issue evidence remains synthetic/redacted.
