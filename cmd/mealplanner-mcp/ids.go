@@ -118,8 +118,9 @@ func (g *frameGate) deliver(line []byte) bool {
 	// Check the original bytes before changing gate state or forwarding.
 	// Admission still gives a malformed cancellation ID its specific error.
 	validUTF8 := utf8.Valid(line)
+	validEnvelope := draft.ValidUniqueJSONEnvelope(line, "jsonrpc", "method", "id", "params", "result", "error")
 	if req, ok := msg.(*jsonrpc.Request); ok {
-		forward, err := g.admitRequest(req, validUTF8)
+		forward, err := g.admitRequest(req, validUTF8, validEnvelope)
 		if err != nil {
 			g.rejectInput(err)
 			return false
@@ -127,7 +128,7 @@ func (g *frameGate) deliver(line []byte) bool {
 		if !forward {
 			return true
 		}
-	} else if !validUTF8 {
+	} else if !validEnvelope {
 		g.rejectInput(errAmbiguousEnvelope)
 		return false
 	}
@@ -139,7 +140,7 @@ func (g *frameGate) deliver(line []byte) bool {
 }
 
 // admitRequest reserves calls and returns whether the SDK should see the frame.
-func (g *frameGate) admitRequest(req *jsonrpc.Request, validUTF8 bool) (bool, error) {
+func (g *frameGate) admitRequest(req *jsonrpc.Request, validUTF8, validEnvelope bool) (bool, error) {
 	if !validUTF8 && req.Method != "notifications/cancelled" {
 		return false, errAmbiguousEnvelope
 	}
@@ -157,7 +158,7 @@ func (g *frameGate) admitRequest(req *jsonrpc.Request, validUTF8 bool) (bool, er
 		if !supportedID(target) {
 			return false, errUnsupportedID
 		}
-		if !validUTF8 || !draft.ValidUniqueJSONMembers(req.Params) {
+		if !validEnvelope || !draft.ValidUniqueJSONMembers(req.Params) {
 			return false, errAmbiguousEnvelope
 		}
 		// Invalid reason or _meta must not prematurely expose EOF.
@@ -179,6 +180,9 @@ func (g *frameGate) admitRequest(req *jsonrpc.Request, validUTF8 bool) (bool, er
 		if len(req.Params) > 0 && !draft.ValidUniqueJSONMembers(req.Params) {
 			return false, errAmbiguousEnvelope
 		}
+	}
+	if !validEnvelope {
+		return false, errAmbiguousEnvelope
 	}
 	if req.IsCall() {
 		if _, exists := g.seen[req.ID]; exists {

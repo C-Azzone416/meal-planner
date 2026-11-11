@@ -149,7 +149,7 @@ func TestValidateTable(t *testing.T) {
 		{"url with empty userinfo", func(c *draft.Content) { c.Sources[0].URL = "https://@example.com/x" }, []string{"invalid_value /sources/0/url"}, nil},
 		{"url with space", func(c *draft.Content) { c.Sources[0].URL = "https://example.com/a b" }, []string{"invalid_value /sources/0/url"}, nil},
 		{"url with control char", func(c *draft.Content) { c.Sources[0].URL = "https://example.com/a\x01" }, []string{"invalid_characters /sources/0/url"}, nil},
-		{"url with bidi mark", func(c *draft.Content) { c.Sources[0].URL = "https://example.com/a\u200f" }, []string{"invalid_characters /sources/0/url"}, nil},
+		{"url with directional mark", func(c *draft.Content) { c.Sources[0].URL = "https://example.com/a\u200f" }, nil, nil},
 		{"url http ok", func(c *draft.Content) { c.Sources[0].URL = "http://example.com:8080/x?q=1#f" }, nil, nil},
 		{"url uppercase scheme ok", func(c *draft.Content) { c.Sources[0].URL = "HTTPS://EXAMPLE.com/x" }, nil, nil},
 		{"url too long", func(c *draft.Content) { c.Sources[0].URL = "https://example.com/" + runes(2040, "a") }, []string{"too_long /sources/0/url"}, nil},
@@ -338,7 +338,7 @@ func TestValidateUnicodeRunes(t *testing.T) {
 		{"right-to-left text", "שלום עולם مرحبا", true},
 		{"zero width joiner sequence", "👩‍👩‍👧", true},
 		{"bidi override is rejected", "a\u202eb", false},
-		{"line separator U+2028 is not a control character", "a b", true},
+		{"line separator U+2028", "a\u2028b", false},
 		{"non-BMP letters", "𝒜𝒷𝒸", true},
 	}
 	for _, tc := range tests {

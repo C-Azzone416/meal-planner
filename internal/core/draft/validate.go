@@ -84,8 +84,7 @@ type textRule struct {
 	maxRunes int
 }
 
-// multilineText is shared by typed input validation and stored JSON checks.
-// These paths have already been matched to fields of the content schema.
+// multilineText identifies the content fields that allow line breaks and tabs.
 func multilineText(path string) bool {
 	if path == "/notes" {
 		return true
@@ -105,9 +104,9 @@ func (v *validator) text(path, s string, r textRule) {
 	multiline := multilineText(path)
 	if !validChars(s, multiline) {
 		if multiline {
-			v.err(IssueInvalidChars, path, "contains characters that are not allowed (bidirectional controls, control characters other than newline, carriage return and tab, or invalid UTF-8)")
+			v.err(IssueInvalidChars, path, "contains characters that are not allowed (bidirectional embedding, override or isolate controls, control characters other than newline, carriage return and tab, or invalid UTF-8)")
 		} else {
-			v.err(IssueInvalidChars, path, "contains characters that are not allowed (control characters, bidirectional controls, or invalid UTF-8)")
+			v.err(IssueInvalidChars, path, "contains characters that are not allowed (control characters, line or paragraph separators, BOM, bidirectional embedding, override or isolate controls, or invalid UTF-8)")
 		}
 	}
 	if utf8.RuneCountInString(s) > r.maxRunes {
@@ -123,7 +122,10 @@ func validChars(s string, multiline bool) bool {
 		if multiline && (r == '\n' || r == '\r' || r == '\t') {
 			continue
 		}
-		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
+		if unicode.IsControl(r) || (unicode.Is(unicode.Bidi_Control, r) && r != '\u200e' && r != '\u200f' && r != '\u061c') {
+			return false
+		}
+		if !multiline && (r == '\u2028' || r == '\u2029' || r == '\ufeff') {
 			return false
 		}
 	}

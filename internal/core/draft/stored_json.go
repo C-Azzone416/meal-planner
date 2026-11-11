@@ -62,9 +62,10 @@ func isJSONInteger(value []byte) bool {
 }
 
 // ValidStoredDraftShape checks the current schema's field spelling, unique
-// keys at every depth, content shape and allowed content characters. Call it after checking JSON syntax,
-// UTF-8 and schema version. The caller still decodes the typed envelope and
-// checks store invariants such as the ID matching its filename.
+// keys at every depth, content shape and string Unicode. Call it after checking
+// JSON syntax, UTF-8 and schema version. The caller still decodes the typed
+// envelope, calls Validate on its Content and checks store invariants such as
+// the ID matching its filename.
 func ValidStoredDraftShape(raw []byte) bool {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -87,7 +88,7 @@ func ValidStoredDraftShape(raw []byte) bool {
 			continue
 		}
 		field, ok := content[key]
-		if !ok || checkShape(value, field, "/"+key, true) != nil {
+		if !ok || checkShape(value, field, "/"+key) != nil {
 			return false
 		}
 	}

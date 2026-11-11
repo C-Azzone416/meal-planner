@@ -721,7 +721,7 @@ func TestStoredCharacterCorruptionIsSkippedAndLeftIntact(t *testing.T) {
 	}
 	before := snapshot(t, root)
 	show := invoke(t, "", nil, "draft", "show", id, "--data-dir", root, "--json")
-	if show.code != 3 || show.stdout != "" || !strings.Contains(show.err, "the draft file does not match the schema") ||
+	if show.code != 3 || show.stdout != "" || !strings.Contains(show.err, "the draft file has invalid content") ||
 		strings.Contains(show.err, "synthetic") {
 		t.Fatalf("show = %+v", show)
 	}

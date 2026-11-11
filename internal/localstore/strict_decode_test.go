@@ -62,12 +62,12 @@ func TestDecodeStoredDraftContentCharacters(t *testing.T) {
 		{"escape in title", `"title":"first\u001b"`, false},
 		{"C1 in ingredient", `"ingredients":[{"text":"salt\u0085"}]`, false},
 		{"bidi isolate in guidance", `"guidance":[{"text":"notes\u2066"}]`, false},
-		{"bidi mark in source URL", `"sources":[{"url":"https://example.test/\u200f"}]`, false},
+		{"directional mark in source URL", `"title":"قهوة � 👩‍🍳","notes":"one\r\ntwo\tthree","instructions":[{"text":"one\r\ntwo\tthree"}],"sources":[{"id":"s","kind":"url","url":"https://example.test/\u200f"}],"guidance":[{"topic":"other","text":"one\r\ntwo\tthree","basis":{"kind":"agent_estimate"}}]`, true},
 		{"C1 in notes", `"notes":"one\u009b"`, false},
 		{"NUL in step", `"instructions":[{"text":"one\u0000"}]`, false},
 		{"tab in nested basis note", `"instructions":[{"text":"ok","phase_basis":{"note":"one\ttwo"}}]`, false},
 		{"bidi in enum", `"instructions":[{"text":"ok","phase":"prep_ahead\u202e"}]`, false},
-		{"multiline and valid Unicode", `"title":"قهوة � 👩‍🍳","notes":"one\r\ntwo\tthree","instructions":[{"text":"one\r\ntwo\tthree"}],"guidance":[{"text":"one\r\ntwo\tthree"}]`, true},
+		{"multiline and valid Unicode", `"title":"قهوة � 👩‍🍳","notes":"one\r\ntwo\tthree","instructions":[{"text":"one\r\ntwo\tthree"}],"guidance":[{"topic":"other","text":"one\r\ntwo\tthree","basis":{"kind":"agent_estimate"}}]`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d, err := decode([]byte(header+tc.fields+"}"), id)
@@ -87,6 +87,8 @@ func TestReplaceRechecksCorruptionUnderLock(t *testing.T) {
 	for _, tc := range []struct{ name, field string }{
 		{"ambiguous", `"title": "first", "Title": "second"`},
 		{"invalid characters", `"title": "first\u001b\u0085\u202e"`},
+		{"invalid create-time content", `"title": "   "`},
+		{"single-line separator", `"title": "first\u2028"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, root := newStore(t)

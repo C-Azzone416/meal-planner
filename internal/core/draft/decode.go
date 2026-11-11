@@ -58,7 +58,7 @@ func DecodeContent(raw []byte) (Content, []Issue) {
 	if root.kind != nodeObject {
 		return fail(IssueInvalidType, "/", "the input must be a JSON object")
 	}
-	if iss := checkShape(root, reflect.TypeOf(Content{}), "", false); iss != nil {
+	if iss := checkShape(root, reflect.TypeOf(Content{}), ""); iss != nil {
 		return Content{}, []Issue{*iss}
 	}
 	var c Content
@@ -75,13 +75,24 @@ func DecodeContent(raw []byte) (Content, []Issue) {
 // This rejects invalid UTF-8 and unpaired surrogate escapes in keys or values.
 // It uses the draft parser's nesting limit. Callers validate schema and types.
 func ValidUniqueJSONMembers(raw []byte, reservedRootKeys ...string) bool {
+	return validUniqueJSONMembers(raw, 0, reservedRootKeys)
+}
+
+// ValidUniqueJSONEnvelope applies the same ambiguity and Unicode checks to a
+// protocol envelope, allowing each member value the same nesting depth as a
+// standalone params value. The caller checks the envelope's schema and types.
+func ValidUniqueJSONEnvelope(raw []byte, reservedRootKeys ...string) bool {
+	return validUniqueJSONMembers(raw, -1, reservedRootKeys)
+}
+
+func validUniqueJSONMembers(raw []byte, rootDepth int, reservedRootKeys []string) bool {
 	if !utf8.Valid(raw) {
 		return false
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
-	p := &parser{dec: dec, raw: raw, membersOnly: true, reservedRootKeys: reservedRootKeys}
-	if _, err := p.parse(0); err != nil {
+	p := &parser{dec: dec, raw: raw, membersOnly: true, rootDepth: rootDepth, reservedRootKeys: reservedRootKeys}
+	if _, err := p.parse(rootDepth); err != nil {
 		return false
 	}
 	_, err := dec.Token()
@@ -143,6 +154,7 @@ type parser struct {
 	raw              []byte
 	last             int64 // input offset after the previous token
 	membersOnly      bool  // fold member names and skip building the node tree
+	rootDepth        int   // envelope members get the standalone value depth budget
 	reservedRootKeys []string
 }
 
@@ -202,7 +214,7 @@ func (p *parser) parse(depth int) (node, error) {
 						return node{}, errUnpairedSurrogate
 					}
 					identity = foldedJSONKey(key)
-					if depth == 0 {
+					if depth == p.rootDepth {
 						for _, reserved := range p.reservedRootKeys {
 							if key != reserved && strings.EqualFold(key, reserved) {
 								return node{}, errors.New("noncanonical object key")
@@ -348,16 +360,16 @@ func jsonFields(t reflect.Type) map[string]reflect.Type {
 }
 
 // checkShape verifies the JSON shape and string Unicode, returning the first
-// problem in document order. Stored content also gets the field character
-// checks here. For create/update input those checks belong to Validate.
+// problem in document order. Content rules belong to Validate for both input
+// and stored drafts.
 // Null is accepted except as a list element.
-func checkShape(n node, t reflect.Type, path string, stored bool) *Issue {
+func checkShape(n node, t reflect.Type, path string) *Issue {
 	if n.kind == nodeNull {
 		return nil
 	}
 	switch t.Kind() {
 	case reflect.Pointer:
-		return checkShape(n, t.Elem(), path, stored)
+		return checkShape(n, t.Elem(), path)
 	case reflect.Struct:
 		if n.kind != nodeObject {
 			return typeIssue(path, "an object")
@@ -368,7 +380,7 @@ func checkShape(n node, t reflect.Type, path string, stored bool) *Issue {
 			if !ok {
 				return &Issue{Code: IssueUnknownField, Path: unknownFieldPath(path, k), Message: "unknown field"}
 			}
-			if iss := checkShape(n.items[i], ft, path+"/"+escapePointer(k), stored); iss != nil {
+			if iss := checkShape(n.items[i], ft, path+"/"+escapePointer(k)); iss != nil {
 				return iss
 			}
 		}
@@ -382,7 +394,7 @@ func checkShape(n node, t reflect.Type, path string, stored bool) *Issue {
 			if it.kind == nodeNull {
 				return typeIssue(p, "an object, not null")
 			}
-			if iss := checkShape(it, t.Elem(), p, stored); iss != nil {
+			if iss := checkShape(it, t.Elem(), p); iss != nil {
 				return iss
 			}
 		}
@@ -396,9 +408,6 @@ func checkShape(n node, t reflect.Type, path string, stored bool) *Issue {
 				path = "/"
 			}
 			return &Issue{Code: IssueInvalidChars, Path: path, Message: "contains an unpaired surrogate escape, which is not valid text"}
-		}
-		if stored && !validChars(n.text, multilineText(path)) {
-			return &Issue{Code: IssueInvalidChars, Path: path, Message: "contains characters that are not allowed"}
 		}
 		return nil
 	case reflect.Int, reflect.Int64:

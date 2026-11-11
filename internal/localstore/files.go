@@ -145,5 +145,8 @@ func decode(raw []byte, id string) (draft.Draft, error) {
 	if d.Status != draft.StatusDraft || d.Revision < 1 {
 		return draft.Draft{}, corrupt(draft.CodeInvalidContent, "the draft file has an invalid status or revision", nil)
 	}
+	if !draft.Validate(d.Content).StructurallyValid {
+		return draft.Draft{}, corrupt(draft.CodeInvalidContent, "the draft file has invalid content", nil)
+	}
 	return normalize(d), nil
 }

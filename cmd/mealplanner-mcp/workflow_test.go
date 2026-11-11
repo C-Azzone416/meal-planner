@@ -60,6 +60,52 @@ func dirSnapshot(t *testing.T, dir string) map[string]string {
 	return out
 }
 
+func TestWorkflowDirectionalMarksRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	const rtl = "שלום\u200e עולם\u200f مرحبا\u061c"
+	p := start(t, dir)
+	p.initialize("2025-11-25")
+	content := map[string]any{"title": rtl, "notes": rtl + "\n" + rtl}
+	isErr, created := p.tool("draft_create", map[string]any{"draft": content})
+	if isErr {
+		t.Fatalf("create: %v", created)
+	}
+	id := created["draft"].(map[string]any)["id"].(string)
+	isErr, updated := p.tool("draft_update", map[string]any{"id": id, "expected_revision": 1, "draft": content})
+	if isErr || updated["draft"].(map[string]any)["title"] != rtl {
+		t.Fatalf("update: %v", updated)
+	}
+	if code := p.shutdown(); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, p.stderr)
+	}
+
+	p = start(t, dir)
+	p.initialize("2025-11-25")
+	isErr, got := p.tool("draft_get", map[string]any{"id": id})
+	if isErr {
+		t.Fatalf("get: %v", got)
+	}
+	if saved := got["draft"].(map[string]any); saved["title"] != rtl || saved["notes"] != content["notes"] || saved["revision"] != float64(2) {
+		t.Fatalf("stored round trip: %v", saved)
+	}
+	isErr, list := p.tool("draft_list", map[string]any{})
+	if isErr || list["total"] != float64(1) || list["drafts"].([]any)[0].(map[string]any)["title"] != rtl {
+		t.Fatalf("list: %v", list)
+	}
+	if code := p.shutdown(); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, p.stderr)
+	}
+
+	cli := buildCLI(t)
+	out, stderr, code := runCLI(t, cli, "draft", "show", id, "--data-dir", dir, "--json")
+	var shown struct {
+		Draft map[string]any `json:"draft"`
+	}
+	if code != 0 || stderr != "" || json.Unmarshal([]byte(out), &shown) != nil || !reflect.DeepEqual(shown.Draft, got["draft"]) {
+		t.Fatalf("CLI round trip: exit=%d stderr=%s stdout=%s", code, stderr, out)
+	}
+}
+
 func TestWorkflowMCPCreateRestartCLIInspect(t *testing.T) {
 	cli := buildCLI(t)
 	dir := filepath.Join(t.TempDir(), "data")
