@@ -1,0 +1,434 @@
+package contracts
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/C-Azzone416/meal-planner/internal/core/draft"
+)
+
+// These types and the decoder below are fixture-only specifications of proposed
+// HD1, not hosted handlers, persistence, a bridge, or a shipped client.
+const hostedDraftFixtures = "testdata/fixtures/hosted-drafts-v1"
+
+type hostedDraftFixtureManifest struct {
+	Accepted []struct {
+		Name         string   `json:"name"`
+		WarningCodes []string `json:"warning_codes"`
+	} `json:"accepted"`
+	Rejected []struct {
+		File      string `json:"file"`
+		Status    int    `json:"status"`
+		Code      string `json:"code"`
+		IssueCode string `json:"issue_code"`
+	} `json:"rejected"`
+}
+
+type hostedDraftFixtureSubmission struct {
+	ContentSchemaVersion int           `json:"content_schema_version"`
+	Content              draft.Content `json:"content"`
+}
+
+type hostedDraftFixtureReview struct {
+	Revision      int64           `json:"revision"`
+	State         string          `json:"state"`
+	DraftRevision int64           `json:"draft_revision"`
+	PolicyVersion *string         `json:"policy_version"`
+	Candidate     json.RawMessage `json:"candidate"`
+	Confirmations []struct {
+		Path          string    `json:"path"`
+		ClaimKind     string    `json:"claim_kind"`
+		DraftRevision int64     `json:"draft_revision"`
+		PolicyVersion string    `json:"policy_version"`
+		ValueDigest   string    `json:"value_digest"`
+		Confirmed     bool      `json:"confirmed"`
+		Reviewer      string    `json:"reviewer"`
+		ConfirmedAt   time.Time `json:"confirmed_at"`
+	} `json:"confirmations"`
+}
+
+type hostedDraftFixtureEnvelope struct {
+	SchemaVersion        int    `json:"schema_version"`
+	ContentSchemaVersion int    `json:"content_schema_version"`
+	ID                   string `json:"id"`
+	Revision             int64  `json:"revision"`
+	Status               string `json:"status"`
+	Origin               string `json:"origin"`
+	Owner                struct {
+		Issuer  string `json:"issuer"`
+		Subject string `json:"subject"`
+	} `json:"owner"`
+	CreatedAt        time.Time                `json:"created_at"`
+	UpdatedAt        time.Time                `json:"updated_at"`
+	Content          draft.Content            `json:"content"`
+	Review           hostedDraftFixtureReview `json:"review"`
+	ApprovedRecipeID *string                  `json:"approved_recipe_id"`
+}
+
+type hostedDraftFixtureReceipt struct {
+	ID                   string        `json:"id"`
+	DraftID              string        `json:"draft_id"`
+	SubmittedAt          time.Time     `json:"submitted_at"`
+	AcceptedRevision     int64         `json:"accepted_revision"`
+	ContentSchemaVersion int           `json:"content_schema_version"`
+	SubmissionContent    draft.Content `json:"submission_content"`
+	Links                struct {
+		Receipt string `json:"receipt"`
+		Draft   string `json:"draft"`
+	} `json:"links"`
+}
+
+type hostedDraftFixtureResponse struct {
+	APIVersion string                     `json:"api_version"`
+	Draft      hostedDraftFixtureEnvelope `json:"draft"`
+	Receipt    hostedDraftFixtureReceipt  `json:"receipt"`
+	Validation draft.ValidationResult     `json:"validation"`
+}
+
+type hostedDraftFixtureApp struct {
+	ContentSchemaVersion int           `json:"content_schema_version"`
+	Content              draft.Content `json:"content"`
+	DraftRevision        int64         `json:"draft_revision"`
+	ReviewRevision       int64         `json:"review_revision"`
+}
+
+func readHostedDraftFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(hostedDraftFixtures, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func decodeHostedDraftFixture[T any](t *testing.T, raw []byte) T {
+	t.Helper()
+	var value T
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		t.Fatal(err)
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		t.Fatal("fixture contains trailing JSON")
+	}
+	return value
+}
+
+// Compare semantic JSON as well as typed values: successful typed round trips
+// alone could conceal an accidentally omitted Content field in the fixture type.
+func equalHostedDraftJSON(t *testing.T, expected, actual []byte) {
+	t.Helper()
+	decode := func(b []byte) any {
+		decoder := json.NewDecoder(bytes.NewReader(b))
+		decoder.UseNumber()
+		var value any
+		if err := decoder.Decode(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	if !reflect.DeepEqual(decode(expected), decode(actual)) {
+		t.Fatalf("JSON content changed\nexpected: %s\nactual: %s", expected, actual)
+	}
+}
+
+func marshalHostedDraftFixture(t *testing.T, value any) []byte {
+	t.Helper()
+	b, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestHostedDraftFixtureRoundTrips(t *testing.T) {
+	manifest := decodeHostedDraftFixture[hostedDraftFixtureManifest](t, readHostedDraftFixture(t, "manifest.json"))
+	if len(manifest.Accepted) != 2 {
+		t.Fatal("both incomplete and full fixtures are required")
+	}
+	for _, accepted := range manifest.Accepted {
+		t.Run(accepted.Name, func(t *testing.T) {
+			localRaw := readHostedDraftFixture(t, accepted.Name+".local.json")
+			local := decodeHostedDraftFixture[draft.Draft](t, localRaw)
+			if !draft.ValidID(local.ID) || local.SchemaVersion != 1 || local.Status != "draft" || local.Revision != 7 {
+				t.Fatal("invalid synthetic local envelope")
+			}
+			equalHostedDraftJSON(t, localRaw, marshalHostedDraftFixture(t, local))
+			submitRaw := readHostedDraftFixture(t, accepted.Name+".submit.json")
+			submit, failure := checkHostedDraftFixtureSubmission(submitRaw)
+			if failure.Code != "" {
+				t.Fatalf("submission rejected: %+v", failure)
+			}
+			equalHostedDraftJSON(t, submitRaw, marshalHostedDraftFixture(t, submit))
+			if !reflect.DeepEqual(local.Content, submit.Content) {
+				t.Fatal("local content was changed during submission mapping")
+			}
+			hostedRaw := readHostedDraftFixture(t, accepted.Name+".hosted.json")
+			hosted := decodeHostedDraftFixture[hostedDraftFixtureResponse](t, hostedRaw)
+			equalHostedDraftJSON(t, hostedRaw, marshalHostedDraftFixture(t, hosted))
+			appRaw := readHostedDraftFixture(t, accepted.Name+".app.json")
+			app := decodeHostedDraftFixture[hostedDraftFixtureApp](t, appRaw)
+			equalHostedDraftJSON(t, appRaw, marshalHostedDraftFixture(t, app))
+			if !reflect.DeepEqual(submit.Content, hosted.Draft.Content) ||
+				!reflect.DeepEqual(submit.Content, hosted.Receipt.SubmissionContent) ||
+				!reflect.DeepEqual(submit.Content, app.Content) {
+				t.Fatal("submission, immutable receipt, hosted content and app content differ")
+			}
+			// App → API uses the content wrapper, not the app state/read tokens.
+			resend, failure := checkHostedDraftFixtureSubmission(marshalHostedDraftFixture(t, hostedDraftFixtureSubmission{1, app.Content}))
+			if failure.Code != "" || !reflect.DeepEqual(resend.Content, local.Content) {
+				t.Fatal("app-to-API round trip lost content")
+			}
+			validation := draft.Validate(submit.Content)
+			if !reflect.DeepEqual(validation, hosted.Validation) || !validation.StructurallyValid || validation.Scope != "structural" {
+				t.Fatal("hosted structural validation differs from shared core")
+			}
+			var warningCodes []string
+			for _, warning := range validation.Warnings {
+				warningCodes = append(warningCodes, warning.Code)
+			}
+			if !slices.Equal(warningCodes, accepted.WarningCodes) {
+				t.Fatalf("warnings = %v, expected %v", warningCodes, accepted.WarningCodes)
+			}
+			assertHostedDraftFixtureEnvelope(t, hosted, app)
+			// Separate typed decodes model independent client/snapshot copies.
+			originalSnapshot := marshalHostedDraftFixture(t, hosted.Receipt)
+			app.Content.Title = "Synthetic app-only edit"
+			if len(app.Content.Sources) > 0 {
+				app.Content.Sources[0].Label = "Synthetic changed source"
+				app.Content.Estimates.ActiveMinutes.Basis.Note = "Synthetic changed basis"
+			}
+			equalHostedDraftJSON(t, originalSnapshot, marshalHostedDraftFixture(t, hosted.Receipt))
+		})
+	}
+}
+
+func assertHostedDraftFixtureEnvelope(t *testing.T, h hostedDraftFixtureResponse, app hostedDraftFixtureApp) {
+	t.Helper()
+	uuid := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	if h.APIVersion != "draft-v1" || h.Draft.SchemaVersion != 1 || h.Draft.ContentSchemaVersion != 1 ||
+		h.Receipt.ContentSchemaVersion != 1 || app.ContentSchemaVersion != 1 {
+		t.Fatal("version boundary changed")
+	}
+	if !uuid.MatchString(h.Draft.ID) || !uuid.MatchString(h.Receipt.ID) || h.Draft.ID == h.Receipt.ID || h.Receipt.DraftID != h.Draft.ID {
+		t.Fatal("invalid server ID relationship")
+	}
+	if h.Draft.Owner.Issuer != "https://auth.preview.example.invalid" || h.Draft.Owner.Subject != "synthetic-owner-a" {
+		t.Fatal("fixture must use the synthetic Preview owner")
+	}
+	if h.Draft.Status != "draft" || h.Draft.Origin != "agent" || h.Draft.ApprovedRecipeID != nil ||
+		h.Draft.Revision != 1 || h.Receipt.AcceptedRevision != 1 || app.DraftRevision != 1 || app.ReviewRevision != 1 {
+		t.Fatal("acceptance must create an unreviewed draft at hosted revision 1")
+	}
+	r := h.Draft.Review
+	if r.Revision != 1 || r.DraftRevision != 1 || r.State != "not_started" || r.PolicyVersion != nil ||
+		string(r.Candidate) != "null" || len(r.Confirmations) != 0 || r.Confirmations == nil {
+		t.Fatal("submission must not confer review or approval")
+	}
+	if h.Receipt.Links.Receipt != "/draft-receipts/"+h.Receipt.ID || h.Receipt.Links.Draft != "/drafts/"+h.Draft.ID {
+		t.Fatal("receipt links do not identify original owner-authenticated work")
+	}
+	for _, stamp := range []time.Time{h.Draft.CreatedAt, h.Draft.UpdatedAt, h.Receipt.SubmittedAt} {
+		if stamp.IsZero() || stamp.Nanosecond() != 0 || stamp.Format(time.RFC3339)[19:] != "Z" {
+			t.Fatal("timestamps must be whole-second UTC")
+		}
+	}
+}
+
+func TestHostedDraftFixtureUnknownZeroAndProvenance(t *testing.T) {
+	incomplete := decodeHostedDraftFixture[hostedDraftFixtureApp](t, readHostedDraftFixture(t, "incomplete.app.json")).Content
+	full := decodeHostedDraftFixture[hostedDraftFixtureApp](t, readHostedDraftFixture(t, "full.app.json")).Content
+	if incomplete.Estimates != nil || incomplete.PhaseEstimates != nil || incomplete.Yield != "" ||
+		incomplete.Title != "  Synthetic café draft 🥣  " {
+		t.Fatal("unknown estimates/yield or original text were replaced")
+	}
+	if full.PhaseEstimates.PrepAhead.ActiveMinutes.Value == nil || *full.PhaseEstimates.PrepAhead.ActiveMinutes.Value != 0 {
+		t.Fatal("explicit estimated zero became unknown")
+	}
+	for _, e := range []*draft.Estimates{full.Estimates, full.PhaseEstimates.PrepAhead, full.PhaseEstimates.PrepTonight, full.PhaseEstimates.CookTonight} {
+		if e.ActiveMinutes == nil || e.TotalMinutes == nil || e.Attention == nil || e.Cleanup == nil || e.Variability == nil {
+			t.Fatal("full fixture must exercise every estimate at each scope")
+		}
+	}
+	if len(full.Sources) != 4 || len(full.Guidance) != 4 || len(full.Instructions) != 4 || full.Instructions[3].Phase != "" ||
+		full.Instructions[0].PhaseBasis.SourceRef != "book_source" || full.Guidance[3].Basis.Kind != draft.BasisSourced || full.Guidance[3].Basis.SourceRef != "" {
+		t.Fatal("provenance, unclassified step or unreferenced sourced claim was lost")
+	}
+	if full.Ingredients[0].Quantity != "1 1/2" || full.Ingredients[1].Quantity != "to taste" ||
+		full.Ingredients[2].Quantity != "0" || full.Ingredients[3].Quantity != "" || full.Yield != "Serves 4–6 (original text)" {
+		t.Fatal("string quantities or ambiguous original yield were coerced")
+	}
+	// Empty optional inputs have the local core's documented equivalence, while
+	// canonical JSON and explicit zero keep distinct semantics and digest inputs.
+	canonical, failure := checkHostedDraftFixtureSubmission([]byte(`{"content_schema_version":1,"content":{"title":"Synthetic"}}`))
+	if failure.Code != "" {
+		t.Fatal(failure)
+	}
+	equivalent, failure := checkHostedDraftFixtureSubmission([]byte(`{"content":{"sources":null,"title":"Synthetic","instructions":[],"ingredients":null,"guidance":[],"estimates":{}},"content_schema_version":1}`))
+	if failure.Code != "" || !reflect.DeepEqual(canonical, equivalent) || hostedDraftFixtureDigest(t, canonical) != hostedDraftFixtureDigest(t, equivalent) {
+		t.Fatal("equivalent optional forms must produce identical canonical snapshots")
+	}
+	withZero, failure := checkHostedDraftFixtureSubmission([]byte(`{"content_schema_version":1,"content":{"title":"Synthetic","estimates":{"active_minutes":{"value":0,"basis":{"kind":"agent_estimate"}}}}}`))
+	if failure.Code != "" || hostedDraftFixtureDigest(t, canonical) == hostedDraftFixtureDigest(t, withZero) {
+		t.Fatal("explicit zero must produce different snapshot content from unknown")
+	}
+}
+
+func TestHostedDraftFixturePreviewLabelsAndLinks(t *testing.T) {
+	context := decodeHostedDraftFixture[struct {
+		Environment       string            `json:"environment"`
+		WebOrigin         string            `json:"web_origin"`
+		APIOrigin         string            `json:"api_origin"`
+		DestinationLabel  string            `json:"destination_label"`
+		AccountLabel      string            `json:"account_label"`
+		OwnerIssuer       string            `json:"owner_issuer"`
+		OwnerSubject      string            `json:"owner_subject"`
+		OtherOwnerSubject string            `json:"other_owner_subject"`
+		Links             map[string]string `json:"links"`
+	}](t, readHostedDraftFixture(t, "preview-context.json"))
+	if context.Environment != "Preview" || context.WebOrigin != "https://preview.example.invalid" ||
+		context.APIOrigin != "https://api.preview.example.invalid" ||
+		context.DestinationLabel != "Preview · https://preview.example.invalid" ||
+		context.AccountLabel != "Account · synthetic-owner-a" || context.OwnerSubject != "synthetic-owner-a" ||
+		context.OwnerIssuer != "https://auth.preview.example.invalid" || context.OtherOwnerSubject != "synthetic-owner-b" {
+		t.Fatal("dry run must identify the exact synthetic Preview destination and separate owners")
+	}
+	base, err := url.Parse(context.WebOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(context.Links) != 4 {
+		t.Fatal("dry run must include all exact receipt and draft links")
+	}
+	for _, name := range []string{"incomplete", "full"} {
+		response := decodeHostedDraftFixture[hostedDraftFixtureResponse](t, readHostedDraftFixture(t, name+".hosted.json"))
+		if response.Draft.Owner.Issuer != context.OwnerIssuer || response.Draft.Owner.Subject != context.OwnerSubject {
+			t.Fatal("response and dry-run account disagree")
+		}
+		for kind, relative := range map[string]string{"receipt": response.Receipt.Links.Receipt, "draft": response.Receipt.Links.Draft} {
+			link, err := url.Parse(relative)
+			if err != nil || link.IsAbs() || link.Host != "" || base.ResolveReference(link).String() != context.Links[name+"_"+kind] {
+				t.Fatalf("%s %s link does not resolve to the exact Preview test-pack URL", name, kind)
+			}
+		}
+	}
+}
+
+func hostedDraftFixtureDigest(t *testing.T, s hostedDraftFixtureSubmission) [32]byte {
+	t.Helper()
+	return sha256.Sum256(append([]byte("draft-v1\n1\n"), marshalHostedDraftFixture(t, s.Content)...))
+}
+
+type hostedDraftFixtureFailure struct {
+	Status    int
+	Code      string
+	IssueCode string
+}
+
+// Test-only raw wrapper decoder. Core owns all nested content rules. Keeping this
+// out of non-test files makes this a fixture executable, not an API implementation.
+func checkHostedDraftFixtureSubmission(raw []byte) (hostedDraftFixtureSubmission, hostedDraftFixtureFailure) {
+	var result hostedDraftFixtureSubmission
+	fail := func(status int, code, issue string) (hostedDraftFixtureSubmission, hostedDraftFixtureFailure) {
+		return hostedDraftFixtureSubmission{}, hostedDraftFixtureFailure{status, code, issue}
+	}
+	if len(raw) > draft.MaxInputBytes {
+		return fail(413, "input_too_large", "")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := decoder.Token(); err != nil || tok != json.Delim('{') {
+		return fail(400, "invalid_request", "")
+	}
+	fields := map[string]json.RawMessage{}
+	for decoder.More() {
+		tok, err := decoder.Token()
+		key, ok := tok.(string)
+		if err != nil || !ok {
+			return fail(400, "invalid_request", "")
+		}
+		if _, exists := fields[key]; exists {
+			return fail(400, "duplicate_key", "")
+		}
+		var value json.RawMessage
+		if decoder.Decode(&value) != nil {
+			return fail(400, "invalid_request", "")
+		}
+		fields[key] = value
+	}
+	if tok, err := decoder.Token(); err != nil || tok != json.Delim('}') || decoder.Decode(new(any)) != io.EOF {
+		return fail(400, "invalid_request", "")
+	}
+	for key := range fields {
+		if key != "content_schema_version" && key != "content" {
+			return fail(400, "unknown_field", "")
+		}
+	}
+	version, ok := fields["content_schema_version"]
+	content, hasContent := fields["content"]
+	if !ok || !hasContent {
+		return fail(400, "invalid_request", "")
+	}
+	if json.Unmarshal(version, &result.ContentSchemaVersion) != nil || bytes.Equal(bytes.TrimSpace(version), []byte("null")) {
+		return fail(400, "invalid_type", "")
+	}
+	if result.ContentSchemaVersion != 1 {
+		return fail(422, "unsupported_content_schema", "")
+	}
+	var issues []draft.Issue
+	result.Content, issues = draft.DecodeContent(content)
+	if len(issues) > 0 {
+		code := issues[0].Code
+		if code == draft.IssueMalformedJSON {
+			code = "invalid_request"
+		}
+		return fail(400, code, "")
+	}
+	validation := draft.Validate(result.Content)
+	if !validation.StructurallyValid {
+		return fail(400, "invalid_content", validation.Errors[0].Code)
+	}
+	return result, hostedDraftFixtureFailure{}
+}
+
+func TestHostedDraftFixtureRejections(t *testing.T) {
+	manifest := decodeHostedDraftFixture[hostedDraftFixtureManifest](t, readHostedDraftFixture(t, "manifest.json"))
+	seen := map[string]bool{}
+	for _, rejected := range manifest.Rejected {
+		t.Run(rejected.File, func(t *testing.T) {
+			if seen[rejected.File] {
+				t.Fatal("duplicate manifest entry")
+			}
+			seen[rejected.File] = true
+			_, failure := checkHostedDraftFixtureSubmission(readHostedDraftFixture(t, rejected.File))
+			if failure.Status != rejected.Status || failure.Code != rejected.Code || failure.IssueCode != rejected.IssueCode {
+				t.Fatalf("got %+v; expected status=%d code=%s issue=%s", failure, rejected.Status, rejected.Code, rejected.IssueCode)
+			}
+		})
+	}
+	files, err := filepath.Glob(filepath.Join(hostedDraftFixtures, "rejected", "*.json"))
+	if err != nil || len(files) != len(seen) {
+		t.Fatal("every rejected fixture must be listed and checked")
+	}
+	for _, scope := range []string{"root", "content"} {
+		for _, field := range []string{"owner", "owner_issuer", "owner_subject", "approval", "approved", "status", "origin", "id", "receipt_id", "recipe_id", "revision", "created_at", "updated_at", "schema_version", "review"} {
+			if !seen[fmt.Sprintf("rejected/%s-%s.json", scope, field)] {
+				t.Fatalf("missing authoritative-field rejection: %s/%s", scope, field)
+			}
+		}
+	}
+	if !seen["rejected/unsupported-version.json"] {
+		t.Fatal("missing unsupported-version fixture")
+	}
+}

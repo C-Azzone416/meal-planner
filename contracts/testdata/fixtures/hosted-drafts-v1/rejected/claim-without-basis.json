@@ -1,0 +1,16 @@
+{
+  "content_schema_version": 1,
+  "content": {
+    "title": "  Synthetic café draft 🥣  ",
+    "ingredients": [],
+    "instructions": [],
+    "notes": "Synthetic incomplete content.\nTimes, yield and claims are unknown.",
+    "sources": [],
+    "guidance": [
+      {
+        "topic": "storage",
+        "text": "Synthetic unsupported claim."
+      }
+    ]
+  }
+}

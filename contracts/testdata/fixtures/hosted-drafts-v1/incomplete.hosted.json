@@ -1,0 +1,76 @@
+{
+  "api_version": "draft-v1",
+  "draft": {
+    "schema_version": 1,
+    "content_schema_version": 1,
+    "id": "11111111-1111-4111-8111-111111111111",
+    "revision": 1,
+    "status": "draft",
+    "origin": "agent",
+    "owner": {
+      "issuer": "https://auth.preview.example.invalid",
+      "subject": "synthetic-owner-a"
+    },
+    "created_at": "2026-11-09T12:00:00Z",
+    "updated_at": "2026-11-09T12:00:00Z",
+    "content": {
+      "title": "  Synthetic café draft 🥣  ",
+      "ingredients": [],
+      "instructions": [],
+      "notes": "Synthetic incomplete content.\nTimes, yield and claims are unknown.",
+      "sources": [],
+      "guidance": []
+    },
+    "review": {
+      "revision": 1,
+      "state": "not_started",
+      "draft_revision": 1,
+      "policy_version": null,
+      "candidate": null,
+      "confirmations": []
+    },
+    "approved_recipe_id": null
+  },
+  "receipt": {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "draft_id": "11111111-1111-4111-8111-111111111111",
+    "submitted_at": "2026-11-09T12:00:00Z",
+    "accepted_revision": 1,
+    "content_schema_version": 1,
+    "submission_content": {
+      "title": "  Synthetic café draft 🥣  ",
+      "ingredients": [],
+      "instructions": [],
+      "notes": "Synthetic incomplete content.\nTimes, yield and claims are unknown.",
+      "sources": [],
+      "guidance": []
+    },
+    "links": {
+      "receipt": "/draft-receipts/22222222-2222-4222-8222-222222222222",
+      "draft": "/drafts/11111111-1111-4111-8111-111111111111"
+    }
+  },
+  "validation": {
+    "scope": "structural",
+    "structurally_valid": true,
+    "errors": [],
+    "warnings": [
+      {
+        "code": "no_ingredients",
+        "path": "/ingredients",
+        "message": "the draft has no ingredients"
+      },
+      {
+        "code": "no_instructions",
+        "path": "/instructions",
+        "message": "the draft has no instructions"
+      },
+      {
+        "code": "no_sources",
+        "path": "/sources",
+        "message": "the draft has no sources"
+      }
+    ],
+    "notice": "Structural check only. This is not food-safety verification, recipe review, or approval."
+  }
+}
