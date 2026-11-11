@@ -12,8 +12,10 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/C-Azzone416/meal-planner/internal/core/draft"
 )
@@ -41,12 +43,13 @@ type hostedDraftFixtureSubmission struct {
 }
 
 type hostedDraftFixtureReview struct {
-	Revision      int64           `json:"revision"`
-	State         string          `json:"state"`
-	DraftRevision int64           `json:"draft_revision"`
-	PolicyVersion *string         `json:"policy_version"`
-	Candidate     json.RawMessage `json:"candidate"`
-	Confirmations []struct {
+	Revision                int64           `json:"revision"`
+	State                   string          `json:"state"`
+	DraftRevision           int64           `json:"draft_revision"`
+	PolicyVersion           *string         `json:"policy_version"`
+	Candidate               json.RawMessage `json:"candidate"`
+	ConfirmationsNextCursor string          `json:"confirmations_next_cursor,omitempty"`
+	Confirmations           []struct {
 		Path          string    `json:"path"`
 		ClaimKind     string    `json:"claim_kind"`
 		DraftRevision int64     `json:"draft_revision"`
@@ -191,6 +194,11 @@ func TestHostedDraftFixtureRoundTrips(t *testing.T) {
 			if failure.Code != "" || !reflect.DeepEqual(resend.Content, local.Content) {
 				t.Fatal("app-to-API round trip lost content")
 			}
+			if accepted.Name == "full" {
+				for _, hop := range []draft.Content{local.Content, submit.Content, hosted.Draft.Content, hosted.Receipt.SubmissionContent, app.Content, resend.Content} {
+					assertHostedDraftPreservedFields(t, hop)
+				}
+			}
 			validation := draft.Validate(submit.Content)
 			if !reflect.DeepEqual(validation, hosted.Validation) || !validation.StructurallyValid || validation.Scope != "structural" {
 				t.Fatal("hosted structural validation differs from shared core")
@@ -203,15 +211,47 @@ func TestHostedDraftFixtureRoundTrips(t *testing.T) {
 				t.Fatalf("warnings = %v, expected %v", warningCodes, accepted.WarningCodes)
 			}
 			assertHostedDraftFixtureEnvelope(t, hosted, app)
-			// Separate typed decodes model independent client/snapshot copies.
+			// Model opening the accepted snapshot for editing via the real core
+			// clone. A shallow clone now aliases receipt slices/pointers and fails.
+			app.Content = hosted.Receipt.SubmissionContent.Clone()
 			originalSnapshot := marshalHostedDraftFixture(t, hosted.Receipt)
 			app.Content.Title = "Synthetic app-only edit"
 			if len(app.Content.Sources) > 0 {
 				app.Content.Sources[0].Label = "Synthetic changed source"
-				app.Content.Estimates.ActiveMinutes.Basis.Note = "Synthetic changed basis"
+				app.Content.Estimates.TotalMinutes.Basis.Note = "Synthetic changed basis"
+				app.Content.Ingredients[0].Quantity = "Synthetic edited quantity"
+				app.Content.Instructions[0].PhaseBasis.SourceRef = "agent_source"
+				*app.Content.PhaseEstimates.PrepAhead.ActiveMinutes.Value = 99
+			}
+			if reflect.DeepEqual(app.Content, hosted.Receipt.SubmissionContent) {
+				t.Fatal("app edit must change editable content")
 			}
 			equalHostedDraftJSON(t, originalSnapshot, marshalHostedDraftFixture(t, hosted.Receipt))
 		})
+	}
+}
+
+// Fixed expectations catch a field disappearing from every fixture hop at once.
+func assertHostedDraftPreservedFields(t *testing.T, c draft.Content) {
+	t.Helper()
+	if len(c.Ingredients) < 4 || c.Ingredients[0].Quantity != "1 1/2" ||
+		c.Ingredients[1].Quantity != "to taste" || c.Ingredients[2].Quantity != "0" || c.Ingredients[3].Quantity != "" {
+		t.Fatal("original quantity text was lost")
+	}
+	if len(c.Sources) < 2 || c.Sources[0].Locator != "Example paragraph 2" || c.Sources[1].Locator != "Synthetic page 12" {
+		t.Fatal("source locator was lost")
+	}
+	if c.Estimates == nil || c.Estimates.TotalMinutes == nil || c.Estimates.TotalMinutes.Basis == nil ||
+		c.Estimates.TotalMinutes.Basis.SourceRef != "url_source" || c.Estimates.TotalMinutes.Basis.Note != "Synthetic citation; not checked." {
+		t.Fatal("estimate source_ref or basis note was lost")
+	}
+	if len(c.Instructions) == 0 || c.Instructions[0].PhaseBasis == nil || c.Instructions[0].PhaseBasis.SourceRef != "book_source" ||
+		c.Instructions[0].PhaseBasis.Note != "Synthetic citation; not checked." {
+		t.Fatal("step source_ref or basis note was lost")
+	}
+	if c.PhaseEstimates == nil || c.PhaseEstimates.PrepAhead == nil || c.PhaseEstimates.PrepAhead.ActiveMinutes == nil ||
+		c.PhaseEstimates.PrepAhead.ActiveMinutes.Value == nil || *c.PhaseEstimates.PrepAhead.ActiveMinutes.Value != 0 {
+		t.Fatal("explicit zero estimate was lost")
 	}
 }
 
@@ -328,7 +368,120 @@ func TestHostedDraftFixturePreviewLabelsAndLinks(t *testing.T) {
 
 func hostedDraftFixtureDigest(t *testing.T, s hostedDraftFixtureSubmission) [32]byte {
 	t.Helper()
-	return sha256.Sum256(append([]byte("draft-v1\n1\n"), marshalHostedDraftFixture(t, s.Content)...))
+	return sha256.Sum256(append([]byte("draft-v1\n1\n"), canonicalHostedDraftFixtureJSON(t, s.Content)...))
+}
+
+// HD1 canonical JSON is independent of Go's struct order and HTML/JS escaping.
+// Decode typed JSON to scalar values first, then encode by the contract's rules.
+func canonicalHostedDraftFixtureJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(marshalHostedDraftFixture(t, value)))
+	decoder.UseNumber()
+	var tree any
+	if err := decoder.Decode(&tree); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	quote := func(s string) {
+		out.WriteByte('"')
+		for _, r := range s {
+			switch r {
+			case '"', '\\':
+				out.WriteByte('\\')
+				out.WriteRune(r)
+			case '\b':
+				out.WriteString(`\b`)
+			case '\t':
+				out.WriteString(`\t`)
+			case '\n':
+				out.WriteString(`\n`)
+			case '\f':
+				out.WriteString(`\f`)
+			case '\r':
+				out.WriteString(`\r`)
+			default:
+				if r < 0x20 {
+					fmt.Fprintf(&out, `\u%04x`, r)
+				} else {
+					out.WriteRune(r)
+				}
+			}
+		}
+		out.WriteByte('"')
+	}
+	var write func(any)
+	write = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			keys := make([]string, 0, len(x))
+			for key := range x {
+				keys = append(keys, key)
+			}
+			slices.Sort(keys)
+			out.WriteByte('{')
+			for i, key := range keys {
+				if i > 0 {
+					out.WriteByte(',')
+				}
+				quote(key)
+				out.WriteByte(':')
+				write(x[key])
+			}
+			out.WriteByte('}')
+		case []any:
+			out.WriteByte('[')
+			for i, item := range x {
+				if i > 0 {
+					out.WriteByte(',')
+				}
+				write(item)
+			}
+			out.WriteByte(']')
+		case string:
+			quote(x)
+		case json.Number:
+			out.WriteString(x.String()) // Core Content contains only base-10 integers.
+		case bool:
+			fmt.Fprint(&out, x)
+		case nil:
+			out.WriteString("null")
+		default:
+			t.Fatalf("unexpected canonical JSON type %T", v)
+		}
+	}
+	write(tree)
+	return []byte(out.String())
+}
+
+func TestHostedDraftFixtureDigestCanonicalization(t *testing.T) {
+	// A fixed vector catches Go's default escaping of <>& and U+2028/U+2029,
+	// including nested key sorting and the exact short/control escape spelling.
+	vector := map[string]any{"z": "<>&\u2028\u2029é", "a": map[string]any{"z": "\"\\/\b\t\n\f\r\x01", "a": 1}}
+	want := "{\"a\":{\"a\":1,\"z\":\"\\\"\\\\/\\b\\t\\n\\f\\r\\u0001\"},\"z\":\"<>&\u2028\u2029é\"}"
+	if got := string(canonicalHostedDraftFixtureJSON(t, vector)); got != want {
+		t.Fatalf("canonical JSON = %q, want %q", got, want)
+	}
+	original, failure := checkHostedDraftFixtureSubmission(readHostedDraftFixture(t, "full.submit.json"))
+	if failure.Code != "" {
+		t.Fatal(failure)
+	}
+	baseline := hostedDraftFixtureDigest(t, original)
+	t.Run("string order", func(t *testing.T) {
+		changed := original
+		changed.Content = original.Content.Clone()
+		changed.Content.Title = "🥣 Synthetic grain bowl"
+		if baseline == hostedDraftFixtureDigest(t, changed) {
+			t.Fatal("string order must affect digest")
+		}
+	})
+	t.Run("array order", func(t *testing.T) {
+		changed := original
+		changed.Content = original.Content.Clone()
+		changed.Content.Ingredients[0], changed.Content.Ingredients[1] = changed.Content.Ingredients[1], changed.Content.Ingredients[0]
+		if baseline == hostedDraftFixtureDigest(t, changed) {
+			t.Fatal("array order must affect digest")
+		}
+	})
 }
 
 type hostedDraftFixtureFailure struct {
@@ -346,6 +499,9 @@ func checkHostedDraftFixtureSubmission(raw []byte) (hostedDraftFixtureSubmission
 	}
 	if len(raw) > draft.MaxInputBytes {
 		return fail(413, "input_too_large", "")
+	}
+	if !utf8.Valid(raw) {
+		return fail(400, "invalid_request", "")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	if tok, err := decoder.Token(); err != nil || tok != json.Delim('{') {
@@ -380,12 +536,14 @@ func checkHostedDraftFixtureSubmission(raw []byte) (hostedDraftFixtureSubmission
 	if !ok || !hasContent {
 		return fail(400, "invalid_request", "")
 	}
-	if json.Unmarshal(version, &result.ContentSchemaVersion) != nil || bytes.Equal(bytes.TrimSpace(version), []byte("null")) {
+	version = bytes.TrimSpace(version)
+	if !regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`).Match(version) {
 		return fail(400, "invalid_type", "")
 	}
-	if result.ContentSchemaVersion != 1 {
+	if !bytes.Equal(version, []byte("1")) {
 		return fail(422, "unsupported_content_schema", "")
 	}
+	result.ContentSchemaVersion = 1
 	var issues []draft.Issue
 	result.Content, issues = draft.DecodeContent(content)
 	if len(issues) > 0 {
@@ -428,7 +586,12 @@ func TestHostedDraftFixtureRejections(t *testing.T) {
 			}
 		}
 	}
-	if !seen["rejected/unsupported-version.json"] {
-		t.Fatal("missing unsupported-version fixture")
+	for _, name := range []string{"unsupported-version", "duplicate-source-id", "duplicate-estimate-value", "case-content-title", "case-content-title-pair", "case-estimate-active-minutes", "case-basis-kind", "case-root-content", "invalid-utf8", "missing-content", "oversized-body", "nul-character", "control-character", "raw-control-byte", "huge-version"} {
+		if !seen["rejected/"+name+".json"] {
+			t.Fatalf("missing required rejection fixture: %s", name)
+		}
+	}
+	if !bytes.Contains(readHostedDraftFixture(t, "rejected/invalid-utf8.json"), []byte{0xff}) {
+		t.Fatal("invalid UTF-8 fixture must retain the literal raw byte, not an escape or replacement")
 	}
 }

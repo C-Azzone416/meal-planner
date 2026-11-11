@@ -249,6 +249,78 @@
       "file": "rejected/trailing-json.json",
       "status": 400,
       "code": "invalid_request"
+    },
+    {
+      "file": "rejected/duplicate-source-id.json",
+      "status": 400,
+      "code": "duplicate_key"
+    },
+    {
+      "file": "rejected/duplicate-estimate-value.json",
+      "status": 400,
+      "code": "duplicate_key"
+    },
+    {
+      "file": "rejected/case-content-title.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/case-content-title-pair.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/case-estimate-active-minutes.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/case-basis-kind.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/case-root-content.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/invalid-utf8.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/missing-content.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/oversized-body.json",
+      "status": 413,
+      "code": "input_too_large"
+    },
+    {
+      "file": "rejected/nul-character.json",
+      "status": 400,
+      "code": "invalid_content",
+      "issue_code": "invalid_characters"
+    },
+    {
+      "file": "rejected/control-character.json",
+      "status": 400,
+      "code": "invalid_content",
+      "issue_code": "invalid_characters"
+    },
+    {
+      "file": "rejected/raw-control-byte.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/huge-version.json",
+      "status": 422,
+      "code": "unsupported_content_schema"
     }
   ]
 }
