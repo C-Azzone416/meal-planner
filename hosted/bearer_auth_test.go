@@ -2,11 +2,13 @@ package hosted
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -90,11 +92,177 @@ func (f *bearerFixture) token(t *testing.T, claims map[string]any) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return f.rawToken(headerJSON, claimsJSON)
+}
+
+func (f *bearerFixture) rawToken(headerJSON, claimsJSON []byte) string {
 	header := base64.RawURLEncoding.EncodeToString(headerJSON)
 	payload := base64.RawURLEncoding.EncodeToString(claimsJSON)
 	signingInput := header + "." + payload
 	signature := base64.RawURLEncoding.EncodeToString(ed25519.Sign(f.privateKey, []byte(signingInput)))
 	return signingInput + "." + signature
+}
+
+func TestVerifyBearerRejectsAmbiguousClaimNames(t *testing.T) {
+	f := newBearerFixture(t)
+	header := []byte(`{"alg":"EdDSA","kid":"test-key"}`)
+	claims := f.claims()
+	claims["emailVerified"] = true
+	claims["iat"] = f.now.Unix()
+	claims["jti"] = "test-token"
+	raw, _ := json.Marshal(claims)
+	for name, value := range claims {
+		valueJSON, _ := json.Marshal(value)
+		for label, mutated := range map[string]string{
+			"uppercase only":    strings.Replace(string(raw), `"`+name+`":`, `"`+strings.ToUpper(name)+`":`, 1),
+			"uppercase alias":   string(raw[:len(raw)-1]) + `,"` + strings.ToUpper(name) + `":` + string(valueJSON) + `}`,
+			"duplicate":         string(raw[:len(raw)-1]) + `,"` + name + `":` + string(valueJSON) + `}`,
+			"escaped duplicate": string(raw[:len(raw)-1]) + fmt.Sprintf(`,"\u%04x%s":%s}`, name[0], name[1:], valueJSON),
+			"null overwrite":    string(raw[:len(raw)-1]) + `,"` + name + `":null}`,
+		} {
+			t.Run(name+"/"+label, func(t *testing.T) {
+				if _, err := VerifyBearer(t.Context(), "Bearer "+f.rawToken(header, []byte(mutated)), f.config()); !errors.Is(err, ErrInvalidBearer) {
+					t.Fatalf("ambiguous claim accepted: %v", err)
+				}
+			})
+		}
+	}
+	// Exact judge reproduction, including both orders. A future lowercase nbf
+	// must never be replaced by an already-active case alias or duplicate.
+	future := strings.Replace(string(raw), `"nbf":1799999940`, `"nbf":1800000060`, 1)
+	for _, claimJSON := range []string{
+		future[:len(future)-1] + `,"NBF":1799999940}`,
+		`{"NBF":1799999940,` + future[1:],
+		future[:len(future)-1] + `,"nbf":1799999940}`,
+		strings.Replace(string(raw), `"iss":`, `"iſſ":`, 1),
+	} {
+		if _, err := VerifyBearer(t.Context(), "Bearer "+f.rawToken(header, []byte(claimJSON)), f.config()); !errors.Is(err, ErrInvalidBearer) {
+			t.Fatalf("claim alias/overwrite accepted: %v", err)
+		}
+	}
+}
+
+func TestVerifyBearerRejectsAmbiguousHeaderNamesAndExtensions(t *testing.T) {
+	f := newBearerFixture(t)
+	claims, _ := json.Marshal(f.claims())
+	const header = `{"alg":"EdDSA","kid":"test-key","typ":"JWT","b64":true}`
+	for name := range authHeaderFields {
+		for label, mutated := range map[string]string{
+			"alias":     header[:len(header)-1] + `,"` + strings.ToUpper(name) + `":"ignored"}`,
+			"duplicate": header[:len(header)-1] + `,"` + name + `":"ignored","` + name + `":"ignored"}`,
+		} {
+			t.Run(name+"/"+label, func(t *testing.T) {
+				if _, err := VerifyBearer(t.Context(), "Bearer "+f.rawToken([]byte(mutated), claims), f.config()); !errors.Is(err, ErrInvalidBearer) {
+					t.Fatalf("ambiguous header accepted: %v", err)
+				}
+			})
+		}
+	}
+	for _, raw := range []string{
+		`{"ALG":"EdDSA","kid":"test-key"}`, `{"alg":"EdDSA","KID":"test-key"}`,
+		`{"alg":"none","alg":"EdDSA","kid":"test-key"}`,
+		`{"alg":"EdDSA","kid":"wrong","\u006bid":"test-key"}`,
+		`{"alg":"EdDSA","Kid":"test-key"}`,
+		`{"alg":"EdDSA","kid":"test-key","crit":[]}`,
+		`{"alg":"EdDSA","kid":"test-key","crit":["extension"],"extension":true}`,
+		`{"alg":"EdDSA","kid":"test-key","crit":null}`,
+		`{"alg":"EdDSA","kid":"test-key","b64":false}`,
+		`{"alg":"EdDSA","kid":"test-key","b64":null}`,
+		`{"alg":"EdDSA","kid":"test-key","b64":"true"}`,
+		`{"alg":"EdDSA","kid":"test-key","typ":null}`,
+		`{"alg":"EdDSA","kid":"test-key","cty":42}`,
+		`{"alg":"EdDSA","kid":"test-key"} {}`, `null`, `[]`,
+	} {
+		if _, err := VerifyBearer(t.Context(), "Bearer "+f.rawToken([]byte(raw), claims), f.config()); !errors.Is(err, ErrInvalidBearer) {
+			t.Errorf("unsupported header accepted %s: %v", raw, err)
+		}
+	}
+	for _, name := range []string{"alg", "kid", "typ", "cty", "b64"} {
+		for _, value := range []any{nil, 42, []string{"value"}, map[string]string{"value": "EdDSA"}} {
+			header := map[string]any{"alg": "EdDSA", "kid": testKeyID}
+			header[name] = value
+			raw, _ := json.Marshal(header)
+			if _, err := VerifyBearer(t.Context(), "Bearer "+f.rawToken(raw, claims), f.config()); !errors.Is(err, ErrInvalidBearer) {
+				t.Errorf("invalid %s header type accepted: %v", name, err)
+			}
+		}
+	}
+}
+
+func TestVerifyBearerRejectsClaimTypeCoercion(t *testing.T) {
+	f := newBearerFixture(t)
+	for _, name := range []string{"iss", "aud", "sub", "exp", "nbf", "iat", "jti", "email", "emailVerified", "email_verified"} {
+		for _, value := range []any{nil, []any{nil}, map[string]any{"value": true}} {
+			t.Run(name+"/"+fmt.Sprint(value), func(t *testing.T) {
+				claims := f.claims()
+				claims[name] = value
+				if _, err := VerifyBearer(t.Context(), "Bearer "+f.token(t, claims), f.config()); !errors.Is(err, ErrInvalidBearer) {
+					t.Fatalf("invalid claim type accepted: %v", err)
+				}
+			})
+		}
+	}
+	claims := f.claims()
+	claims["aud"] = []any{nil, testAudience}
+	if _, err := VerifyBearer(t.Context(), "Bearer "+f.token(t, claims), f.config()); !errors.Is(err, ErrInvalidBearer) {
+		t.Fatalf("audience null element accepted: %v", err)
+	}
+	for _, name := range []string{"iat", "jti", "emailVerified", "email_verified"} {
+		claims := f.claims()
+		claims[name] = 42
+		if name == "iat" {
+			claims[name] = "1800000000"
+		}
+		if _, err := VerifyBearer(t.Context(), "Bearer "+f.token(t, claims), f.config()); !errors.Is(err, ErrInvalidBearer) {
+			t.Errorf("coerced %s accepted: %v", name, err)
+		}
+	}
+}
+
+func TestVerifyBearerPreservesProviderCompatibility(t *testing.T) {
+	f := newBearerFixture(t)
+	for _, verified := range []map[string]any{
+		{"email_verified": true}, {"emailVerified": true}, {"emailVerified": true, "email_verified": true},
+	} {
+		claims := f.claims()
+		delete(claims, "email_verified")
+		for key, value := range verified {
+			claims[key] = value
+		}
+		claims["iat"] = json.Number("1.8e9")
+		claims["jti"] = "token-id"
+		claims["email"] = strings.ToUpper(testAllowedEmail)
+		claims["name"] = "Sample Person 🍽"
+		claims["profile"] = map[string]any{"image": nil, "number": json.Number("9007199254740993")}
+		raw, _ := json.Marshal(claims)
+		raw = bytes.Replace(raw, []byte(`"iss":`), []byte(`"\u0069ss":`), 1)
+		header := []byte(`{"alg":"EdDSA","\u006bid":"test-key","typ":"JWT","b64":true,"providerExtension":{"value":null}}`)
+		if _, err := VerifyBearer(t.Context(), "Bearer "+f.rawToken(header, raw), f.config()); err != nil {
+			t.Fatalf("supported provider claims rejected: %v", err)
+		}
+	}
+	for _, snake := range []bool{true, false} {
+		claims := f.claims()
+		claims["email_verified"], claims["emailVerified"] = snake, !snake
+		if _, err := VerifyBearer(t.Context(), "Bearer "+f.token(t, claims), f.config()); !errors.Is(err, ErrInvalidBearer) {
+			t.Fatalf("conflicting verification claims accepted: %v", err)
+		}
+	}
+}
+
+func TestVerifyBearerRejectsMalformedUnicode(t *testing.T) {
+	f := newBearerFixture(t)
+	header := []byte(`{"alg":"EdDSA","kid":"test-key"}`)
+	claims, _ := json.Marshal(f.claims())
+	for _, value := range []string{`"\ud800"`, `"\udfff"`, `"\ud800x"`, `"\ud800\u0061"`, "\"\xff\""} {
+		badClaims := append(append([]byte{}, claims[:len(claims)-1]...), []byte(`,"extension":`+value+`}`)...)
+		badHeader := append(append([]byte{}, header[:len(header)-1]...), []byte(`,"extension":`+value+`}`)...)
+		for _, token := range []string{f.rawToken(header, badClaims), f.rawToken(badHeader, claims)} {
+			if _, err := VerifyBearer(t.Context(), "Bearer "+token, f.config()); !errors.Is(err, ErrInvalidBearer) {
+				t.Fatalf("lossy Unicode accepted: %v", err)
+			}
+		}
+	}
 }
 
 func TestVerifyBearerAcceptsConfiguredVerifiedIdentity(t *testing.T) {
@@ -228,4 +396,78 @@ func TestRequireUserRejectsMissingBearer(t *testing.T) {
 
 func errorsIs(err, target error) bool {
 	return err != nil && (err == target || errors.Is(err, target))
+}
+
+func TestVerifyBearerNumericDateSemantics(t *testing.T) {
+	f := newBearerFixture(t)
+	tests := []struct {
+		name, claim string
+		value       any
+		nanos       int
+		valid       bool
+	}{
+		{"future fractional nbf", "nbf", json.Number("1800000000.9"), 0, false},
+		{"nbf equality", "nbf", json.Number("1800000000.9"), 900000000, true},
+		{"nbf before fraction", "nbf", json.Number("1800000000.9"), 899999999, false},
+		{"nbf after fraction", "nbf", json.Number("1800000000.9"), 900000001, true},
+		{"subnanosecond nbf", "nbf", json.Number("1800000000.0000000001"), 0, false},
+		{"fractional exp", "exp", json.Number("1800000000.9"), 0, true},
+		{"exp equality", "exp", json.Number("1800000000.9"), 900000000, false},
+		{"exp before fraction", "exp", json.Number("1800000000.9"), 899999999, true},
+		{"exp after fraction", "exp", json.Number("1800000000.9"), 900000001, false},
+		{"subnanosecond exp", "exp", json.Number("1800000000.0000000001"), 0, true},
+		{"scientific exp", "exp", json.Number("1.8000000009e9"), 0, true},
+		{"negative nbf", "nbf", json.Number("-0.9"), 0, true},
+	}
+	for _, claim := range []string{"exp", "nbf"} {
+		for _, value := range []any{"4102444800", "1", nil, true, []int{1}, map[string]int{"value": 1}, json.Number("1e1000"), json.Number("-1e1000"), json.Number("1e1001"), json.Number("1e-1001"), json.Number("9223372036854775808"), json.Number("-9223372036854775809")} {
+			tests = append(tests, struct {
+				name, claim string
+				value       any
+				nanos       int
+				valid       bool
+			}{"invalid type or range", claim, value, 0, false})
+		}
+	}
+	for _, tc := range tests {
+		t.Run(tc.claim+"/"+tc.name, func(t *testing.T) {
+			f.now = time.Unix(1800000000, int64(tc.nanos))
+			claims := f.claims()
+			claims[tc.claim] = tc.value
+			_, err := VerifyBearer(context.Background(), "Bearer "+f.token(t, claims), f.config())
+			if tc.valid && err != nil {
+				t.Fatalf("valid date rejected: %v", err)
+			}
+			if !tc.valid && !errors.Is(err, ErrInvalidBearer) {
+				t.Fatalf("invalid date %v accepted: %v", tc.value, err)
+			}
+		})
+	}
+	t.Run("nbf optional", func(t *testing.T) {
+		claims := f.claims()
+		delete(claims, "nbf")
+		if _, err := VerifyBearer(context.Background(), "Bearer "+f.token(t, claims), f.config()); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("exp required", func(t *testing.T) {
+		claims := f.claims()
+		delete(claims, "exp")
+		if _, err := VerifyBearer(context.Background(), "Bearer "+f.token(t, claims), f.config()); !errors.Is(err, ErrInvalidBearer) {
+			t.Fatalf("error: %v", err)
+		}
+	})
+}
+
+func TestNumericDateRepresentationBounds(t *testing.T) {
+	for _, raw := range []string{"9223372036854775807", "-9223372036854775808", "1e-1000", "-0", "1.5e+1"} {
+		if _, err := numericDate(json.RawMessage(raw)); err != nil {
+			t.Errorf("valid %s: %v", raw, err)
+		}
+	}
+	for _, raw := range []string{"9223372036854775807.000000001", "-9223372036854775808.000000001", "1e999999999", "1e-999999999", "NaN", "Infinity", "1 2", "01", "1/2", "0." + strings.Repeat("0", 128) + "1"} {
+		if _, err := numericDate(json.RawMessage(raw)); err == nil {
+			t.Errorf("accepted invalid %s", raw)
+		}
+	}
 }

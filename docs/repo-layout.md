@@ -1,6 +1,6 @@
 # Repository Layout
 
-Component map for the UI/authentication preview and local tooling. All commands run from the repository root. Manual recipe API/storage and reviewed migration files exist; hosted planning is not implemented; the local recipe-draft slice is described below.
+Component map for the UI/authentication preview and retained local-tool scaffolds. All commands run from the repository root. Manual recipe API/storage and reviewed migration files exist; hosted planning and the executable local recipe-draft surface are not included.
 
 | Path | Component | Purpose | Check commands |
 | --- | --- | --- | --- |
@@ -9,22 +9,19 @@ Component map for the UI/authentication preview and local tooling. All commands 
 | `hosted/migrations/` | database | Reviewed, explicitly applied manual-recipe schema; never startup migration | `go test -tags=integration ./hosted/...` against disposable localhost Postgres |
 | `hosted/` | hosted API | Manual recipe ownership/storage plus plain `net/http` handlers for health, public auth configuration, signup policy, and reusable bearer-token protection | `go test ./api/... ./hosted/...` |
 | `api/` | hosted API | Vercel Go functions for `/api/health`, `/api/auth-config`, and the signed blocking signup webhook | `go test ./api/... ./hosted/...` |
-| `cmd/mealplanner/` | local tools | CLI: `version`, `--version`, `draft validate/list/show` (read-only; see [local-draft-contract.md](local-draft-contract.md)); no args prints usage and exits 2 | `go test ./cmd/...`, `go build ./cmd/...` |
-| `cmd/mealplanner-mcp/` | local tools | stdio MCP server for local recipe drafts (`--data-dir`, `--version`); stdout is protocol-only. `workflow_test.go` is the offline MCP-to-CLI round trip described in [local-workflow.md](local-workflow.md) | `go test ./cmd/...`, `go build ./cmd/...` |
+| `cmd/mealplanner/` | local tools | CLI scaffold: `version`, `--version`; no args prints usage and exits 2; no draft commands | `go test ./cmd/...`, `go build ./cmd/...` |
+| `cmd/mealplanner-mcp/` | local tools | MCP scaffold: `--version`, otherwise drains stdin and exits 0 without stdout; no protocol tools or file store | `go test ./cmd/...`, `go build ./cmd/...` |
 | `contracts/` | contract | `openapi.yaml` (OpenAPI 3.1) and `contract_test.go` checking the hosted handler against it | `go test ./contracts/...` |
-| `web/` | web client | Vite + React + TypeScript; protected responsive preview routes and passwordless sign-in; Node version in `web/.nvmrc` | `npm ci --prefix web`, then `npm run --prefix web lint` / `typecheck` / `test` / `build` (output `web/dist`) |
+| `web/` | web client | Vite + React + TypeScript; protected responsive preview routes and email-and-password sign-in; Node version in `web/.nvmrc` | `npm ci --prefix web`, then `npm run --prefix web lint` / `typecheck` / `test` / `build` (output `web/dist`) |
 | `vercel.json` | hosted deploy | Builds `web/` to static `web/dist`; `api/*.go` are detected as Go functions | none locally |
 
-Local recipe-draft slice (contract in [local-draft-contract.md](local-draft-contract.md); host setup and verification record in [local-workflow.md](local-workflow.md)):
+Shared draft core retained for the hosted release:
 
 | Path | Component | Purpose |
 | --- | --- | --- |
-| `internal/core/draft/` (+ `memstore/`, `storetest/`) | local core | Draft model, structural validation, service, persistence interface, in-memory store, store conformance suite |
-| `internal/localstore/` | local tools | Versioned JSON file store, data-directory resolution, cross-process lock |
-| `internal/mcpadapter/` | local tools | MCP tool definitions and handlers over the core |
-| `cmd/mealplanner-mcp/`, `cmd/mealplanner/` | local tools | MCP server and `draft validate/list/show` commands; `--version` behavior is preserved |
+| `internal/core/draft/` (+ `memstore/`, `storetest/`) | shared core | Draft model, strict JSON-string validation reused by hosted recipes, structural validation, service, persistence interface, in-memory store and conformance suite |
 
-CI path classification for these directories is described in [local-draft-contract.md section 12.2](local-draft-contract.md#122-ci-classification-note).
+All core tests and synthetic fixtures remain. The [local draft contract](local-draft-contract.md) specifies the core and the deferred epic #19 design. `internal/localstore/`, `internal/mcpadapter/`, local draft CLI commands and MCP draft tools are excluded from this release; no local setup is required. CI continues to test all remaining internal and command packages with `go test ./internal/... ./cmd/...`. Reserved local-tool classifier rules remain for future separately reviewed development.
 
 Additional checks:
 

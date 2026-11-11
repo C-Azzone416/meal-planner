@@ -39,10 +39,12 @@ jobs:
         run: |
           bash .github/scripts/classify_test.sh
           bash .github/scripts/gate_test.sh
+          node --test tools/framebriar-ci/*.test.mjs
           bash tools/deploy/check-pulled-env_test.sh
           bash tools/deploy/safe-extract_test.sh
           bash tools/deploy/materialize-output_test.sh
           bash tools/deploy/vercel-evidence_test.sh
+          bash tools/deploy/runbook-token_test.sh
 
       - name: Classify changed paths
         id: classify
@@ -102,9 +104,13 @@ jobs:
   web:
     name: web
     needs: affected
-    if: needs.affected.outputs.web == 'true'
+    if: needs.affected.outputs.web == 'true' || needs.affected.outputs.hosted_go == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -112,13 +118,54 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: web/.nvmrc
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - run: npm ci --prefix web
-      - run: npm run --prefix web lint
-      - run: npm run --prefix web typecheck
-      - run: npm run --prefix web test
-      - run: npm run --prefix web build
+      - name: Check out fixed dependency classifier only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: tools/framebriar-ci/classify-dependency.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+          path: .dependency-policy
+      - name: Select ordinary or reviewed private-dependency checks
+        id: dependency
+        run: node .dependency-policy/tools/framebriar-ci/classify-dependency.mjs .
+      - name: Validate explicit trusted workflow pin
+        if: steps.dependency.outputs.private == 'true'
+        env:
+          TRUSTED_WORKFLOW_SHA: ${{ vars.FRAMEBRIAR_TRUSTED_WORKFLOW_SHA }}
+        run: |
+          [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::Reviewed frontend evidence requires an approved explicit trusted workflow SHA'; exit 1; }
+      - name: Check out only the explicitly trusted evidence verifier
+        if: steps.dependency.outputs.private == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ vars.FRAMEBRIAR_TRUSTED_WORKFLOW_SHA }}
+          sparse-checkout: tools/framebriar-ci
+          persist-credentials: false
+          path: .trusted-evidence
+      - name: Require exact-SHA reviewed frontend evidence
+        if: steps.dependency.outputs.private == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          SUBJECT: ${{ github.event_name == 'pull_request' && 'pr' || 'develop' }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          TARGET_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          TRUSTED_WORKFLOW_SHA: ${{ vars.FRAMEBRIAR_TRUSTED_WORKFLOW_SHA }}
+        run: |
+          [[ "$EVENT" == pull_request || ( "$EVENT" == push && "$REF" == refs/heads/develop ) ]] || { echo '::error::Private frontend evidence is not configured for this target; no Production fallback'; exit 1; }
+          node .trusted-evidence/tools/framebriar-ci/bridge.mjs
+      - if: steps.dependency.outputs.private == 'false'
+        run: npm ci --prefix web
+      - if: steps.dependency.outputs.private == 'false'
+        run: npm run --prefix web lint
+      - if: steps.dependency.outputs.private == 'false'
+        run: npm run --prefix web typecheck
+      - if: steps.dependency.outputs.private == 'false'
+        run: npm run --prefix web test
+      - if: steps.dependency.outputs.private == 'false'
+        run: npm run --prefix web build
 
   hosted-go:
     name: hosted-go
@@ -156,7 +203,7 @@ jobs:
         run: |
           test -z "$(gofmt -l .)"
           go vet ./...
-      - run: go test ./internal/core/... ./internal/localstore/... ./internal/mcpadapter/... ./cmd/...
+      - run: go test ./internal/... ./cmd/...
       - run: go build ./cmd/...
       - name: Cross-compile
         env:
@@ -262,7 +309,7 @@ jobs:
         env:
           AFFECTED_RESULT: ${{ needs.affected.result }}
           SEL_DOCS: ${{ needs.affected.outputs.docs }}
-          SEL_WEB: ${{ needs.affected.outputs.web }}
+          SEL_WEB: ${{ needs.affected.outputs.web == 'true' || needs.affected.outputs.hosted_go == 'true' }}
           SEL_HOSTED_GO: ${{ needs.affected.outputs.hosted_go }}
           SEL_LOCAL_GO: ${{ needs.affected.outputs.local_go }}
           SEL_CONTRACTS: ${{ needs.affected.outputs.contracts }}

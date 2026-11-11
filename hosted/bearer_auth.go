@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,6 +28,7 @@ var (
 )
 
 // BearerAuthConfig configures Neon JWT verification for protected APIs.
+// JWKSURL exists for deterministic tests; production derives it from BaseURL.
 type BearerAuthConfig struct {
 	BaseURL          string
 	ExpectedEndpoint string
@@ -46,15 +48,21 @@ type UserIdentity struct {
 type bearerContextKey struct{}
 
 type bearerHeader struct {
-	Algorithm string `json:"alg"`
-	KeyID     string `json:"kid"`
+	Algorithm   string   `json:"alg"`
+	KeyID       string   `json:"kid"`
+	Type        *string  `json:"typ,omitempty"`
+	ContentType *string  `json:"cty,omitempty"`
+	Critical    []string `json:"crit,omitempty"`
+	Base64      *bool    `json:"b64,omitempty"`
 }
 
 type bearerClaims struct {
 	Issuer             string          `json:"iss"`
 	Audience           json.RawMessage `json:"aud"`
-	Expiration         json.Number     `json:"exp"`
-	NotBefore          json.Number     `json:"nbf"`
+	Expiration         json.RawMessage `json:"exp"`
+	NotBefore          json.RawMessage `json:"nbf"`
+	IssuedAt           json.RawMessage `json:"iat,omitempty"`
+	JWTID              string          `json:"jti,omitempty"`
 	Subject            string          `json:"sub"`
 	Email              string          `json:"email"`
 	EmailVerifiedCamel *bool           `json:"emailVerified"`
@@ -106,8 +114,8 @@ func UserFromContext(ctx context.Context) (UserIdentity, bool) {
 // VerifyBearer validates a Neon Ed25519 JWT and the app's environment-specific
 // identity restrictions.
 func VerifyBearer(ctx context.Context, authorization string, config BearerAuthConfig) (UserIdentity, error) {
-	baseURL, err := normalizeManagedAuthBaseURL(config.BaseURL, config.ExpectedEndpoint)
-	if err != nil || strings.TrimSpace(config.AllowedEmail) == "" {
+	baseURL, err := normalizeAuthPolicy(config.BaseURL, config.ExpectedEndpoint, config.AllowedEmail)
+	if err != nil {
 		return UserIdentity{}, ErrAuthConfiguration
 	}
 	parsedBaseURL, err := url.Parse(baseURL)
@@ -130,7 +138,7 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 		return UserIdentity{}, ErrInvalidBearer
 	}
 	var header bearerHeader
-	if err := json.Unmarshal(headerBytes, &header); err != nil || header.Algorithm != "EdDSA" || header.KeyID == "" {
+	if err := decodeAuthJSON(headerBytes, authHeaderFields, &header); err != nil || !header.supported() {
 		return UserIdentity{}, ErrInvalidBearer
 	}
 
@@ -138,11 +146,7 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 	if jwksURL == "" {
 		jwksURL = baseURL + "/.well-known/jwks.json"
 	}
-	client := config.Client
-	if client == nil {
-		client = &http.Client{Timeout: 3 * time.Second}
-	}
-	publicKey, err := fetchEd25519PublicKey(ctx, client, jwksURL, header.KeyID)
+	publicKey, err := fetchEd25519PublicKey(ctx, config.Client, jwksURL, header.KeyID)
 	if err != nil {
 		if errors.Is(err, errSigningKeyNotFound) {
 			return UserIdentity{}, ErrInvalidBearer
@@ -158,13 +162,8 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 	if err != nil {
 		return UserIdentity{}, ErrInvalidBearer
 	}
-	decoder := json.NewDecoder(bytes.NewReader(claimsBytes))
-	decoder.UseNumber()
 	var claims bearerClaims
-	if err := decoder.Decode(&claims); err != nil {
-		return UserIdentity{}, ErrInvalidBearer
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+	if err := decodeAuthJSON(claimsBytes, authClaimFields, &claims); err != nil {
 		return UserIdentity{}, ErrInvalidBearer
 	}
 	if claims.Issuer != expectedOrigin || !audienceContains(claims.Audience, expectedOrigin) {
@@ -175,19 +174,28 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 	if config.Now != nil {
 		now = config.Now
 	}
-	nowUnix := now().Unix()
+	instant := now()
+	nowUnix := new(big.Rat).SetInt64(instant.Unix())
+	nowUnix.Add(nowUnix, new(big.Rat).SetFrac64(int64(instant.Nanosecond()), 1_000_000_000))
 	expiration, err := numericDate(claims.Expiration)
-	if err != nil || expiration <= nowUnix {
+	if err != nil || expiration.Cmp(nowUnix) <= 0 {
 		return UserIdentity{}, ErrInvalidBearer
 	}
-	if string(claims.NotBefore) != "" {
+	if len(claims.NotBefore) != 0 {
 		notBefore, err := numericDate(claims.NotBefore)
-		if err != nil || notBefore > nowUnix {
+		if err != nil || notBefore.Cmp(nowUnix) > 0 {
+			return UserIdentity{}, ErrInvalidBearer
+		}
+	}
+	// iat is optional and is not an activation time, but when present it must
+	// retain the registered NumericDate type rather than being ignored.
+	if len(claims.IssuedAt) != 0 {
+		if _, err := numericDate(claims.IssuedAt); err != nil {
 			return UserIdentity{}, ErrInvalidBearer
 		}
 	}
 
-	email := strings.TrimSpace(claims.Email)
+	email := claims.Email
 	emailVerified := claims.EmailVerifiedCamel != nil && *claims.EmailVerifiedCamel
 	if claims.EmailVerifiedSnake != nil {
 		if claims.EmailVerifiedCamel != nil {
@@ -196,10 +204,25 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 			emailVerified = *claims.EmailVerifiedSnake
 		}
 	}
-	if claims.Subject == "" || !emailVerified || email == "" || !strings.EqualFold(email, strings.TrimSpace(config.AllowedEmail)) {
+	if claims.Subject == "" || !emailVerified || !authEmailMatches(email, config.AllowedEmail) {
 		return UserIdentity{}, ErrInvalidBearer
 	}
-	return UserIdentity{Issuer: claims.Issuer, Subject: claims.Subject, Email: email}, nil
+	return UserIdentity{Issuer: claims.Issuer, Subject: claims.Subject, Email: strings.Trim(email, " \t\r\n")}, nil
+}
+
+func (header bearerHeader) supported() bool {
+	// Access-token metadata is distinct from the detached webhook JWS profile.
+	return header.supportedSignature() && (header.Type == nil || *header.Type == "JWT")
+}
+
+func (header bearerHeader) supportedSignature() bool {
+	// Neither auth path implements nested JWTs or another declared payload
+	// format. Pointers distinguish omission from explicitly empty metadata.
+	// No critical extensions or unencoded payloads are implemented. Unknown
+	// noncritical metadata never selects the signing key's source.
+	return header.Algorithm == "EdDSA" && header.KeyID != "" &&
+		header.ContentType == nil &&
+		header.Critical == nil && (header.Base64 == nil || *header.Base64)
 }
 
 func audienceContains(raw json.RawMessage, expected string) bool {
@@ -219,16 +242,37 @@ func audienceContains(raw json.RawMessage, expected string) bool {
 	return false
 }
 
-func numericDate(number json.Number) (int64, error) {
-	if string(number) == "" {
-		return 0, errors.New("numeric date is missing")
+// numericDate accepts JSON numbers only and compares exact decimal values.
+// Bound representation size/exponents and Unix-second range before arithmetic
+// to avoid overflow and disproportionate allocations from attacker input.
+func numericDate(raw json.RawMessage) (*big.Rat, error) {
+	invalid := errors.New("invalid numeric date")
+	if len(raw) == 0 || len(raw) > 128 {
+		return nil, invalid
 	}
-	if integer, err := number.Int64(); err == nil {
-		return integer, nil
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, invalid
 	}
-	floating, err := strconv.ParseFloat(string(number), 64)
-	if err != nil {
-		return 0, err
+	number, ok := value.(json.Number)
+	if !ok {
+		return nil, invalid
 	}
-	return int64(floating), nil
+	if err := decoder.Decode(&value); err != io.EOF {
+		return nil, invalid
+	}
+	text := string(number)
+	if i := strings.IndexAny(text, "eE"); i >= 0 {
+		exponent, err := strconv.Atoi(text[i+1:])
+		if err != nil || exponent < -1000 || exponent > 1000 {
+			return nil, invalid
+		}
+	}
+	date, ok := new(big.Rat).SetString(text)
+	if !ok || date.Cmp(new(big.Rat).SetInt64(-1<<63)) < 0 || date.Cmp(new(big.Rat).SetInt64(1<<63-1)) > 0 {
+		return nil, invalid
+	}
+	return date, nil
 }

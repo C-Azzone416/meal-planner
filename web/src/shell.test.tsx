@@ -81,12 +81,19 @@ test('moves focus to the page heading after navigating, but not on first load', 
 test('shows the offline banner inside the signed-in shell and hides it again when back online', async () => {
   const onLine = vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(false)
   renderApp('/week')
-  expect((await screen.findByText('You’re offline. This app uses browser-only storage; check the save status before leaving.')).getAttribute('role')).toBe('status')
-  act(() => {
-    onLine.mockReturnValue(true)
-    window.dispatchEvent(new Event('online'))
-  })
-  expect(screen.queryByText('You’re offline. This app uses browser-only storage; check the save status before leaving.')).toBeNull()
+  const message = 'You’re offline. This app uses browser-only storage; check the save status before leaving.'
+  expect((await screen.findByText(message)).getAttribute('role')).toBe('status')
+  // Auth resolves asynchronously. Seeing its committed DOM does not guarantee
+  // that useSyncExternalStore has installed the passive subscription yet.
+  await act(async () => {})
+  for (const online of [true, false, true]) {
+    await act(async () => {
+      onLine.mockReturnValue(online)
+      window.dispatchEvent(new Event(online ? 'online' : 'offline'))
+    })
+    if (online) expect(screen.queryByText(message)).toBeNull()
+    else expect(screen.getByText(message).getAttribute('role')).toBe('status')
+  }
 })
 
 test('an unknown recipe is a "Recipe not found" page with a way back, inside the shell', async () => {

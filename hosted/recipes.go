@@ -9,12 +9,15 @@ import (
 	"math"
 	"mime"
 	"net/http"
+	"net/url"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/C-Azzone416/meal-planner/internal/core/draft"
 )
 
 // RecipeOwner is derived only from the verified token. The issuer namespace
@@ -105,9 +108,13 @@ func RecipesHandler(repository RecipeRepository) http.Handler {
 			recipeError(w, 405, "method_not_allowed", "Method not allowed.")
 			return
 		}
-		query := r.URL.Query()
+		query, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil {
+			recipeError(w, 400, "invalid_request", "Invalid recipe query.")
+			return
+		}
 		for key, values := range query {
-			if len(values) != 1 || (key != "id" && key != "limit" && key != "after") {
+			if len(values) != 1 || values[0] == "" || (key != "id" && key != "limit" && key != "after") {
 				recipeError(w, 400, "invalid_request", "Invalid recipe query.")
 				return
 			}
@@ -172,13 +179,10 @@ func RecipesHandler(repository RecipeRepository) http.Handler {
 				recipeError(w, 415, "invalid_request", "Use application/json.")
 				return
 			}
-			var body struct {
-				Content          json.RawMessage `json:"content"`
-				ExpectedRevision *int64          `json:"expectedRevision,omitempty"`
-			}
-			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRecipeRequestBytes))
-			decoder.DisallowUnknownFields()
-			if err := decoder.Decode(&body); err != nil {
+			// Read the entire bounded body before decoding. This also detects an
+			// oversized whitespace suffix or second document as 413, not 400.
+			raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRecipeRequestBytes))
+			if err != nil {
 				var tooLarge *http.MaxBytesError
 				if errors.As(err, &tooLarge) {
 					recipeError(w, 413, "invalid_request", "Recipe is too large.")
@@ -187,11 +191,14 @@ func RecipesHandler(repository RecipeRepository) http.Handler {
 				}
 				return
 			}
-			if err := decoder.Decode(&struct{}{}); err != io.EOF {
-				recipeError(w, 400, "invalid_request", "Send exactly one recipe request.")
+			fields, err := recipeObjectFields(raw, map[string]bool{"content": true, "expectedRevision": true})
+			if err != nil {
+				recipeError(w, 400, "invalid_request", "Invalid recipe request.")
 				return
 			}
-			content, err := decodeRecipeContent(body.Content)
+			revisionJSON, hasRevision := fields["expectedRevision"]
+
+			content, err := decodeRecipeContent(fields["content"])
 			if err != nil {
 				recipeError(w, 400, "invalid_request", "Recipe fields are missing or invalid.")
 				return
@@ -199,7 +206,7 @@ func RecipesHandler(repository RecipeRepository) http.Handler {
 			if r.Method == http.MethodPost {
 				// Requiring a UUID prevents unbounded keys; the key is never a recipe ID.
 				key := r.Header.Get("Idempotency-Key")
-				if !recipeUUID.MatchString(key) || body.ExpectedRevision != nil {
+				if !recipeUUID.MatchString(key) || hasRevision {
 					recipeError(w, 400, "invalid_request", "A valid Idempotency-Key is required for a new recipe.")
 					return
 				}
@@ -214,11 +221,12 @@ func RecipesHandler(repository RecipeRepository) http.Handler {
 				}
 				recipeJSON(w, status, recipe)
 			} else {
-				if body.ExpectedRevision == nil || *body.ExpectedRevision < 1 || *body.ExpectedRevision > 9007199254740991 {
+				var revision int64
+				if !hasRevision || json.Unmarshal(revisionJSON, &revision) != nil || revision < 1 || revision > 9007199254740991 {
 					recipeError(w, 400, "invalid_request", "A valid expectedRevision is required.")
 					return
 				}
-				recipe, err := repository.Update(ctx, owner, id, *body.ExpectedRevision, content)
+				recipe, err := repository.Update(ctx, owner, id, revision, content)
 				if err != nil {
 					recipeRepositoryError(w, err)
 					return
@@ -343,18 +351,61 @@ func recipeRepositoryError(w http.ResponseWriter, err error) {
 }
 func decodeRecipeContent(raw json.RawMessage) (RecipeContent, error) {
 	var content RecipeContent
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&content); err != nil {
+	if err := requiredRecipeFields(raw, reflect.TypeFor[RecipeContent]()); err != nil {
 		return content, err
 	}
-	if err := requiredRecipeFields(raw, reflect.TypeFor[RecipeContent]()); err != nil {
+	if err := json.Unmarshal(raw, &content); err != nil {
 		return content, err
 	}
 	if err := ValidateRecipeContent(content); err != nil {
 		return content, err
 	}
 	return content, nil
+}
+
+// recipeObjectFields rejects duplicate and unknown keys before Go's permissive
+// struct decoder can fold key case or replace earlier values. JSON-escaped keys
+// are compared after decoding, so escaped duplicates are rejected too.
+func recipeObjectFields(raw json.RawMessage, allowed map[string]bool) (map[string]json.RawMessage, error) {
+	bad := errors.New("invalid recipe object")
+	if !utf8.Valid(raw) {
+		return nil, bad
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return nil, bad
+	}
+	fields := make(map[string]json.RawMessage)
+	for decoder.More() {
+		start := decoder.InputOffset()
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, bad
+		}
+		// Token replaces malformed Unicode escapes. Check the original key
+		// before using its decoded spelling for the allowlist or duplicates.
+		rawKey := bytes.TrimSpace(raw[start:decoder.InputOffset()])
+		rawKey = bytes.TrimPrefix(rawKey, []byte(","))
+		key, ok := token.(string)
+		if !ok || !draft.ValidJSONString(rawKey) || !allowed[key] {
+			return nil, bad
+		}
+		if _, exists := fields[key]; exists {
+			return nil, bad
+		}
+		var value json.RawMessage
+		if decoder.Decode(&value) != nil {
+			return nil, bad
+		}
+		fields[key] = value
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return nil, bad
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return nil, bad
+	}
+	return fields, nil
 }
 
 // encoding/json accepts null for scalar fields and missing fields as zero. The
@@ -368,9 +419,13 @@ func requiredRecipeFields(raw json.RawMessage, t reflect.Type) error {
 		return bad
 	}
 	if t.Kind() == reflect.Struct {
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(raw, &fields) != nil {
-			return bad
+		allowed := make(map[string]bool, t.NumField())
+		for i := 0; i < t.NumField(); i++ {
+			allowed[strings.Split(t.Field(i).Tag.Get("json"), ",")[0]] = true
+		}
+		fields, err := recipeObjectFields(raw, allowed)
+		if err != nil {
+			return err
 		}
 		for i := 0; i < t.NumField(); i++ {
 			f := t.Field(i)
@@ -386,6 +441,12 @@ func requiredRecipeFields(raw json.RawMessage, t reflect.Type) error {
 			if err := requiredRecipeFields(value, f.Type); err != nil {
 				return err
 			}
+		}
+	} else if t.Kind() == reflect.String {
+		// Validate every string, including nested fields and array elements,
+		// before Unmarshal can silently replace unpaired surrogate escapes.
+		if !draft.ValidJSONString(raw) {
+			return bad
 		}
 	} else if t.Kind() == reflect.Slice {
 		var items []json.RawMessage

@@ -87,7 +87,7 @@ func AuthProxy(config AuthProxyConfig) http.Handler {
 func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConfig) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	baseURL, err := normalizeManagedAuthBaseURL(config.BaseURL, config.ExpectedEndpoint)
+	baseURL, err := normalizeAuthPolicy(config.BaseURL, config.ExpectedEndpoint, config.AllowedEmail)
 	if err != nil {
 		http.Error(w, "authentication proxy is not configured", http.StatusServiceUnavailable)
 		return
@@ -239,46 +239,15 @@ func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConf
 // forwards the identity actually checked by the allowlist. A struct unmarshal
 // would accept case-insensitive keys, unlike the upstream JavaScript parser.
 func authProxyEmailPayload(body []byte, allowedEmail string) ([]byte, bool) {
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	token, err := decoder.Token()
-	if err != nil || token != json.Delim('{') {
-		return nil, false
-	}
 	payload := make(map[string]json.RawMessage)
-	for decoder.More() {
-		token, err := decoder.Token()
-		if err != nil {
-			return nil, false
-		}
-		key, ok := token.(string)
-		if !ok {
-			return nil, false
-		}
-		// Reject duplicates before map decoding can discard an earlier value.
-		if _, duplicate := payload[key]; duplicate {
-			return nil, false
-		}
-		if strings.EqualFold(key, "email") && key != "email" {
-			return nil, false
-		}
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
-			return nil, false
-		}
-		payload[key] = value
-	}
-	if token, err = decoder.Token(); err != nil || token != json.Delim('}') {
-		return nil, false
-	}
-	if _, err := decoder.Token(); err != io.EOF {
+	if err := decodeAuthJSON(body, authEmailFields, &payload); err != nil {
 		return nil, false
 	}
 	var email string
 	if err := json.Unmarshal(payload["email"], &email); err != nil {
 		return nil, false
 	}
-	allowedEmail = strings.TrimSpace(allowedEmail)
-	if allowedEmail == "" || !strings.EqualFold(strings.TrimSpace(email), allowedEmail) {
+	if !authEmailMatches(email, allowedEmail) {
 		return nil, false
 	}
 	// Preserve other SDK fields without numeric conversion, while giving the

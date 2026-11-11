@@ -69,9 +69,13 @@ type beforeCreatePayload struct {
 	} `json:"user"`
 }
 
-type detachedJWSHeader struct {
-	Algorithm string `json:"alg"`
-	KeyID     string `json:"kid"`
+type detachedJWSHeader bearerHeader
+
+func (header detachedJWSHeader) supported() bool {
+	// Neon documents {"alg":"EdDSA","typ":"JWS","kid":"01dec52b"} at
+	// https://neon.com/docs/auth/guides/webhooks#request-headers.
+	// Omitted typ remains compatible; an explicit JWT belongs to bearer auth.
+	return bearerHeader(header).supportedSignature() && (header.Type == nil || *header.Type == "JWS")
 }
 
 type jwksDocument struct {
@@ -79,10 +83,13 @@ type jwksDocument struct {
 }
 
 type jwk struct {
-	KeyType string `json:"kty"`
-	Curve   string `json:"crv"`
-	KeyID   string `json:"kid"`
-	X       string `json:"x"`
+	KeyType       string   `json:"kty"`
+	Curve         string   `json:"crv"`
+	KeyID         string   `json:"kid"`
+	X             string   `json:"x"`
+	Algorithm     *string  `json:"alg,omitempty"`
+	Use           *string  `json:"use,omitempty"`
+	KeyOperations []string `json:"key_ops,omitempty"`
 }
 
 type beforeCreateResponse struct {
@@ -98,8 +105,8 @@ func serveAuthBeforeCreate(w http.ResponseWriter, r *http.Request, config AuthWe
 		return
 	}
 
-	baseURL, err := normalizeManagedAuthBaseURL(config.BaseURL, config.ExpectedEndpoint)
-	if err != nil || strings.TrimSpace(config.AllowedEmail) == "" || strings.TrimSpace(config.ExpectedEndpoint) == "" {
+	baseURL, err := normalizeAuthPolicy(config.BaseURL, config.ExpectedEndpoint, config.AllowedEmail)
+	if err != nil {
 		http.Error(w, "authentication webhook is not configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -155,11 +162,7 @@ func serveAuthBeforeCreate(w http.ResponseWriter, r *http.Request, config AuthWe
 	if jwksURL == "" {
 		jwksURL = baseURL + "/.well-known/jwks.json"
 	}
-	client := config.Client
-	if client == nil {
-		client = &http.Client{Timeout: 3 * time.Second}
-	}
-	publicKey, err := fetchEd25519PublicKey(r.Context(), client, jwksURL, signatureKeyID)
+	publicKey, err := fetchEd25519PublicKey(r.Context(), config.Client, jwksURL, signatureKeyID)
 	if err != nil {
 		http.Error(w, "could not verify webhook signing key", http.StatusBadGateway)
 		return
@@ -170,7 +173,7 @@ func serveAuthBeforeCreate(w http.ResponseWriter, r *http.Request, config AuthWe
 	}
 
 	var payload beforeCreatePayload
-	if err := json.Unmarshal(rawBody, &payload); err != nil {
+	if err := decodeAuthJSON(rawBody, authWebhookFields, &payload); err != nil {
 		http.Error(w, "invalid webhook payload", http.StatusBadRequest)
 		return
 	}
@@ -183,15 +186,15 @@ func serveAuthBeforeCreate(w http.ResponseWriter, r *http.Request, config AuthWe
 		return
 	}
 
-	email := strings.TrimSpace(payload.User.Email)
-	if email == "" {
+	email := payload.User.Email
+	if strings.Trim(email, " \t\r\n") == "" {
 		http.Error(w, "webhook payload is missing an email", http.StatusBadRequest)
 		return
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
-	if !strings.EqualFold(email, strings.TrimSpace(config.AllowedEmail)) {
+	if !authEmailMatches(email, config.AllowedEmail) {
 		_ = json.NewEncoder(w).Encode(beforeCreateResponse{
 			Allowed:      false,
 			ErrorMessage: "This app is private and is not accepting signups for this email.",
@@ -204,7 +207,7 @@ func serveAuthBeforeCreate(w http.ResponseWriter, r *http.Request, config AuthWe
 
 func verifyDetachedWebhookSignature(rawBody []byte, timestamp, compactSignature, expectedKeyID string, publicKey ed25519.PublicKey) error {
 	parts := strings.Split(compactSignature, ".")
-	if len(parts) != 3 || parts[1] != "" {
+	if len(parts) != 3 || parts[1] != "" || len(parts[0]) > base64.RawURLEncoding.EncodedLen(maxBearerTokenBytes) {
 		return errors.New("expected detached JWS")
 	}
 	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
@@ -212,10 +215,13 @@ func verifyDetachedWebhookSignature(rawBody []byte, timestamp, compactSignature,
 		return fmt.Errorf("decode JWS header: %w", err)
 	}
 	var header detachedJWSHeader
-	if err := json.Unmarshal(headerBytes, &header); err != nil {
+	if len(headerBytes) > maxBearerTokenBytes {
+		return errors.New("JWS header is too large")
+	}
+	if err := decodeAuthJSON(headerBytes, authHeaderFields, &header); err != nil {
 		return fmt.Errorf("parse JWS header: %w", err)
 	}
-	if header.Algorithm != "EdDSA" || header.KeyID == "" || header.KeyID != expectedKeyID {
+	if !header.supported() || header.KeyID != expectedKeyID {
 		return errors.New("unexpected JWS header")
 	}
 	signatureBytes, err := base64.RawURLEncoding.DecodeString(parts[2])
@@ -232,6 +238,28 @@ func verifyDetachedWebhookSignature(rawBody []byte, timestamp, compactSignature,
 	return nil
 }
 
+// jwksHTTPClient pins key retrieval to the configured source. A redirect is
+// never an authority to trust another key endpoint, even on the same origin.
+// Clone injected http.Client values so their timeout, transport/TLS and cookie
+// policy survive, but their redirect policy cannot override this boundary.
+// Other HTTPDoer implementations are trusted in-process test dependencies.
+func jwksHTTPClient(client HTTPDoer) HTTPDoer {
+	if client == nil {
+		client = &http.Client{Timeout: 3 * time.Second}
+	}
+	if provided, ok := client.(*http.Client); ok {
+		if provided == nil {
+			provided = &http.Client{Timeout: 3 * time.Second}
+		}
+		copy := *provided
+		copy.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+		return &copy
+	}
+	return client
+}
+
 func fetchEd25519PublicKey(ctx context.Context, client HTTPDoer, jwksURL, keyID string) (ed25519.PublicKey, error) {
 	parsed, err := url.Parse(jwksURL)
 	if err != nil || parsed.Host == "" || parsed.Scheme != "https" {
@@ -242,11 +270,16 @@ func fetchEd25519PublicKey(ctx context.Context, client HTTPDoer, jwksURL, keyID 
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	resp, err := client.Do(req)
+	resp, err := jwksHTTPClient(client).Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	// Defense in depth for clients exposing a final request. Minimal test
+	// doubles may omit it; this check is not a sandbox for injected code.
+	if resp.Request != nil && (resp.Request.URL == nil || resp.Request.URL.String() != parsed.String()) {
+		return nil, errors.New("JWKS response came from an unexpected URL")
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("JWKS returned HTTP %d", resp.StatusCode)
 	}
@@ -258,21 +291,33 @@ func fetchEd25519PublicKey(ctx context.Context, client HTTPDoer, jwksURL, keyID 
 		return nil, errors.New("JWKS response is too large")
 	}
 	var document jwksDocument
-	if err := json.Unmarshal(body, &document); err != nil {
+	if err := decodeAuthJSON(body, authJWKSFields, &document); err != nil {
 		return nil, err
 	}
+	var publicKey ed25519.PublicKey
 	for _, candidate := range document.Keys {
 		if candidate.KeyID != keyID {
 			continue
 		}
+		if publicKey != nil {
+			return nil, errors.New("ambiguous signing key ID")
+		}
 		if candidate.KeyType != "OKP" || candidate.Curve != "Ed25519" {
 			return nil, errors.New("signing key has an unexpected type")
+		}
+		if (candidate.Algorithm != nil && *candidate.Algorithm != "EdDSA") ||
+			(candidate.Use != nil && *candidate.Use != "sig") ||
+			(candidate.KeyOperations != nil && (len(candidate.KeyOperations) != 1 || candidate.KeyOperations[0] != "verify")) {
+			return nil, errors.New("signing key does not permit EdDSA verification")
 		}
 		decoded, err := base64.RawURLEncoding.DecodeString(candidate.X)
 		if err != nil || len(decoded) != ed25519.PublicKeySize {
 			return nil, errors.New("signing key is invalid")
 		}
-		return ed25519.PublicKey(decoded), nil
+		publicKey = ed25519.PublicKey(decoded)
+	}
+	if publicKey != nil {
+		return publicKey, nil
 	}
 	return nil, errSigningKeyNotFound
 }

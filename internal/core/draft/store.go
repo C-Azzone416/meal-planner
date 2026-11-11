@@ -17,9 +17,9 @@ type ListResult struct {
 	Skipped []SkippedEntry
 }
 
-// Store is the persistence boundary. The Service depends only on this interface; the file store
-// (internal/localstore) and the in-memory store (internal/core/draft/memstore) implement it, and
-// internal/core/draft/storetest checks an implementation against the contract. Every error a Store
+// Store is the persistence boundary. The Service depends only on this interface; the in-memory
+// store (internal/core/draft/memstore) implements it. A local file store is deferred from the
+// web release. internal/core/draft/storetest checks implementations against the contract. Every error a Store
 // returns is (or wraps) a *Error.
 type Store interface {
 	// Create stores d as a new draft. d is fully formed (ID, revision 1, timestamps) and
