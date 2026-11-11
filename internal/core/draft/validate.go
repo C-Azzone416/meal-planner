@@ -80,9 +80,19 @@ func (v *validator) warn(code, path, msg string) {
 
 // textRule describes a string field.
 type textRule struct {
-	required  bool
-	maxRunes  int
-	multiline bool // \n, \r and \t allowed
+	required bool
+	maxRunes int
+}
+
+// multilineText is shared by typed input validation and stored JSON checks.
+// These paths have already been matched to fields of the content schema.
+func multilineText(path string) bool {
+	if path == "/notes" {
+		return true
+	}
+	list, item, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
+	_, field, _ := strings.Cut(item, "/")
+	return (list == "instructions" || list == "guidance") && field == "text"
 }
 
 // text checks one string field. A blank required field is `required` and nothing else; otherwise
@@ -92,11 +102,12 @@ func (v *validator) text(path, s string, r textRule) {
 		v.err(IssueRequired, path, "a non-blank value is required")
 		return
 	}
-	if !validChars(s, r.multiline) {
-		if r.multiline {
-			v.err(IssueInvalidChars, path, "contains characters that are not allowed (control characters other than newline, carriage return and tab, or invalid UTF-8)")
+	multiline := multilineText(path)
+	if !validChars(s, multiline) {
+		if multiline {
+			v.err(IssueInvalidChars, path, "contains characters that are not allowed (bidirectional controls, control characters other than newline, carriage return and tab, or invalid UTF-8)")
 		} else {
-			v.err(IssueInvalidChars, path, "contains characters that are not allowed (control characters or invalid UTF-8; the value must be a single line)")
+			v.err(IssueInvalidChars, path, "contains characters that are not allowed (control characters, bidirectional controls, or invalid UTF-8)")
 		}
 	}
 	if utf8.RuneCountInString(s) > r.maxRunes {
@@ -112,7 +123,7 @@ func validChars(s string, multiline bool) bool {
 		if multiline && (r == '\n' || r == '\r' || r == '\t') {
 			continue
 		}
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
 			return false
 		}
 	}
@@ -160,7 +171,7 @@ func (v *validator) content(c Content) {
 		v.warn(WarnPartialPhaseAssignment, "/instructions", "some steps have a phase and others do not")
 	}
 
-	v.text("/notes", c.Notes, textRule{maxRunes: MaxNotesRunes, multiline: true})
+	v.text("/notes", c.Notes, textRule{maxRunes: MaxNotesRunes})
 
 	v.list("/sources", len(c.Sources), MaxSources)
 	if len(c.Sources) == 0 {
@@ -193,7 +204,7 @@ func (v *validator) content(c Content) {
 }
 
 func (v *validator) step(i int, st Step) {
-	v.text(idx("/instructions", i, "text"), st.Text, textRule{required: true, maxRunes: MaxStepRunes, multiline: true})
+	v.text(idx("/instructions", i, "text"), st.Text, textRule{required: true, maxRunes: MaxStepRunes})
 	phasePath := idx("/instructions", i, "phase")
 	basisPath := idx("/instructions", i, "phase_basis")
 	switch st.Phase {
@@ -273,7 +284,7 @@ func (v *validator) sourceURL(path, raw string) {
 		v.err(IssueTooLong, path, fmt.Sprintf("exceeds the limit of %d bytes", MaxURLBytes))
 		return
 	}
-	if !utf8.ValidString(raw) || strings.ContainsFunc(raw, unicode.IsControl) {
+	if !validChars(raw, false) {
 		v.err(IssueInvalidChars, path, "contains characters that are not allowed")
 		return
 	}
@@ -363,7 +374,7 @@ func (v *validator) guidance(i int, g Guidance) {
 	default:
 		v.err(IssueInvalidValue, idx("/guidance", i, "topic"), "topic must be one of prep_ahead, storage, food_safety, other")
 	}
-	v.text(idx("/guidance", i, "text"), g.Text, textRule{required: true, maxRunes: MaxGuidanceRunes, multiline: true})
+	v.text(idx("/guidance", i, "text"), g.Text, textRule{required: true, maxRunes: MaxGuidanceRunes})
 	if g.Basis == nil {
 		v.err(IssueBasisRequired, idx("/guidance", i, "basis"), "a guidance statement must carry a basis")
 		return

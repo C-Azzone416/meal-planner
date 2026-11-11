@@ -120,7 +120,7 @@ func Full(id string) draft.Draft {
 // trimming, case folding or normalization).
 func Unicode(id string) draft.Draft {
 	d := Minimal(id)
-	d.Title = "Crème brûlée 🍮 ‮日本語́ é vs é"
+	d.Title = "Crème brûlée 🍮 قهوة 日本語́ é vs é"
 	d.Ingredients = []draft.Ingredient{{Text: "  œuf \"quoted\" <b>&</b> \\ / ~  "}}
 	d.Notes = "ligne 1\r\nligne 2\n"
 	return d

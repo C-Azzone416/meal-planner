@@ -85,13 +85,13 @@ Tools: `server_status`, `draft_create`, `draft_list`, `draft_get`, `draft_update
 
 Match replies to their JSON-RPC IDs because concurrent calls can finish in a different order. Wait for a read before sending an update that needs its revision. Use a distinct ID for every request in a stdio session, even after a reply or cancellation. A new session can reuse IDs. Decoded string IDs compare by value, so `"\u0061"` and `"a"` are the same ID. A numeric ID and its string spelling are distinct. [MCP request ID rules](https://modelcontextprotocol.io/specification/2025-11-25/basic#requests)
 
-Each frame must be valid UTF-8. The wire gate accepts valid Unicode string IDs and canonical decimal integers within ±9,007,199,254,740,991. It caps input frames at 4 MiB. The gate checks for unique decoded keys in every object within `tools/call` parameters, including objects inside arrays, arguments and metadata. Case-folded aliases count as duplicates. The reserved root fields `name`, `arguments` and `_meta` require canonical casing. Parameters may nest up to 64 levels below their root. Unique JSON escapes that decode to canonical names are accepted.
+Each frame must be valid UTF-8. The wire gate accepts valid Unicode string IDs and canonical decimal integers within ±9,007,199,254,740,991. The 4 MiB cap excludes the LF or CRLF terminator and includes all other padding. For every request and notification, the gate checks every object in `params`, including inside arrays, for unique decoded keys. Case-folded aliases count as duplicates. Unpaired surrogate escapes in parameter keys or values are rejected. Parameters may nest up to 64 levels below their root. Reserved root fields in `tools/call` and cancellation parameters require canonical casing. Unique JSON escapes that decode to canonical names and valid surrogate pairs are accepted.
 
 The server reserves up to 32,768 IDs and 8 MiB of decoded string ID bytes per session. The count bounds memory for short and numeric IDs. The byte budget bounds long IDs while preserving the per-frame limit. Completed and cancelled IDs still count. If a new request would exceed either budget, the server rejects it, drains accepted work and tells the client to reconnect.
 
 An invalid frame or reused ID stops input. The server discards that frame and subsequent input, gives earlier accepted requests up to five seconds to finish and exits 1 with a fixed diagnostic on stderr. The rejected frame has no response. A cancellation for a pending ID retires its response obligation and the ID stays reserved. Cancellations for unknown or retired IDs are ignored. The five-second session deadline also covers cancelled handlers still unwinding. If a create's outcome is uncertain, reconnect and check `draft_list` before retrying.
 
-Send one JSON object per line. A complete final object can also be processed at EOF or if a termination signal arrives after the object was read. An incomplete fragment is dropped on a termination signal.
+Send one JSON object per line. A complete final object can also be processed at EOF or if a termination signal arrives after the object was read. A trailing CR without LF counts toward that frame's size. An incomplete fragment is dropped on a termination signal.
 
 Inspect the same drafts from a terminal:
 
@@ -101,6 +101,8 @@ Inspect the same drafts from a terminal:
 /ABSOLUTE/PATH/mealplanner draft show <id> --data-dir /ABSOLUTE/PATH/drafts --json   # complete
 echo '{"title": "Synthetic Toast"}' | /ABSOLUTE/PATH/mealplanner draft validate -
 ```
+
+Draft content rejects C0, DEL, C1 and Unicode bidirectional controls. Notes, instruction text and guidance text may contain newlines, carriage returns and tabs. If a saved draft contains a disallowed character, `draft show` exits 3, `draft list` reports it as skipped and MCP get or update returns `corrupt`/`invalid_content`. The file is left byte-for-byte intact.
 
 ## Automated coverage (no host, no network)
 

@@ -93,6 +93,8 @@ func TestSubprocessRejectsAmbiguousToolParams(t *testing.T) {
 		"duplicate meta":     `{"name":"draft_create","arguments":{"draft":{"title":"unexpected"}},"_meta":{},"_m\u0065ta":{}}`,
 		"nested meta":        `{"name":"draft_create","arguments":{"draft":{"title":"unexpected"}},"_meta":{"example.test/data":[{"token":1,"TOKEN":2}]}}`,
 		"unicode case fold":  `{"name":"draft_create","arguments":{"draft":{"title":"unexpected"}},"_meta":{"example.test/data":{"k":1,"\u212a":2}}}`,
+		"surrogate value":    `{"name":"draft_create","arguments":{"draft":{"title":"unexpected"}},"_meta":{"example.test/data":["\ud800"]}}`,
+		"surrogate key":      `{"name":"draft_create","arguments":{"draft":{"title":"unexpected"}},"_meta":{"\udc00\ud800":1}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -109,7 +111,7 @@ func TestSubprocessRejectsAmbiguousToolParams(t *testing.T) {
 
 func TestSubprocessAcceptsUniqueEscapedToolParams(t *testing.T) {
 	dir := t.TempDir()
-	input := `{"jsonrpc":"2.0","id":73,"method":"tools/call","params":{"n\u0061me":"draft_create","arguments":{"draft":{"t\u0069tle":"accepted"}},"_meta":{"example.test/data":{"items":[{"k":1},{"k":2}]}}}}` + "\n"
+	input := `{"jsonrpc":"2.0","id":73,"method":"tools/call","params":{"n\u0061me":"draft_create","arguments":{"draft":{"t\u0069tle":"accepted"}},"_meta":{"example.test/data":{"items":[{"k":"\ud83d\ude00"},{"k":"\uFFFD"}]}}}}` + "\n"
 	code, frames, stderr := runRemediationFrames(t, binPath, dir, input)
 	if code != 0 {
 		t.Fatalf("exit=%d stderr=%s", code, stderr)

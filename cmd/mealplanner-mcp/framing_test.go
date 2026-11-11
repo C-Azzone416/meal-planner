@@ -80,17 +80,100 @@ func TestFrameWhitespaceDoesNotWeakenRejection(t *testing.T) {
 
 func TestFramePaddingCountsTowardSizeLimit(t *testing.T) {
 	const frame = `{"jsonrpc":"2.0","method":"notifications/initialized"}`
-	for _, extra := range []int{0, 1} {
-		g := newFrameGate(time.Second)
-		g.start(strings.NewReader(frame + strings.Repeat(" ", maxTrackedLine-len(frame)+extra) + "\n"))
-		got, err := io.ReadAll(g)
-		if extra == 0 {
-			if err != nil || string(got) != frame+"\n" {
+	for _, tc := range []struct {
+		name, ending string
+		extra        int
+		wantErr      bool
+	}{
+		{"LF exact", "\n", 0, false},
+		{"LF oversize", "\n", 1, true},
+		{"CRLF exact", "\r\n", 0, false},
+		{"CRLF oversize", "\r\n", 1, true},
+		{"extra CR before CRLF", "\r\r\n", 0, true},
+		{"EOF exact with CR padding", "\r", -1, false},
+		{"EOF oversize with CR padding", "\r", 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newFrameGate(time.Second)
+			g.start(strings.NewReader(frame + strings.Repeat(" ", maxTrackedLine-len(frame)+tc.extra) + tc.ending))
+			got, err := io.ReadAll(g)
+			if tc.wantErr {
+				if !errors.Is(err, errFrameTooLarge) || len(got) != 0 {
+					t.Fatalf("oversize len=%d err=%v", len(got), err)
+				}
+			} else if err != nil || string(got) != frame+"\n" {
 				t.Fatalf("limit frame len=%d err=%v", len(got), err)
 			}
-		} else if !errors.Is(err, errFrameTooLarge) || len(got) != 0 {
-			t.Fatalf("oversize len=%d err=%v", len(got), err)
-		}
+		})
+	}
+}
+
+func TestFrameLimitWithSplitCR(t *testing.T) {
+	const frame = `{"jsonrpc":"2.0","method":"notifications/initialized"}`
+	for _, tc := range []struct {
+		name, next string
+		wantErr    bool
+	}{
+		{"LF completes CRLF", "\n", false},
+		{"space leaves CR in frame", " \n", true},
+		{"stop leaves CR in frame", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newFrameGate(time.Second)
+			g.mu.Lock()
+			g.admit([]byte(frame + strings.Repeat(" ", maxTrackedLine-len(frame)) + "\r"))
+			firstErr, firstQueued := g.inputErr, g.queue.Len()
+			g.admit([]byte(tc.next))
+			g.mu.Unlock()
+			g.Stop()
+			got, err := io.ReadAll(g)
+			if firstErr != nil || firstQueued != 0 {
+				t.Fatalf("incomplete CRLF had error=%v queued=%d", firstErr, firstQueued)
+			}
+			if tc.wantErr {
+				if !errors.Is(err, errFrameTooLarge) || len(got) != 0 {
+					t.Fatalf("oversize len=%d err=%v", len(got), err)
+				}
+			} else if err != nil || string(got) != frame+"\n" {
+				t.Fatalf("limit frame len=%d err=%v", len(got), err)
+			}
+		})
+	}
+}
+
+func TestGateRejectsAmbiguousOrMalformedRequestParams(t *testing.T) {
+	for _, tc := range []struct{ name, frame string }{
+		{"initialize duplicate", `"id":2,"method":"initialize","params":{"protocolVersion":"2024-11-05","protocolV\u0065rsion":"2025-11-25"}`},
+		{"logging case alias", `"id":2,"method":"logging/setLevel","params":{"level":"info","LEVEL":"debug"}`},
+		{"ping nested case alias", `"id":2,"method":"ping","params":{"_meta":{"items":[{"a":0,"A":1}]}}`},
+		{"unknown method duplicate", `"id":2,"method":"example/test","params":{"name":"a","name":"b"}`},
+		{"notification reversed surrogate", `"method":"notifications/initialized","params":{"_meta":{"text":"\udc00\ud800"}}`},
+		{"notification surrogate in key", `"method":"notifications/progress","params":{"_meta":{"\ud800":1}}`},
+		{"cancellation duplicate", `"method":"notifications/cancelled","params":{"requestId":1,"_meta":{"value":0,"VALUE":1}}`},
+		{"cancellation surrogate", `"method":"notifications/cancelled","params":{"requestId":1,"reason":"\ud800"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newFrameGate(time.Second)
+			const prior = `{"jsonrpc":"2.0","id":1,"method":"ping"}` + "\n"
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			g.admit([]byte(prior + `{"jsonrpc":"2.0",` + tc.frame + "}\n"))
+			if !errors.Is(g.inputErr, errAmbiguousEnvelope) || g.queue.String() != prior || len(g.pending) != 1 || len(g.seen) != 1 {
+				t.Fatalf("input error=%v queued=%q pending=%v seen=%v", g.inputErr, g.queue.String(), g.pending, g.seen)
+			}
+		})
+	}
+}
+
+func TestGateAcceptsValidUnicodeRequestParams(t *testing.T) {
+	const input = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolV\u0065rsion":"2025-11-25","_meta":{"\ud83d\ude00":["\uFFFD","\ud83d\ude00","\\ud800"]}}}` + "\n" +
+		`{"jsonrpc":"2.0","method":"notifications/initialized","params":{"_meta":{"items":[{"a":0},{"A":1}]}}}` + "\n"
+	g := newFrameGate(time.Second)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.admit([]byte(input))
+	if g.inputErr != nil || g.queue.String() != input || len(g.pending) != 1 {
+		t.Fatalf("input error=%v queued=%q pending=%v", g.inputErr, g.queue.String(), g.pending)
 	}
 }
 
@@ -106,6 +189,8 @@ func TestSubprocessMalformedFramePreservesPriorCreate(t *testing.T) {
 		"missing target":   strings.Replace(base, `"requestId":50`, `"reason":"bye"`, 1),
 		"not notification": strings.Replace(base, `"jsonrpc":"2.0"`, `"jsonrpc":"2.0","id":99`, 1),
 		"deep meta":        strings.Replace(base, `"requestId":50`, `"requestId":50,"_meta":{"nested":`+strings.Repeat("[", 1001)+"0"+strings.Repeat("]", 1001)+"}", 1),
+		"duplicate level":  `{"jsonrpc":"2.0","id":99,"method":"logging/setLevel","params":{"level":"info","LEVEL":"debug"}}`,
+		"ping surrogate":   `{"jsonrpc":"2.0","id":99,"method":"ping","params":{"_meta":{"text":"\udc00"}}}`,
 	}
 	for _, method := range []string{"null", "true", "false", "42", "[]", "{}", `"\ud800"`, "\"a\xffb\""} {
 		cases["invalid method "+method] = `{"jsonrpc":"2.0","id":99,"method":` + method + `}`

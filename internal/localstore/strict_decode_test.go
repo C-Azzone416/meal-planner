@@ -30,6 +30,7 @@ func TestDecodeStoredDraftHeaderAndMembers(t *testing.T) {
 		{"future enormous integer", `{"schema_version":922337203685477580800}`, draft.CategoryUnsupportedSchema, draft.CodeSchemaUnsupported},
 		{"future noninteger", `{"schema_version":922337203685477580800e1}`, draft.CategoryCorrupt, draft.CodeInvalidContent},
 		{"future malformed payload", `{"schema_version":2,"new":[}`, draft.CategoryCorrupt, draft.CodeInvalidJSON},
+		{"future content characters", `{"schema_version":2,"title":"\u001b\u0085\u202e"}`, draft.CategoryUnsupportedSchema, draft.CodeSchemaUnsupported},
 		{"future ambiguous root", `{"schema_version":2,"new":1,"New":2}`, draft.CategoryCorrupt, draft.CodeInvalidContent},
 		{"duplicate title", `{"schema_version":1` + fields + `,"title":"second"}`, draft.CategoryCorrupt, draft.CodeInvalidContent},
 		{"case variant title", `{"schema_version":1` + fields + `,"Title":"second"}`, draft.CategoryCorrupt, draft.CodeInvalidContent},
@@ -51,31 +52,71 @@ func TestDecodeStoredDraftHeaderAndMembers(t *testing.T) {
 	}
 }
 
-func TestReplaceRechecksAmbiguityUnderLock(t *testing.T) {
-	store, root := newStore(t)
-	current := mkDraft(testID(1), 1, minimal("first"))
-	mustCreate(t, store, current)
-	path := filepath.Join(root, "drafts", current.ID+".json")
-	original := readFile(t, path)
-	ambiguous := bytes.Replace(original, []byte(`"title": "first"`), []byte(`"title": "first", "Title": "second"`), 1)
-	if bytes.Equal(ambiguous, original) {
-		t.Fatal("could not construct ambiguous fixture")
+func TestDecodeStoredDraftContentCharacters(t *testing.T) {
+	const id = "drf_00000000000000000001"
+	const header = `{"schema_version":1,"id":"` + id + `","revision":1,"status":"draft",`
+	for _, tc := range []struct {
+		name, fields string
+		valid        bool
+	}{
+		{"escape in title", `"title":"first\u001b"`, false},
+		{"C1 in ingredient", `"ingredients":[{"text":"salt\u0085"}]`, false},
+		{"bidi isolate in guidance", `"guidance":[{"text":"notes\u2066"}]`, false},
+		{"bidi mark in source URL", `"sources":[{"url":"https://example.test/\u200f"}]`, false},
+		{"C1 in notes", `"notes":"one\u009b"`, false},
+		{"NUL in step", `"instructions":[{"text":"one\u0000"}]`, false},
+		{"tab in nested basis note", `"instructions":[{"text":"ok","phase_basis":{"note":"one\ttwo"}}]`, false},
+		{"bidi in enum", `"instructions":[{"text":"ok","phase":"prep_ahead\u202e"}]`, false},
+		{"multiline and valid Unicode", `"title":"قهوة � 👩‍🍳","notes":"one\r\ntwo\tthree","instructions":[{"text":"one\r\ntwo\tthree"}],"guidance":[{"text":"one\r\ntwo\tthree"}]`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := decode([]byte(header+tc.fields+"}"), id)
+			if !tc.valid {
+				wantErr(t, err, draft.CategoryCorrupt, draft.CodeInvalidContent, "")
+				return
+			}
+			if err != nil || d.Title != "قهوة � 👩‍🍳" || d.Notes != "one\r\ntwo\tthree" ||
+				d.Instructions[0].Text != d.Notes || d.Guidance[0].Text != d.Notes {
+				t.Fatalf("decode = %+v, %v", d, err)
+			}
+		})
 	}
-	store.hooks.beforeLock = func() {
-		if err := os.WriteFile(path, ambiguous, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+}
 
-	err := store.Replace(ctxb(), current.ID, 1, mkDraft(current.ID, 2, minimal("replacement")))
-	wantErr(t, err, draft.CategoryCorrupt, draft.CodeInvalidContent, root)
-	if got := readFile(t, path); !bytes.Equal(got, ambiguous) {
-		t.Fatal("Replace changed the ambiguous file")
-	}
-	assertNoTemps(t, root)
+func TestReplaceRechecksCorruptionUnderLock(t *testing.T) {
+	for _, tc := range []struct{ name, field string }{
+		{"ambiguous", `"title": "first", "Title": "second"`},
+		{"invalid characters", `"title": "first\u001b\u0085\u202e"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, root := newStore(t)
+			current := mkDraft(testID(1), 1, minimal("first"))
+			mustCreate(t, store, current)
+			path := filepath.Join(root, "drafts", current.ID+".json")
+			original := readFile(t, path)
+			damaged := bytes.Replace(original, []byte(`"title": "first"`), []byte(tc.field), 1)
+			if bytes.Equal(damaged, original) {
+				t.Fatal("could not construct corrupt fixture")
+			}
+			store.hooks.beforeLock = func() {
+				if err := os.WriteFile(path, damaged, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	list, err := store.List(ctxb())
-	if err != nil || len(list.Drafts) != 0 || len(list.Skipped) != 1 || list.Skipped[0].Category != draft.CategoryCorrupt {
-		t.Fatalf("List = %+v, err=%v", list, err)
+			err := store.Replace(ctxb(), current.ID, 1, mkDraft(current.ID, 2, minimal("replacement")))
+			wantErr(t, err, draft.CategoryCorrupt, draft.CodeInvalidContent, root)
+			assertNoTemps(t, root)
+			_, err = store.Get(ctxb(), current.ID)
+			wantErr(t, err, draft.CategoryCorrupt, draft.CodeInvalidContent, root)
+
+			list, err := store.List(ctxb())
+			if err != nil || len(list.Drafts) != 0 || len(list.Skipped) != 1 || list.Skipped[0].Category != draft.CategoryCorrupt {
+				t.Fatalf("List = %+v, err=%v", list, err)
+			}
+			if got := readFile(t, path); !bytes.Equal(got, damaged) {
+				t.Fatal("operations changed the corrupt file")
+			}
+		})
 	}
 }

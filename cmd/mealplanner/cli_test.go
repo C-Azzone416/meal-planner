@@ -651,14 +651,12 @@ func assertSafe(t *testing.T, where, out string, tags ...string) {
 	}
 }
 
-func TestShowEscapesEveryStoredString(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "data")
-	st, _ := localstore.Open(root, localstore.Options{})
+func TestRenderDraftEscapesEveryString(t *testing.T) {
 	basis := func(tag string) *draft.Basis {
 		return &draft.Basis{Kind: draft.BasisSourced, SourceRef: hostile(tag + "ref"), Note: hostile(tag + "note")}
 	}
 	five := 5
-	// Content that validation would reject can still reach a file by hand-editing; show must stay safe.
+	// Exercise the renderer directly so its escaping is checked independently of store validation.
 	c := draft.Content{
 		Title:       hostile("title"),
 		Yield:       hostile("yield"),
@@ -683,13 +681,8 @@ func TestShowEscapesEveryStoredString(t *testing.T) {
 	}
 	d := draft.Draft{SchemaVersion: 1, ID: "drf_0123456789abcdef0123", Revision: 1, Status: draft.StatusDraft,
 		CreatedAt: time.Now().UTC().Truncate(time.Second), UpdatedAt: time.Now().UTC().Truncate(time.Second), Content: c}
-	if err := st.Create(context.Background(), d); err != nil {
-		t.Fatal(err)
-	}
-	r := invoke(t, "", nil, "draft", "show", d.ID, "--data-dir", root)
-	if r.code != 0 {
-		t.Fatalf("%+v", r)
-	}
+	var out strings.Builder
+	renderDraft(&out, d)
 	var tags []string
 	for _, tag := range []string{"title", "yield", "ingredient", "phase", "srcid", "srckind", "srclabel", "srcurl", "srcloc", "level", "pacl", "topic", "step", "notes", "gtext", "hkind"} {
 		tags = append(tags, tag)
@@ -697,40 +690,49 @@ func TestShowEscapesEveryStoredString(t *testing.T) {
 	for _, p := range []string{"pb", "am", "att", "pa", "ct", "g"} {
 		tags = append(tags, p+"ref", p+"note")
 	}
-	assertSafe(t, "show", r.stdout, tags...)
-	if !strings.Contains(r.stdout, `\u001b[31m`) || !strings.Contains(r.stdout, `\u202e`) {
-		t.Errorf("expected visible escapes:\n%s", r.stdout)
-	}
-	// JSON mode is the faithful view: the encoder escapes control characters itself.
-	j := invoke(t, "", nil, "draft", "show", d.ID, "--data-dir", root, "--json")
-	for _, bad := range []string{"\x1b", "\r", "\x07", "\n"[:0] + "\t"} {
-		if strings.Contains(j.stdout, bad) {
-			t.Errorf("raw %q in JSON output", bad)
-		}
-	}
-	var got struct {
-		Draft draft.Draft `json:"draft"`
-	}
-	onlyJSON(t, j.stdout, &got)
-	if got.Draft.Title != c.Title {
-		t.Error("JSON mode must preserve the text exactly")
+	assertSafe(t, "show", out.String(), tags...)
+	if !strings.Contains(out.String(), `\u001b[31m`) || !strings.Contains(out.String(), `\u202e`) {
+		t.Errorf("expected visible escapes:\n%s", out.String())
 	}
 }
 
-func TestListEscapesTitles(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "data")
-	st, _ := localstore.Open(root, localstore.Options{})
+func TestRenderListEscapesTitles(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	d := draft.Draft{SchemaVersion: 1, ID: "drf_0123456789abcdef0123", Revision: 1, Status: draft.StatusDraft,
-		CreatedAt: now, UpdatedAt: now, Content: draft.Content{Title: hostile("listtitle")}}
-	if err := st.Create(context.Background(), d); err != nil {
+	var out strings.Builder
+	renderList(&out, draft.ListPage{Total: 1, Drafts: []draft.Summary{{
+		ID: "drf_0123456789abcdef0123", Revision: 1, UpdatedAt: now, Title: hostile("listtitle"),
+	}}})
+	assertSafe(t, "list", out.String(), "listtitle")
+	if !strings.Contains(out.String(), now.Format(time.RFC3339)) {
+		t.Errorf("timestamps must be RFC 3339 UTC:\n%s", out.String())
+	}
+}
+
+func TestStoredCharacterCorruptionIsSkippedAndLeftIntact(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "data")
+	const id = "drf_0123456789abcdef0123"
+	path := filepath.Join(root, "drafts", id+".json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	r := invoke(t, "", nil, "draft", "list", "--data-dir", root)
-	assertSafe(t, "list", r.stdout, "listtitle")
-	if !strings.Contains(r.stdout, now.Format(time.RFC3339)) {
-		t.Errorf("timestamps must be RFC 3339 UTC:\n%s", r.stdout)
+	const raw = `{"schema_version":1,"id":"` + id + `","revision":1,"status":"draft","title":"synthetic\u001b\u0085\u202e"}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	before := snapshot(t, root)
+	show := invoke(t, "", nil, "draft", "show", id, "--data-dir", root, "--json")
+	if show.code != 3 || show.stdout != "" || !strings.Contains(show.err, "the draft file does not match the schema") ||
+		strings.Contains(show.err, "synthetic") {
+		t.Fatalf("show = %+v", show)
+	}
+	list := invoke(t, "", nil, "draft", "list", "--data-dir", root, "--json")
+	var page draft.ListPage
+	onlyJSON(t, list.stdout, &page)
+	if list.code != 0 || len(page.Drafts) != 0 || page.SkippedTotal != 1 || len(page.Skipped) != 1 ||
+		page.Skipped[0].ID != id || page.Skipped[0].Category != draft.CategoryCorrupt {
+		t.Fatalf("list = %+v, page = %+v", list, page)
+	}
+	sameSnapshot(t, before, snapshot(t, root))
 }
 
 func TestValidateEscapesDecoderOutput(t *testing.T) {

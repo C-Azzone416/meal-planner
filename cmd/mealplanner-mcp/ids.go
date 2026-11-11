@@ -82,6 +82,11 @@ func strictMembers(raw []byte, names ...string) (map[string]json.RawMessage, err
 // deliver validates a whole frame before registration or delivery to the SDK.
 // It runs under the gate mutex, including at EOF and on a shutdown signal.
 func (g *frameGate) deliver(line []byte) bool {
+	// Without an LF at EOF or shutdown, a buffered CR is frame data.
+	if len(line) > maxTrackedLine {
+		g.rejectInput(errFrameTooLarge)
+		return false
+	}
 	// Each line is one complete JSON value. Reject malformed/concatenated
 	// values before the SDK streaming decoder can consume a valid prefix.
 	if !json.Valid(line) {
@@ -152,7 +157,7 @@ func (g *frameGate) admitRequest(req *jsonrpc.Request, validUTF8 bool) (bool, er
 		if !supportedID(target) {
 			return false, errUnsupportedID
 		}
-		if !validUTF8 {
+		if !validUTF8 || !draft.ValidUniqueJSONMembers(req.Params) {
 			return false, errAmbiguousEnvelope
 		}
 		// Invalid reason or _meta must not prematurely expose EOF.
@@ -170,6 +175,10 @@ func (g *frameGate) admitRequest(req *jsonrpc.Request, validUTF8 bool) (bool, er
 			return false, nil
 		}
 		g.release(id)
+	default:
+		if len(req.Params) > 0 && !draft.ValidUniqueJSONMembers(req.Params) {
+			return false, errAmbiguousEnvelope
+		}
 	}
 	if req.IsCall() {
 		if _, exists := g.seen[req.ID]; exists {

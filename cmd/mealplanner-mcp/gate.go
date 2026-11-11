@@ -10,7 +10,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 )
 
-// maxTrackedLine caps a complete protocol frame before any bytes reach the SDK.
+// maxTrackedLine caps the frame bytes before any bytes reach the SDK. The LF
+// or CRLF terminator is excluded, and all other padding counts.
 const maxTrackedLine = 4 << 20
 
 // The byte limit bounds retained decoded strings without shrinking the existing
@@ -125,20 +126,24 @@ func (g *frameGate) start(src io.Reader) {
 func (g *frameGate) admit(b []byte) {
 	for len(b) > 0 {
 		i := bytes.IndexByte(b, '\n')
+		n := i
 		if i < 0 {
-			if len(g.lineBuf)+len(b) > maxTrackedLine {
+			n = len(b)
+		}
+		if size := len(g.lineBuf) + n; size > maxTrackedLine {
+			// Hold one extra trailing CR until we know whether an LF follows.
+			// The CR and LF can land in different reads.
+			trailingCR := (n > 0 && b[n-1] == '\r') || (n == 0 && g.lineBuf[len(g.lineBuf)-1] == '\r')
+			if size != maxTrackedLine+1 || !trailingCR {
 				g.rejectInput(errFrameTooLarge)
-			} else {
-				g.lineBuf = append(g.lineBuf, b...)
+				return
 			}
+		}
+		g.lineBuf = append(g.lineBuf, b[:n]...)
+		if i < 0 {
 			return
 		}
-		if len(g.lineBuf)+i > maxTrackedLine {
-			g.rejectInput(errFrameTooLarge)
-			return
-		}
-		g.lineBuf = append(g.lineBuf, b[:i+1]...)
-		if !g.deliver(g.lineBuf) {
+		if !g.deliver(bytes.TrimSuffix(g.lineBuf, []byte{'\r'})) {
 			return
 		}
 		g.lineBuf = g.lineBuf[:0]
@@ -203,7 +208,7 @@ func (g *frameGate) Stop() {
 		// has not arrived. Register it, then deliver it with the newline added so the SDK can
 		// process it now. A partial line that is not valid JSON is dropped (a truncated frame would
 		// only make the SDK fail), and nothing waits on it.
-		if b := g.lineBuf; json.Valid(b) {
+		if b := g.lineBuf; len(b) > maxTrackedLine || json.Valid(b) {
 			g.deliver(b)
 		}
 		g.lineBuf = nil

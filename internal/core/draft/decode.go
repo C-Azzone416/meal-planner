@@ -58,7 +58,7 @@ func DecodeContent(raw []byte) (Content, []Issue) {
 	if root.kind != nodeObject {
 		return fail(IssueInvalidType, "/", "the input must be a JSON object")
 	}
-	if iss := checkShape(root, reflect.TypeOf(Content{}), ""); iss != nil {
+	if iss := checkShape(root, reflect.TypeOf(Content{}), "", false); iss != nil {
 		return Content{}, []Issue{*iss}
 	}
 	var c Content
@@ -69,12 +69,15 @@ func DecodeContent(raw []byte) (Content, []Issue) {
 	return normalize(c), nil
 }
 
-// ValidUniqueJSONMembers checks one JSON value for duplicate object members,
+// ValidUniqueJSONMembers checks one Unicode JSON value for duplicate object members,
 // including escaped names and case aliases under encoding/json's field matching.
 // When the root is an object, reservedRootKeys also require canonical casing.
-// This checks syntax and member identity using the draft parser's nesting
-// limit. Callers still validate the payload's types, string contents and schema.
+// This rejects invalid UTF-8 and unpaired surrogate escapes in keys or values.
+// It uses the draft parser's nesting limit. Callers validate schema and types.
 func ValidUniqueJSONMembers(raw []byte, reservedRootKeys ...string) bool {
+	if !utf8.Valid(raw) {
+		return false
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	p := &parser{dec: dec, raw: raw, membersOnly: true, reservedRootKeys: reservedRootKeys}
@@ -118,8 +121,8 @@ const (
 // shape check needs.
 type node struct {
 	kind       nodeKind
-	num        string
-	badUnicode bool // a string with an unpaired surrogate escape, which encoding/json would silently replace
+	text       string // decoded string or original number spelling
+	badUnicode bool   // a string with an unpaired surrogate escape, which encoding/json would silently replace
 	keys       []string
 	items      []node // array elements, or object values parallel to keys
 }
@@ -131,6 +134,7 @@ func (*duplicateKeyError) Error() string { return "duplicate key" }
 const maxDecodeDepth = 64
 
 var errTooDeep = errors.New("nesting too deep")
+var errUnpairedSurrogate = errors.New("unpaired surrogate escape")
 
 // parser builds a node tree from the token stream. It also looks at the raw text of every string
 // token, because encoding/json replaces an unpaired \uD800-\uDFFF escape with U+FFFD and so hides it.
@@ -184,7 +188,7 @@ func (p *parser) parse(depth int) (node, error) {
 			n := node{kind: nodeObject}
 			seen := map[string]bool{}
 			for p.dec.More() {
-				kt, _, err := p.token()
+				kt, keySeg, err := p.token()
 				if err != nil {
 					return node{}, err
 				}
@@ -194,6 +198,9 @@ func (p *parser) parse(depth int) (node, error) {
 				}
 				identity := key
 				if p.membersOnly {
+					if hasUnpairedSurrogate(keySeg) {
+						return node{}, errUnpairedSurrogate
+					}
 					identity = foldedJSONKey(key)
 					if depth == 0 {
 						for _, reserved := range p.reservedRootKeys {
@@ -238,9 +245,13 @@ func (p *parser) parse(depth int) (node, error) {
 		}
 		return node{}, errors.New("unexpected delimiter")
 	case json.Number:
-		return node{kind: nodeNumber, num: t.String()}, nil
+		return node{kind: nodeNumber, text: t.String()}, nil
 	case string:
-		return node{kind: nodeString, badUnicode: !p.membersOnly && hasUnpairedSurrogate(seg)}, nil
+		badUnicode := hasUnpairedSurrogate(seg)
+		if p.membersOnly && badUnicode {
+			return node{}, errUnpairedSurrogate
+		}
+		return node{kind: nodeString, text: t, badUnicode: badUnicode}, nil
 	case bool:
 		return node{kind: nodeBool}, nil
 	case nil:
@@ -336,15 +347,17 @@ func jsonFields(t reflect.Type) map[string]reflect.Type {
 	return m
 }
 
-// checkShape verifies that n has the JSON shape of t (and that its strings are valid text),
-// returning the first problem in document order. null is accepted wherever a value is optional (anywhere except as a list element).
-func checkShape(n node, t reflect.Type, path string) *Issue {
+// checkShape verifies the JSON shape and string Unicode, returning the first
+// problem in document order. Stored content also gets the field character
+// checks here. For create/update input those checks belong to Validate.
+// Null is accepted except as a list element.
+func checkShape(n node, t reflect.Type, path string, stored bool) *Issue {
 	if n.kind == nodeNull {
 		return nil
 	}
 	switch t.Kind() {
 	case reflect.Pointer:
-		return checkShape(n, t.Elem(), path)
+		return checkShape(n, t.Elem(), path, stored)
 	case reflect.Struct:
 		if n.kind != nodeObject {
 			return typeIssue(path, "an object")
@@ -355,7 +368,7 @@ func checkShape(n node, t reflect.Type, path string) *Issue {
 			if !ok {
 				return &Issue{Code: IssueUnknownField, Path: unknownFieldPath(path, k), Message: "unknown field"}
 			}
-			if iss := checkShape(n.items[i], ft, path+"/"+escapePointer(k)); iss != nil {
+			if iss := checkShape(n.items[i], ft, path+"/"+escapePointer(k), stored); iss != nil {
 				return iss
 			}
 		}
@@ -369,7 +382,7 @@ func checkShape(n node, t reflect.Type, path string) *Issue {
 			if it.kind == nodeNull {
 				return typeIssue(p, "an object, not null")
 			}
-			if iss := checkShape(it, t.Elem(), p); iss != nil {
+			if iss := checkShape(it, t.Elem(), p, stored); iss != nil {
 				return iss
 			}
 		}
@@ -384,12 +397,15 @@ func checkShape(n node, t reflect.Type, path string) *Issue {
 			}
 			return &Issue{Code: IssueInvalidChars, Path: path, Message: "contains an unpaired surrogate escape, which is not valid text"}
 		}
+		if stored && !validChars(n.text, multilineText(path)) {
+			return &Issue{Code: IssueInvalidChars, Path: path, Message: "contains characters that are not allowed"}
+		}
 		return nil
 	case reflect.Int, reflect.Int64:
 		if n.kind != nodeNumber {
 			return typeIssue(path, "an integer")
 		}
-		if _, err := strconv.ParseInt(n.num, 10, 64); err != nil {
+		if _, err := strconv.ParseInt(n.text, 10, 64); err != nil {
 			return typeIssue(path, "an integer")
 		}
 		return nil
