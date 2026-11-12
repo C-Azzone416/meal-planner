@@ -77,7 +77,7 @@ authority.
 
 | ID | Threat | Defense in LC1 | Residual risk |
 | --- | --- | --- | --- |
-| T1 | **Model/agent sees credentials or tokens** (prompt injection, verbose tool result, host transcript, draft text) | The credential never crosses MCP: the MCP server process reads it from the keychain and sets the header internally. No MCP tool accepts or returns a token, token path, or environment variable for one, and **there is no CLI `send` command** (section 8.1), so a shell cannot trigger a send. `connect` runs only in the CLI on a TTY, never as an MCP tool. Pairing never delivers the credential through the terminal or browser: it is returned over HTTPS to the polling CLI process (section 5.2). Tool results use an allowlisted schema (section 8.3). Redacting HTTP client; no header logging; redirects not followed. | **Shell-capable agent hosts (e.g. Claude Code) are not covered by the "never visible to the model" claim.** Such a host can run any `mealplanner` CLI command (`status`, `disconnect`, and `connect` under an allocated pty: a TTY check is not a boundary against it), read `profiles.json` (non-secret, but it contains the keychain account name `preview/<hash16>`) and run `security find-generic-password -s mealplanner.local-client.v1 -a preview/<hash16> -w`, which prints the secret to stdout, and so into the model's context, if the keychain releases it. **The only barrier is the keychain item ACL / macOS keychain prompt, and its behaviour for a different calling binary is UNVERIFIED** (section 2.5, LC-K3). Without a shell tool the guarantee holds by construction (no tool returns the secret). With a shell tool it reduces to the same-OS-user residual in T7. That is acceptable only for the Preview test with synthetic data; D5 and D10 gate anything beyond it. |
+| T1 | **Model/agent sees credentials or tokens** (prompt injection, verbose tool result, host transcript, draft text) | The credential never crosses MCP: the MCP server process reads it from the keychain and sets the header internally. No MCP tool accepts or returns a token, token path, or environment variable for one, and **there is no CLI `send` command** (section 8.1), so a shell cannot trigger a send. `connect` runs only in the CLI on a TTY, never as an MCP tool. Pairing never delivers the credential through the terminal or browser: it is returned over HTTPS to the polling CLI process (section 5.2). Tool results use an allowlisted schema (section 8.3). Redacting HTTP client; no header logging; redirects not followed. | **Shell-capable agent hosts (e.g. Claude Code) are not covered by the "never visible to the model" claim.** Such a host can run any `mealplanner` CLI command (`status`, `disconnect`, and `connect` under an allocated pty: a TTY check is not a boundary against it). **A pty-capable agent can also drive `connect`'s prompts, including the step 7 confirmation (section 5.2): step 7 is a human control, not a boundary.** The approval itself still requires the owner's signed-in browser session (T13), so the agent cannot approve its own pairing. The host can also read `profiles.json` (non-secret, but it contains the keychain account name `preview/<hash16>`) and run `security find-generic-password -s mealplanner.local-client.v1 -a preview/<hash16> -w`, which prints the secret to stdout, and so into the model's context, if the keychain releases it. **The only barrier is the keychain item ACL / macOS keychain prompt, and its behaviour for a different calling binary is UNVERIFIED** (section 2.5, LC-K3). Without a shell tool the guarantee holds by construction (no tool returns the secret). With a shell tool it reduces to the same-OS-user residual in T7. That is acceptable only for the Preview test with synthetic data; D5 and D10 gate anything beyond it. |
 | T2 | **Pairing replay** (re-using a user code, polling secret or the issued credential) | Pairing is single-use: `pending → approved → consumed` (or `denied`/`expired`). The credential is created and returned in one transaction that sets `consumed`; a second redeem returns the same `410 pairing_consumed` with no credential. `code_verifier` is checked against the stored S256 challenge (RFC 7636 §4.6) and only the redeeming CLI holds it. 10-minute expiry. `user_code` is deleted at consumption. Polling ≥5 s, `slow_down` (RFC 8628 §3.5). | A lost redeem response orphans a grant; the owner revokes it from the app list (section 7); the CLI re-pairs. Accepted: simplicity over idempotent credential retrieval, which would weaken replay prevention. |
 | T3 | **Callback/state substitution (login-CSRF)** and the **remote-phishing variant of pairing** (approval-page web attacks are T13) | There is **no callback** in the recommended flow, so no redirect URI, authorization code or `state` is exposed to interception. The CLI only accepts a credential from the exact pairing it created (pairing ID + verifier). The approval page shows client label, creation age and a short challenge fingerprint, and asks the owner to type the code they see in their own terminal. **That is a social control, not a technical defense.** It helps an owner who is at the CLI, but against remote phishing the attacker's CLI runs on the attacker's machine and shows the attacker the same code and fingerprint, so the owner cannot tell the difference (RFC 8628 §5.4: the confirmation "doesn't prevent a phisher from presenting a fresh token" when interacting in real time). The technical bound is that the credential is send-only (D6) and revocable. Any loopback variant (Flow A, section 3) must use `state` ≥128 bits, PKCE S256, `127.0.0.1`/`[::1]` only, exact path, one request, listener closed after first request, and reject mismatched `state`/`iss` (RFC 8252 §§7.3, 8.3, 8.9, 8.10; RFC 9207 §2.4). | Social engineering: the owner approves a code an attacker gave them. The approval-screen text and fingerprint do **not** stop a live remote phisher. Impact is bounded to send-only plus drafts reads (D6). |
 | T4 | **Cross-environment grant reuse** (Preview credential used on Production or vice versa) | Credentials are issued, hashed and verified in the *environment's own database*; there is no shared table or key. Server also compares `grant.environment_id` with its configured environment ID and rejects mismatch. Token prefix carries the environment (`mp_lc1_pv_…`); the client compares prefix, profile, `whoami.environment` and receipt link origin before and after sending (section 4.2). No Production profile exists in the Preview build/config. | A client bug that ignores the preflight: tested by the matrix (LC-E1..E5). |
@@ -111,7 +111,7 @@ Better Auth feature page alone does **not** establish that Neon supports it.
 | **OAuth Provider** (OAuth 2.1 authorization server): `authorization_code` + `refresh_token`; no `client_credentials`; public clients with PKCE for "single-page, mobile, desktop, and CLI apps"; MCP support | Documented | <https://neon.com/docs/auth/guides/plugins/oauth-provider> (2026-11-06) |
 | OAuth Provider **scopes are fixed**: `openid`, `profile`, `email`, `offline_access`. "Scopes, token lifetimes, and other provider options aren't configurable." | Documented | OAuth Provider page |
 | OAuth Provider access token 1 hour; refresh token 30 days, rotated on every use, only with `offline_access`; token carries `client_id` and `scope`; developer must host login and consent pages ("doesn't provide default pages") | Documented | OAuth Provider page |
-| OAuth Provider **resources**: a list of resource identifiers (up to 10 configured, plus the MCP server resource); a requested resource "becomes the token's `aud` claim". If the authorize and token requests omit `resource`, an **opaque token** is issued instead of a JWT and "your resource server can't verify it". Per-token `client_id` and `scope` claims. **Client ID Metadata Documents (CIMD)** on by default once a server URL is set; legacy **Dynamic Client Registration** (`/oauth2/register`) off by default. **No revoke or introspection endpoint is documented**; "Deleting a client doesn't revoke tokens that were already issued to it." | Documented | OAuth Provider page (2026-11-06, read 2026-11-11) |
+| OAuth Provider **resources**: a list of resource identifiers (up to 10 configured); a requested resource "becomes the token's `aud` claim". If the authorize and token requests omit `resource`, an **opaque token** is issued instead of a JWT and "your resource server can't verify it". Per-token `client_id` and `scope` claims. **Client ID Metadata Documents (CIMD)** on by default once a server URL is set; legacy **Dynamic Client Registration** (`/oauth2/register`) off by default. **No revoke or introspection endpoint is documented**; "Deleting a client doesn't revoke tokens that were already issued to it." | Documented | OAuth Provider page (2026-11-06, read 2026-11-11) |
 | Redirect URIs for managed clients: `https`, or `http` on a loopback host **when localhost access is enabled for the branch**; custom schemes such as `myapp://` fail | Documented | OAuth Provider page |
 | Localhost toggle: Manage API endpoint `/allow_localhost` (GET, PATCH), "Toggle localhost access for development". The request-body field name is not shown on any page read. | Documented (endpoint only) | <https://neon.com/docs/auth/guides/manage-auth-api> (2026-10-09) |
 | Production checklist item 6, **"Disable localhost access"**: 'Disable the "Allow Localhost" setting' in Settings → Better Auth; "enabled by default for development but should be disabled in production" | Documented | <https://neon.com/docs/auth/production-checklist> (2026-10-09) |
@@ -131,8 +131,8 @@ Better Auth feature page alone does **not** establish that Neon supports it.
 
 Better Auth upstream options (configurable scopes, token lifetimes, revoke) do
 **not** transfer to Neon: Neon states scopes and lifetimes are not configurable.
-Whether Neon exposes `/oauth2/revoke`, resource registration or opaque access
-tokens is **UNVERIFIED**.
+Neon now documents resources and opaque access tokens (section 2.1). Only a
+revoke endpoint remains undocumented (section 2.3, item 1).
 
 ### 2.3 UNVERIFIED provider behaviours (do not rely on them)
 
@@ -166,10 +166,21 @@ tokens is **UNVERIFIED**.
    Also whether the app can read the account's *current* email per request
    (a Neon Auth user table or API); nothing in this repo reads one.
 8. Whether the verified Neon JWT carries a session identifier claim. The JWT
-   page documents `sub`, `iss`, `aud` only. Section 5.5's per-session counter
-   needs one; without it the per-account counter is the effective limit.
+   page documents `sub`, `iss`, `aud` only, and nothing in this repo reads one.
+   **Treat C1 (section 5.5) as expected-absent**: the design must hold with C2
+   (10 per hour per account) as the first limiter. A session claim, if ever
+   found, only adds C1.
 9. How the hosting platform exposes the real client IP (the per-IP counters of
    section 5.5 depend on a trustworthy source).
+10. **`iat` for the 5-minute fresh-token rule (T13, section 5.4).** Neon documents
+    `iat`, but `hosted/bearer_auth.go` treats it as optional and does not expose
+    it to handlers, so the rule cannot be enforced today. **A missing `iat` fails
+    closed: `401 reauth_required`.** The verifier must change to require and
+    expose `iat` for these routes (section 9). **UNVERIFIED:** whether the SPA
+    can obtain a freshly minted JWT on demand (the auth service may return a
+    cached token). If it cannot, approval would always return `reauth_required`
+    and the owner would have to sign in again; this degrades safely but may be
+    unusable until verified.
 
 ### 2.4 Standards used (accessed 2026-11-11)
 
@@ -342,7 +353,8 @@ All under `/api/local-client-v1`, `Cache-Control: no-store`, `api_version:
    page, which calls `POST /approvals/lookup`. The server first applies the
    member gate and the section 5.5 counters, then looks up the code. On a hit it
    mints the opaque `ref` (section 5.4) and the page shows: environment,
-   account label, client label (marked "name chosen by the requesting
+   account label (built as in step 7: it includes the verified normalized
+   email), client label (marked "name chosen by the requesting
    program"), age ("created 40 s ago"), a 6-character fingerprint of the
    challenge (also printed by the CLI), and the text "Allows saving
    **unreviewed drafts only**. It cannot approve recipes, edit drafts or read
@@ -359,7 +371,15 @@ All under `/api/local-client-v1`, `Cache-Control: no-store`, `api_version:
    returns the credential in the HTTPS response body.
 7. With the credential still only in process memory, the CLI calls `whoami`,
    prints `Account · <label> · Preview · <origin>` and asks the user to confirm
-   it is their account (a wrong-account approval, T10, is visible here). On
+   it is their account (a wrong-account approval, T10, is visible here).
+   **Label source (matches #77 §8.1's "authenticated display label").** The
+   server builds `<label>` from the verified, allowlist-gated, **normalized
+   email** recorded at approval (step 5), optionally followed by the JWT `name`
+   for readability. **`name` alone is never the label**: it is user-controlled,
+   so another #78 member could set theirs to the owner's name and make a
+   wrong-account approval look right. The approval page (step 4) shows the same
+   label. The prompt **defaults to "no"** (Enter or EOF means no) and proceeds
+   only if the user types the label's email or `yes`. On
    "no" it calls `DELETE /grants/self` and exits. On "yes" it stores the
    credential in the keychain (item key from section 4.1), writes non-secret
    profile metadata and zeroes the verifier. If the keychain write fails, the
@@ -413,7 +433,7 @@ pairing to reset it.
 
 | Counter | Key | Budget (well-formed lookups) | Window | Lockout |
 | --- | --- | --- | --- | --- |
-| C1 per approving session | `(issuer, subject, session id)` from the verified JWT (**UNVERIFIED** claim; if absent, C1 is dropped and C2 is the first limiter) | 5 | 10 min (one pairing lifetime) | 15 min of `429 locked` + `Retry-After`; correct codes are not evaluated while locked |
+| C1 per approving session | `(issuer, subject, session id)` from the verified JWT (**expected absent**: Neon's JWT has no documented session-id claim; C1 is then dropped and C2 is the first limiter) | 5 | 10 min (one pairing lifetime) | 15 min of `429 locked` + `Retry-After`; correct codes are not evaluated while locked |
 | C2 per account | `(issuer, subject)` | 10 | 60 min | until the window ends; after 3 lockouts in 24 h, 24 h, plus an operator alert (hashed identity only) |
 | C3 per IP | hash of the client IP (**UNVERIFIED** trusted source) | 20 lookups; separately 10 `POST /pairings` and 3 pending pairings | 60 min | 60 min |
 | C4 global (per environment) | environment | 100 | 60 min | until the window ends (an intentional availability trade-off) |
@@ -423,10 +443,15 @@ pairing to reset it.
   confusions; input is normalised (case-insensitive, spaces/hyphens stripped). A
   malformed code (wrong length or alphabet) returns `400`, is **not** charged to
   C1/C2 (it cannot match, so it gains the guesser nothing) and is covered only by
-  a coarse request-rate limit. A well-formed typo costs one of the 5 session
-  attempts, so an owner survives 4 typos per 10 minutes. After a C1 lockout the
-  owner waits 15 minutes; signing in again gives a new session key but not a new
-  account budget (C2 still applies). **Creating a new pairing resets nothing.**
+  a coarse request-rate limit. A well-formed typo costs one attempt. **With C1
+  expected-absent (section 2.3, item 8), the budget is C2's**: 10 well-formed
+  lookups per account per hour, shared by every session and every pairing, so an
+  owner survives 9 typos in an hour and the 10th lookup is the last one
+  evaluated. If C1 exists, it adds a tighter 5-per-10-minutes limit per session
+  (4 typos). On a C2 lockout the owner waits until the window ends (up to an
+  hour; 24 h after 3 lockouts in 24 h); the page shows `Retry-After`, and
+  signing in again or creating a new pairing does not help. An owner who burned the
+  budget on typos cannot pair until it resets. **Creating a new pairing resets nothing.**
 - **Uniform responses.** Nonexistent, expired, consumed, denied and
   other-environment codes return one identical `404 code_not_found`; lockouts
   return one identical `429`. Timing differences between those paths are not
@@ -625,6 +650,7 @@ client treats it as `reconnect_required`).
 | Web "Connect a tool" approval page and grants list | LC1 | UI review (P1 copy) |
 | New server rate-limit counters (attempts table, section 5.5) and pending-row caps | LC1 | Reviewed migration + operational approval |
 | Response headers `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY` for the approval page and `/api/local-client-v1/*`; SPA route for `/connect` (`vercel.json` rewrite). Neither header exists in the repo today | T13 | Deploy-config approval |
+| Verifier change in `hosted/bearer_auth.go`: require `iat` and expose it, so the 5-minute fresh-token rule can be enforced; a missing `iat` returns `401 reauth_required` (section 2.3, item 10). Also verify the SPA can obtain a fresh JWT on demand (**UNVERIFIED**) | T13 | Code review + auth-surface approval |
 | Operator "revoke grants by email" procedure (or a membership stamp in #78 config) | D12 | Runbook / #78 follow-up approval |
 | macOS release signing or notarization for the MCP/CLI binaries | T6/T7 | Release owner (**UNVERIFIED** whether it exists) |
 | Provider changes: **none for LC1** | | |
@@ -648,7 +674,7 @@ None of these is silently chosen. Recommendations are design input.
 | D6 | Send-credential read scope | Owner-wide drafts/receipts reachable by ID; only drafts created by that grant | Current exposure is narrow: the credential can fetch only drafts/receipts whose unguessable IDs it already knows, and #77 gives it no listing. **Recommended #77 follow-up (additive, not a #77 blocker):** narrow reads to drafts created by the grant (record the grant ID on submissions), so a stolen credential cannot read drafts the owner submitted from elsewhere |
 | D7 | Cascade on compromise | (a) Manual "revoke all" plus a visible grant list; (b) grant tied to the Neon session (impossible: no events); (c) **proxy cascade**: when `hosted/auth_proxy.go` successfully forwards `revoke-other-sessions`, or a successful `email-otp/reset-password` (identity is in the request body), also revoke that account's grants; optionally `sign-out` | **(a) now.** Add **(c)** for `revoke-other-sessions` and password reset only, as a follow-up after the Preview test; do **not** cascade on plain `sign-out` (it would disconnect tools every time the owner signs out). (c) limits: calls made directly to Neon bypass the proxy; the proxy sees a cookie, so it must resolve the account (for example through `get-session`, design not specified here); the app must still say password reset does not revoke tools unless (c) is on |
 | D8 | Production profile | Not enabled until the #55 gate; enable C after; use Flow A (blocked) | Not enabled before the owner test; revisit after; Production needs its own approval |
-| D9 | Pairing abuse limits and concurrent grants | (a) The section 5.5 numbers: C1 5/10 min, C2 10/h, C3 20/h and 10 creates/h and 3 pending per IP, C4 100/h, 10 pending per environment, 5 active grants per account; (b) tighter (3 / 5 / 10 / 50) at the cost of fewer typo retries; (c) a longer code (10 characters, 20¹⁰ ≈ 1.0×10¹³) with the same counters | **(a)**, tuned by ops after the Preview test. Store `user_code` as a keyed HMAC (unusable without the server key) with a 10 min TTL. Typo budget: 4 per 10 minutes per session. Attacker success ≈3.9×10⁻¹⁰ per owner pairing for one account, ≤3.9×10⁻⁹ at the global cap (section 5.5). Decide whether C4 lockout (a global availability lever) is acceptable |
+| D9 | Pairing abuse limits and concurrent grants | (a) The section 5.5 numbers: C1 5/10 min, C2 10/h, C3 20/h and 10 creates/h and 3 pending per IP, C4 100/h, 10 pending per environment, 5 active grants per account; (b) tighter (3 / 5 / 10 / 50) at the cost of fewer typo retries; (c) a longer code (10 characters, 20¹⁰ ≈ 1.0×10¹³) with the same counters | **(a)**, tuned by ops after the Preview test. Store `user_code` as a keyed HMAC (unusable without the server key) with a 10 min TTL. Typo budget (C1 expected-absent): 9 well-formed typos per account per hour from C2, shared across sessions and pairings; 4 per 10 minutes per session only if a session claim exists (section 5.5). Attacker success ≈3.9×10⁻¹⁰ per owner pairing for one account, ≤3.9×10⁻⁹ at the global cap (section 5.5). Decide whether C4 lockout (a global availability lever) is acceptable. **Pending-pairing cap as an availability lever:** `POST /pairings` is unauthenticated, so an attacker with spoofed or rotating IPs (C3 is only as good as the IP source, section 2.3 item 9) can fill the 10-pending-per-environment cap and block the owner's pairing for up to 10 minutes (the pairing TTL), repeatedly. Mitigation options: (i) accept and document it (Preview is small; owner retries); (ii) reserve cap slots for requests that pass a cheap proof-of-work or a per-IP token; (iii) make the cap per client-supplied nonce plus IP and expire unredeemed rows faster (for example 2 minutes until first poll); (iv) require a signed-in member to start pairing (changes the flow: the web app issues the code). Recommend **(i) for the Preview test**, with an alert when the cap is hit, and revisit (iii) before Production |
 | D10 | Same-user malicious-process and shell-capable-host stance | Accept; require signed binary and a keychain ACL; block real data until LC-K3 is run | Accept for Preview with synthetic data only; require LC-K3 evidence and signing before real data or Production |
 | D11 | Provider email change (T9) | (a) State the limitation: the grant works while `email_at_approval` stays in the #78 allowlist, a provider-side email change is not detected, re-pair to update; (b) per-request lookup of the account's current email by `(issuer, subject)` and deny on mismatch (**UNVERIFIED** data source); (c) key #78 membership to `(issuer, subject)` instead of email (a #78 change) | **(a)** now, stated in the UI and runbook; revisit (b) only once a Neon user data source is verified. User-facing: an owner who changes email keeps tools connected until expiry or revocation |
 | D12 | Removal then re-add of the same email | (a) State the risk plainly and require the operator runbook step "revoke that member's grants before or at removal"; (b) (a) plus an operator-only "revoke grants by email" procedure (the removed member can no longer sign in to revoke their own); (c) code-enforced: add a per-email added-at stamp to the #78 membership config and reject grants approved before it | **(a) + (b) for Preview**; consider (c) as a #78 follow-up before multi-member Production use. D3's 7-day cap bounds the revival window. User-facing: removing a member does not permanently end their tools if the email is re-added early |
