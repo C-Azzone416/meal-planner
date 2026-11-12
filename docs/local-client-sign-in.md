@@ -268,8 +268,8 @@ separately approved change (D8).
 | `environment` | `preview`; must equal the server's `whoami.environment` |
 | `environment_id` | Server-returned opaque ID recorded on first connect and compared thereafter |
 | `scope` | `draft:send` only |
-| `account` | Selected explicitly; stored as `{label, hash16(issuer,subject)}`; never inferred |
-| `credential_ref` | Keychain service `mealplanner.local-client.v1`, account `preview/<binding_id>`; the value is the credential. `binding_id` is the first 128 bits (32 hex characters) of SHA-256 over a length-prefixed encoding of (`environment`, `api_origin`, `web_origin`, `hash16(issuer,subject)`), **recomputed from the profile on every use** |
+| `account` | Selected explicitly; stored as `{label, hash16(issuer,subject)}` (encoding pinned below); never inferred |
+| `credential_ref` | Keychain service `mealplanner.local-client.v1`, account `preview/<binding_id>`; the value is the credential. `binding_id` is the first 128 bits (32 hex characters) of SHA-256 over the pinned length-prefixed encoding below of (`environment`, `api_origin`, `web_origin`, `hash16(issuer,subject)`), **recomputed from the profile on every use** |
 
 **Credential-to-origin binding.** The keychain item is bound to the exact API
 origin and web origin as well as the environment and account, by putting all four
@@ -286,6 +286,36 @@ Alternative (not recommended): store the origins as attributes or in an envelope
 inside the item and compare them before use; this needs the item to be read
 before the check and relies on the same ACL, so the key binding is the HD
 default. Test: LC-O1.
+
+**Pinned serialization (binding ID and account hash).** Both hashes use one
+framing, `frame(f1..fn)`: for each field in the fixed order given, the field's
+**UTF-8 bytes** preceded by its byte length as a **fixed-width 4-byte big-endian
+uint32**; fields are concatenated with nothing else between them (no separators,
+no count, no trailing bytes). A field longer than 2^32-1 bytes is an error.
+Each hash starts with a fixed ASCII domain label as its first framed field, so the
+two hashes can never be confused with each other. Both outputs are the **first 16
+bytes (128 bits) of SHA-256 over the framed bytes, rendered as 32 lowercase hex
+characters**.
+
+- `hash16(issuer, subject)` = hex(SHA-256(`frame("mealplanner.local-client.v1/account", issuer, subject)`)[0:16]). Issuer and subject are never concatenated unframed.
+- `binding_id` = hex(SHA-256(`frame("mealplanner.local-client.v1/binding", environment, api_origin, web_origin, account_hash)`)[0:16]), where `account_hash` is the 32-character hex text of `hash16` above, framed as its UTF-8 bytes.
+- Field order is fixed as listed; reordering or omitting a field changes the output. Origins are the exact stored strings (no normalization at hash time; normalization happens once when the profile is written).
+- **The outer hash does not repair an inner collision.** If two `(issuer, subject)` pairs produced the same `hash16`, they would produce the same `binding_id` for the same environment and origins. The account hash is therefore a 128-bit security boundary of its own, and an implementation must never replace it with an unframed or shorter value.
+
+Test vectors (generated with Python `hashlib`, script in the PR notes; the
+implementation must reproduce them exactly, LC-O2). Shared inputs: `environment`
+= `preview`, `api` = `https://api.preview.example.test`, `web` =
+`https://app.preview.example.test`, `iss` = `https://auth.example.test/neondb/auth`.
+
+| Vector | Inputs | Output |
+| --- | --- | --- |
+| A1 | `hash16(iss, "user-0001")` | `85cc7837f6367d64977691a40c830403` |
+| A2 | `hash16(iss, "user-0002")` | `3434e82698d60f9723d16a5dd3372c78` |
+| A3 | `hash16("https://auth.example.test/neondb/aut", "huser-0001")` (same concatenation as A1's `iss`+`user-0001`, different split) | `2021ae5c667922d3b7fbc2323876853a` |
+| B1 | `binding_id(preview, api, web, A1)` | `ce93543a48fb2694ff7c4dc4f403c6ae` |
+| B2 | as B1 with api = `https://api2.preview.example.test` (API origin only) | `830b648fd94f443b04da9100bf7bc68d` |
+| B3 | as B1 with web = `https://app2.preview.example.test` (web origin only) | `4634cee9127c88e60140caeab9ca14e0` |
+| B4 | as B1 with account hash A2 | `65a293f51334f33110b38e293b39829f` |
 
 ### 4.2 Required behaviours
 
@@ -474,6 +504,17 @@ pairing to reset it.
     **not charged**, do not evaluate the code and do not extend any lock.
     Hence, for every key, at most `budget` lookups are evaluated in **any**
     interval of length W, including one that straddles a clock-hour boundary.
+  - *All-or-nothing admission.* A lookup checks and admits **every applicable
+    counter key (C1 when present, C2, C3, C4) in ONE transaction**, taking the
+    per-key locks in a fixed global order (C1, C2, C3, C4; within a kind, by
+    key). If any key refuses, the transaction rolls back and **no key is
+    charged**: a later (for example global) refusal never leaves an earlier
+    account, session or IP charge behind. Separately committed per-key
+    increments are not allowed. A create (`POST /pairings`) is the same: the
+    per-environment pending cap, the per-IP create cap (10/h) and the per-IP
+    pending cap (3) are checked **together with inserting the pairing row and
+    the creation charge in one transaction** (same lock order); any refusal
+    inserts nothing and charges nothing.
   - *C1.* The 6th lookup inside the trailing 10 minutes starts one 15-minute
     lockout episode. During it every lookup from that session is refused
     uncharged and does not extend it. When it ends, all charges are older than
@@ -572,7 +613,8 @@ and in-memory fakes. None needs a provider, account or credential.
 | LC-P7i | `ref` hygiene: no response, header, log line or error from `/approvals/*` contains `pairing_id`; `ref` used by another account, after 2 min, after 3 wrong confirmations, or on `/pairings/{id}/redeem` | All rejected with the same `404`/`401`; `redeem` is unaffected by any approval call |
 | LC-P7j | Non-member session calls `/approvals/lookup` | `403` before any counter or code evaluation (member gate first) |
 | LC-P7k | Per-environment pending cap: 10 pending pairings exist (different IPs), an 11th `POST /pairings`; and 20 **parallel** creates (different IPs) with 9 pending; and 20 parallel creates from one IP | Refused (cap response); an existing pairing still redeems; after one expires (fake clock) a new create succeeds; alert emitted. Under parallelism exactly one create succeeds and pending never exceeds 10 (per IP: never more than 3 pending / 10 creates per trailing hour): atomic conditional insert, not count-then-insert |
-| LC-P7l | Active-grant cap (slot reservation, section 5.5). (i) 5 active grants, a 6th approval. (ii) 4 active grants; approve pairing A, then approve pairing B. (iii) 4 active grants; approve A and B **in parallel**. (iv) 3 active grants; approve A and B, then redeem A and B **in parallel**. (v) 4 active grants; approve A, let A expire unredeemed (fake clock), approve B. (vi) Force the redeem-time recheck to fail (cap lowered or a grant inserted out of band) | (i) `409 grant_limit`; revoking one grant lets the approval succeed. (ii) A succeeds (reserves the 5th slot), B gets `409 grant_limit`. (iii) exactly one succeeds. (iv) both succeed, exactly 5 active grants, a further approval is `409 grant_limit`, never 6. (v) A's slot is released at expiry, B succeeds. (vi) `409 grant_limit`, pairing `denied`, no credential, no grant. A refused approval leaves the pairing `pending` and the `ref` valid |
+| LC-P7l | Active-grant cap (slot reservation, section 5.5). (i) 5 active grants, a 6th approval. (ii) 4 active grants; approve pairing A, then approve pairing B. (iii) 4 active grants; approve A and B **in parallel**. (iv) 3 active grants; approve A and B, then redeem A and B **in parallel**. (v) 4 active grants; approve A, let A expire unredeemed (fake clock), approve B. (vi) Force the redeem-time recheck to fail (cap lowered or a grant inserted out of band) | (i) `409 grant_limit`; revoking one grant lets the approval succeed. (ii) A succeeds (reserves the 5th slot), B gets `409 grant_limit`. (iii) exactly one succeeds. (iv) both succeed, exactly 5 active grants, a further approval is `409 grant_limit`, never 6. (v) A's slot is released at expiry, B succeeds. (vi) `409 grant_limit`, pairing `denied`, no credential, no grant. A refused approval leaves the pairing `pending` and the `ref` valid. **Explicit slot-count assertions:** (vii) **deny releases the slot:** 4 active grants, approve A (slots in use = 5), then deny/cancel A: slots in use = 4, and a following approval of B succeeds (slots = 5). (viii) **redeem converts the reservation to a grant:** 4 active grants, approve A (4 grants + 1 reservation = 5 slots), redeem A: 5 active grants + 0 reservations = 5 slots (not 6, not 4); the reservation row is gone, and a further approval is `409 grant_limit`. Slot counts are read from the reservation and grant tables, not inferred from responses |
+| LC-P7q | Mixed-limiter atomicity (section 5.5). C4 (global) budget full, C2 (account) and C3 (IP) budgets free; send a well-formed lookup. Also the create analogue: environment pending cap full (or IP create cap full) while the other caps are free; `POST /pairings` | Lookup: `429` refusal, then inspect **every** charge table (C1 if present, C2, C3, C4 events, `locked_until`, lockout episodes): row counts are unchanged and nothing was charged to C2 or C3, and the same account/IP still has its full budget once C4 frees. Create: refused, no pairing row inserted, no creation charge, no per-IP pending/create counter change. Repeat with the fault injected at each key position (first, middle, last) |
 | LC-P7m | C2-only typo budget (no session claim): 9 well-formed typos then the correct code, all inside the target pairing's unexpired 10-minute life, with C2, C3 and C4 otherwise at zero (the hour is the C2 budget window, not a pairing lifetime) | Succeeds (the 10th lookup is evaluated) |
 | LC-P7n | C2-only: 10 well-formed typos then the correct code (the 11th lookup), target pairing unexpired and the other counters free | `429 locked`; the correct code is not evaluated or consumed; a new pairing or sign-in does not help |
 | LC-P7o | Rolling-window boundary crossing (fake clock). Pairing created 00:58:30 (expires 01:08:30). One account makes 10 well-formed lookups at 00:59:00, then an 11th at 01:00:00; separately 100 lookups across 10 accounts at 00:59:00 and a 101st from a new account at 01:00:00; separately 20 lookups from one IP at 00:59:00 and a 21st at 01:00:00 | Each 11th/101st/21st is refused `429` although a clock-hour reset would have freed it; at most 10 per account and 100 globally are evaluated against that pairing; at 01:59:01 lookups are evaluated again |
@@ -586,7 +628,8 @@ and in-memory fakes. None needs a provider, account or credential.
 | LC-E3 | Token prefix `pv`, profile `production` or reverse | Abort before network |
 | LC-E4 | Link in response with a different origin | Rejected; reported; not opened |
 | LC-E5 | Missing Preview credential with a Production credential present | `not_connected`; Production item never read |
-| LC-O1 | Credential-to-origin binding (T12, section 4.1). With a connected Preview item, edit `api_origin` in `profiles.json` to another synthetic HTTPS origin, keeping environment and account hash; repeat editing only `web_origin`; run `status` and `draft_send` | A recording stub at the changed origin receives **no request at all** (so no `Authorization` header); the fake store sees only the recomputed key, which misses; the original item is never read or reused (no lookup by environment/account alone); the user gets `reconnect_required` naming the changed origin. Restoring the original origins makes the original item work again without re-pairing |
+| LC-O1 | Credential-to-origin binding (T12, section 4.1). With a connected Preview item, edit `api_origin` in `profiles.json` to another synthetic HTTPS origin, keeping environment and account hash; repeat editing only `web_origin`; run `status` and `draft_send`. **In the web-origin-only run, record at BOTH the unchanged API origin and the edited web origin.** Run each edit case once cold and once against an **already-running (warm) MCP server** that connected and sent successfully before the edit, to catch cached credential reuse | Recording stubs at the changed origin and, for the web-only edit, also at the unchanged API origin and the edited web origin each receive **zero authenticated calls (no `Authorization` header, no `whoami`)**, in both the cold and warm runs; the fake store sees only the recomputed key, which misses; the original item is never read or reused (no lookup by environment/account alone); the user gets `reconnect_required` naming the changed origin. Restoring the original origins makes the original item work again without re-pairing |
+| LC-O2 | Serialization vectors (section 4.1). Compute `hash16` and `binding_id` with the production code for vectors A1-A3 and B1-B4; also check that swapping any two fields, or moving a byte between issuer and subject, changes the output | Every output equals the section 4.1 hex exactly (32 lowercase hex chars); A1 and A3 differ although the issuer and subject concatenate to the same text; B2 and B3 each differ from B1 (API-only and web-only origin changes each change the key); the in-memory fake and the keychain store derive identical keys |
 | LC-A1 | Account A grant, request for account B's draft, receipt, review | Same 404 as absent; no B metadata |
 | LC-A2 | Switch account without a second pairing | Refused; no credential reuse; local ledger remains per account |
 | LC-A3 | Same subject, different issuer | Treated as a different owner (#77) |
@@ -656,8 +699,9 @@ type Profile struct {
     Name, WebOrigin, APIOrigin, EnvironmentID string // Name == "preview" in LC1
     AccountLabel string; AccountHash string
 }
-// BindingID(p) = first 128 bits of SHA-256 over a length-prefixed encoding of
-// (Name, APIOrigin, WebOrigin, AccountHash); the only way a store derives a key.
+// BindingID(p) = 32-hex-char first 128 bits of SHA-256 over the pinned framing of section 4.1
+// (uint32 big-endian byte lengths, UTF-8) of (Name, APIOrigin, WebOrigin, AccountHash);
+// the only way a store derives a key. Must match the section 4.1 vectors (LC-O2).
 type CredentialStore interface { // keychain implementation + in-memory fake
     // Key = (service, "preview/"+BindingID(p)). No lookup by environment/account alone, no listing, no fallback key.
     Get(ctx context.Context, p Profile) (Credential, error)   // ErrNotConnected if the derived key has no item; Credential redacts every format verb (below)
