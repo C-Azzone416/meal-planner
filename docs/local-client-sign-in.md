@@ -17,16 +17,19 @@ confirms the Preview test (#25). Nothing here lifts that.
 
 - **Neon Auth does not document a device authorization grant** (section 2). It
   does document an OAuth 2.1-style provider (authorization code + PKCE, public
-  clients, loopback redirects) with **fixed scopes, fixed token lifetimes**, JWT
-  access tokens that Better Auth upstream says cannot be revoked (Neon documents
-  no revoke endpoint), and a production checklist item that
+  clients, loopback redirects) with **fixed scopes, fixed token lifetimes**, 1-hour
+  access tokens with no documented Neon revocation path (plan for validity
+  through `exp`; Better Auth upstream says JWT access tokens cannot be revoked),
+  and a production checklist item that
   *disables* localhost. Neon's **Manage API and webhooks** document no session
   or token revoke endpoint and no session events. (The app's own same-origin
   auth proxy does forward `sign-out` and `revoke-other-sessions` to the
   provider; section 7 and D7 cover using that as a partial cascade.)
-- Those limits mean a provider-issued token can neither express "send-only"
-  nor be revoked faster than its lifetime. Send-only (#77) must be enforced by
-  the application either way.
+- Those limits mean a provider-issued token cannot express "send-only" (scopes
+  are fixed) and, with no documented revocation path, must be planned as valid
+  through `exp`. That is a documented absence, not a verified impossibility
+  (section 2.3, item 1). Send-only (#77) must be enforced by the application
+  either way.
 - **Recommendation (LC1):** an **app-mediated, device-style pairing** using
   existing Neon sign-in only for the *owner's approval step* (a bearer-header
   call, so the cookie session is not itself an approval authority, T13),
@@ -34,7 +37,7 @@ confirms the Preview test (#25). Nothing here lifts that.
   **app-issued, opaque, send-only, environment-bound, revocable credential**
   stored in the OS keychain. No Neon setting changes. No credential ever enters
   the model's context by construction when the host has no shell tool; see T1
-  for the shell-host residual. It copies the security properties of RFC 8628 and
+  for the shell-host and direct-MCP-invocation residuals. It copies the security properties of RFC 8628 and
   RFC 7636 but is an application protocol, not a provider feature. It needs new
   persistent storage and routes, so it **requires separate approval**
   (section 9).
@@ -62,7 +65,7 @@ confirms the Preview test (#25). Nothing here lifts that.
 | Asset | Where | Should be visible to |
 | --- | --- | --- |
 | Send credential (`mp_lc1_…`) | OS keychain; in memory of the CLI/MCP *process*; `Authorization` header | Only the local client process. **Never** the model, tool arguments/results, draft files, logs, env vars, argv, crash dumps. For a shell-capable agent host this is a goal gated by the unverified keychain ACL, not a guarantee (T1). |
-| Pairing `code_verifier` | memory of the CLI process for ≤10 min | CLI process only. Never written to disk. |
+| Pairing `code_verifier` | memory of the CLI process for ≤10 min | CLI process only; sent only in the HTTPS body of the redeem call to the pinned redeem endpoint (section 5.2 step 6). Never written to disk. |
 | Pairing `user_code` | terminal display; typed into the web app by the owner | The owner. Low value alone (useless without the verifier and the owner's session). It *may* appear on screen. Never in a URL. |
 | `pairing_id` | CLI process memory; server; the redeem URL path | CLI and server only. **Never** returned to the approving browser (approval uses the separate `ref`, section 5.4). |
 | Approval `ref` | returned to the approving session by lookup; valid 2 minutes | The approving owner session only. Useless without that session's bearer. |
@@ -79,18 +82,18 @@ authority.
 
 | ID | Threat | Defense in LC1 | Residual risk |
 | --- | --- | --- | --- |
-| T1 | **Model/agent sees credentials or tokens** (prompt injection, verbose tool result, host transcript, draft text) | The credential never crosses MCP: the MCP server process reads it from the keychain and sets the header internally. No MCP tool accepts or returns a token, token path, or environment variable for one, and **there is no CLI `send` command** (section 8.1), so a shell cannot trigger a send. `connect` runs only in the CLI on a TTY, never as an MCP tool. Pairing never delivers the credential through the terminal or browser: it is returned over HTTPS to the polling CLI process (section 5.2). Tool results use an allowlisted schema (section 8.3). Redacting HTTP client; no header logging; redirects not followed. | **Shell-capable agent hosts (e.g. Claude Code) are not covered by the "never visible to the model" claim.** Such a host can run any `mealplanner` CLI command (`status`, `disconnect`, and `connect` under an allocated pty: a TTY check is not a boundary against it). **A pty-capable agent can also drive `connect`'s prompts, including the step 7 confirmation (section 5.2): step 7 is a human control, not a boundary.** The approval itself still requires the owner's signed-in browser session (T13), so the agent cannot approve its own pairing. The host can also read `profiles.json` (non-secret, but it contains the keychain account name `preview/<hash16>`) and run `security find-generic-password -s mealplanner.local-client.v1 -a preview/<hash16> -w`, which prints the secret to stdout, and so into the model's context, if the keychain releases it. **The only barrier is the keychain item ACL / macOS keychain prompt, and its behaviour for a different calling binary is UNVERIFIED** (section 2.5, LC-K3). Without a shell tool the guarantee holds by construction (no tool returns the secret). With a shell tool it reduces to the same-OS-user residual in T7. That is acceptable only for the Preview test with synthetic data; D5 and D10 gate anything beyond it. |
+| T1 | **Model/agent sees credentials or tokens** (prompt injection, verbose tool result, host transcript, draft text) | The credential never crosses MCP: the MCP server process reads it from the keychain and sets the header internally. No MCP tool accepts or returns a token, token path, or environment variable for one, and **there is no CLI `send` command** (section 8.1). That removes a CLI send path only; it does **not** stop a shell from launching the MCP server directly (residual column). `connect` runs only in the CLI on a TTY, never as an MCP tool. Pairing never delivers the credential through the terminal or browser: it is returned over HTTPS to the polling CLI process (section 5.2). Tool results use an allowlisted schema (section 8.3). Redacting HTTP client; no header logging; redirects not followed. | **Shell-capable agent hosts (e.g. Claude Code) are not covered by the "never visible to the model" claim.** Such a host can run any `mealplanner` CLI command (`status`, `disconnect`, and `connect` under an allocated pty: a TTY check is not a boundary against it). **A pty-capable agent can also drive `connect`'s prompts, including the step 7 confirmation (section 5.2): step 7 is a human control, not a boundary.** The approval itself still requires the owner's signed-in browser session (T13), so the agent cannot approve its own pairing. The host can also read `profiles.json` (non-secret, but it determines the keychain account name `preview/<binding_id>`, section 4.1) and run `security find-generic-password -s mealplanner.local-client.v1 -a preview/<binding_id> -w`, which prints the secret to stdout, and so into the model's context, if the keychain releases it. **The only barrier is the keychain item ACL / macOS keychain prompt, and its behaviour for a different calling binary is UNVERIFIED** (section 2.5, LC-K3). Without a shell tool the guarantee holds by construction (no tool returns the secret). With a shell tool it reduces to the same-OS-user residual in T7. **Direct MCP invocation (permission to send, separate from secret confidentiality):** the same shell-capable agent can launch the MCP server executable itself over stdio and issue `tools/call draft_send`. That process reads the keychain item as the permitted binary, so the keychain ACL does not stop it, and no host tool-approval prompt mediates the call. The model still never sees the credential, but **the host's approval of sends is not enforced on this path**; LC-K3 (a different binary reading the secret) does not test it, LC-D3 does. Impact: a send of a draft in the local store (the agent can already create drafts) into the owner's selected Preview account as an unreviewed, send-only draft. Recommended stance: accept it as a residual **for synthetic Preview data only**; any stronger claim that a human approves each send needs independent enforcement (D5 options (2)/(3)) and LC-D3 passing in that mode. The Preview test is acceptable on these terms with synthetic data; D5 and D10 gate anything beyond it. |
 | T2 | **Pairing replay** (re-using a user code, polling secret or the issued credential) | Pairing is single-use: `pending → approved → consumed` (or `denied`/`expired`). The credential is created and returned in one transaction that sets `consumed`; a second redeem returns the same `410 pairing_consumed` with no credential. `code_verifier` is checked against the stored S256 challenge (RFC 7636 §4.6) and only the redeeming CLI holds it. 10-minute expiry. `user_code` is deleted at consumption. Polling ≥5 s, `slow_down` (RFC 8628 §3.5). | A lost redeem response orphans a grant; the owner revokes it from the app list (section 7); the CLI re-pairs. Accepted: simplicity over idempotent credential retrieval, which would weaken replay prevention. |
 | T3 | **Callback/state substitution (login-CSRF)** and the **remote-phishing variant of pairing** (approval-page web attacks are T13) | There is **no callback** in the recommended flow, so no redirect URI, authorization code or `state` is exposed to interception. The CLI only accepts a credential from the exact pairing it created (pairing ID + verifier). The approval page shows client label, creation age and a short challenge fingerprint, and asks the owner to type the code they see in their own terminal. **That is a social control, not a technical defense.** It helps an owner who is at the CLI, but against remote phishing the attacker's CLI runs on the attacker's machine and shows the attacker the same code and fingerprint, so the owner cannot tell the difference (RFC 8628 §5.4: the confirmation "doesn't prevent a phisher from presenting a fresh token" when interacting in real time). The technical bound is that the credential is send-only (D6) and revocable. Any loopback variant (Flow A, section 3) must use `state` ≥128 bits, PKCE S256, `127.0.0.1`/`[::1]` only, exact path, one request, listener closed after first request, and reject mismatched `state`/`iss` (RFC 8252 §§7.3, 8.3, 8.9, 8.10; RFC 9207 §2.4). | Social engineering: the owner approves a code an attacker gave them. The approval-screen text and fingerprint do **not** stop a live remote phisher. Impact is bounded to send-only plus drafts reads (D6). |
 | T4 | **Cross-environment grant reuse** (Preview credential used on Production or vice versa) | Credentials are issued, hashed and verified in the *environment's own database*; there is no shared table or key. Server also compares `grant.environment_id` with its configured environment ID and rejects mismatch. Token prefix carries the environment (`mp_lc1_pv_…`); the client compares prefix, profile, `whoami.environment` and receipt link origin before and after sending (section 4.2). No Production profile exists in the Preview build/config. | A client bug that ignores the preflight: tested by the matrix (LC-E1..E5). |
-| T5 | **Cross-account grant reuse / account switching** | A grant is bound to `(environment, owner issuer, owner subject)` set at approval from the verified browser session, never from client input. Every `draft-v1` query already includes both owner fields (#77). Keychain items are keyed `env + hash(issuer,subject)`. Switching accounts is an explicit `mealplanner use` + new pairing; there is no implicit "most recent". Local send ledger and idempotency keys are keyed by environment *and* account (#77 §9). | Same person with two accounts mis-selects: confirmation text always shows `Preview · origin` and `Account · label` (#77 §8.1). |
+| T5 | **Cross-account grant reuse / account switching** | A grant is bound to `(environment, owner issuer, owner subject)` set at approval from the verified browser session, never from client input. Every `draft-v1` query already includes both owner fields (#77). Keychain items are keyed by a binding ID over the environment, the exact API origin, the exact web origin and `hash16(issuer,subject)` (section 4.1), so changing any of them finds no credential. Switching accounts is an explicit `mealplanner use` + new pairing; there is no implicit "most recent". Local send ledger and idempotency keys are keyed by environment *and* account (#77 §9). | Same person with two accounts mis-selects: confirmation text always shows `Preview · origin` and `Account · label` (#77 §8.1). |
 | T6 | **Token theft from disk** (backups, Time Machine, dotfile sync, file fallback, shell history) | Credential lives only in the OS keychain. **No file fallback by default** (D4). No env-var or flag token inputs. Config file holds non-secret metadata only (0600). Credential is opaque, 256 bits, stored server-side only as SHA-256. Absolute expiry and server revocation. | Keychain item ACL strength depends on binary signing: **UNVERIFIED** (section 2.5). |
-| T7 | **Malicious local process** (same user; other user; port squatter; reads argv/env; ptrace) | Other-user: keychain and 0600 files. Port squatting: the recommended flow opens no listener. Argv/env: the credential is never in either; keychain library must not pass the secret on a command line (**implementation acceptance test**, section 6). Same-user code execution: **cannot be fully prevented**. LC1 limits the blast radius: send-only (cannot approve, edit, read recipes or other routes), expiry, instant server revoke, last-used metadata and visible grant list. | A same-user attacker can read what the user can read. Sender-constrained tokens (e.g. DPoP, RFC 9449) would shrink this and are **not** designed here (not researched). |
+| T7 | **Malicious local process** (same user; other user; port squatter; reads argv/env; ptrace) | Other-user: keychain and 0600 files. Port squatting: the recommended flow opens no listener. Argv/env: the credential is never in either; keychain library must not pass the secret on a command line (**implementation acceptance test**, section 6). Same-user code execution: **cannot be fully prevented**, and includes launching the MCP server directly and calling `draft_send` with no host prompt (T1, D5). LC1 limits the blast radius: send-only (cannot approve, edit, read recipes or other routes), expiry, instant server revoke, last-used metadata and visible grant list. | A same-user attacker can read what the user can read. Sender-constrained tokens (e.g. DPoP, RFC 9449) would shrink this and are **not** designed here (not researched). |
 | T8 | **Capability confusion** (send credential used for owner operations; Neon JWT used as a send credential; a provider-issued token treated as owner) | The credential is a different, *non-JWT* format. `hosted.RequireUser` (`hosted/bearer_auth.go`) requires a three-part JWT and rejects it structurally; owner routes need no change. A new `RequireLocalClient` accepts only the prefix and applies the capability matrix (section 8.2) **before** object lookup, matching #77's 403 rule. | A future change that makes a shared auth helper accept both types. Test: send credential on every owner route. |
 | T9 | **Removed or ineligible member keeps access; provider email change; removal then re-add** | Each request re-runs the #78 membership policy against the **email recorded at approval** (`email_at_approval`) plus the grant's expiry/revocation. No cache. Bound in section 7. **Guarantee, stated honestly:** a grant works while `email_at_approval` is in the current #78 allowlist (`AUTH_ALLOWED_EMAILS`, evaluated per request). The credential is opaque, so the server never sees the account's *current* provider email, and **a provider-side email change is not detected**: the grant keeps working under the old email until it expires or is revoked. Optional hardening (D11 option b): a per-request lookup of the account's current email by `(issuer, subject)`. That needs a data source the app does not read today (a Neon Auth user table or API); its existence and shape are **UNVERIFIED**. **Removal then re-add:** #78 membership is an environment setting with no removal hook, so nothing revokes an email's grants when it is removed. If the same email is re-added while a grant is unexpired, the grant is **silently revived**. Bounds: the absolute expiry (D3, 7 days recommended) and an operator step "revoke all grants for that account before removal" (D12 lists options, including a code-enforced one). | (1) Provider email change: the old-email grant keeps working; the new email has no grant until a new pairing. (2) Revival on re-add, until `expires_at`. A recycled or reassigned email address is the realistic form of both. Neither exceeds send-only. |
-| T10 | **Pairing spam and user-code brute force** (unauthenticated create route; guessing the owner's pending code from another member's session) | Unauthenticated create is limited per IP (3 pending, 10 creates/h) and by the 10-pending-per-environment cap and the 5-active-grants-per-account cap (section 5.5 table). Codes: 8 characters from a 20-letter alphabet, 20⁸ ≈ 2.56×10¹⁰ values (≈34.5 bits). **A wrong code matches no pairing, so a per-pairing counter cannot count wrong guesses.** Guesses are counted against the *guesser*: per approving session, per account, per IP, plus a global cap, each with a window, a lockout and a typo rule (section 5.5, tests LC-P7a..n). Lookup is member-gated first (#78), so the attacker must hold a signed-in member session. Approval needs a separate opaque `ref` returned by lookup (the approver never learns `pairing_id`), a typed confirmation, and a POST with an owner bearer (T13). Recomputed attacker success: ≈3.9×10⁻¹⁰ per owner pairing for one attacker account, and ≤3.9×10⁻⁹ even at the global cap (section 5.5). A hit binds the owner's CLI to the **attacker's** account (RFC 8628 §5.1 makes the same point), so drafts the owner sends would land in the attacker's account. Residual mitigation: the CLI shows the bound account label and asks for confirmation before storing the credential (section 5.2 step 7). | Distributed abuse of the unauthenticated create route; shared-IP and global lockouts can inconvenience legitimate users (D9). |
+| T10 | **Pairing spam and user-code brute force** (unauthenticated create route; guessing the owner's pending code from another member's session) | Unauthenticated create is limited only by the per-IP caps (3 pending, 10 creates/h) and the 10-pending-per-environment cap, all enforced atomically (section 5.5). The 5-active-grants-per-account cap cannot apply at create, because the owner is unknown until approval; it is enforced by an atomic slot reservation at approval and rechecked at redeem (section 5.5). Codes: 8 characters from a 20-letter alphabet, 20⁸ ≈ 2.56×10¹⁰ values (≈34.5 bits). **A wrong code matches no pairing, so a per-pairing counter cannot count wrong guesses.** Guesses are counted against the *guesser*: per approving session, per account, per IP, plus a global cap, each with a rolling (trailing) window, defined lockout semantics and a typo rule (section 5.5, tests LC-P7a..p). Lookup is member-gated first (#78), so the attacker must hold a signed-in member session. Approval needs a separate opaque `ref` returned by lookup (the approver never learns `pairing_id`), a typed confirmation, and a POST with an owner bearer (T13). Recomputed attacker success: ≈3.9×10⁻¹⁰ per owner pairing for one attacker account, and ≤3.9×10⁻⁹ even at the global cap (section 5.5). A hit binds the owner's CLI to the **attacker's** account (RFC 8628 §5.1 makes the same point), so drafts the owner sends would land in the attacker's account. Residual mitigation: the CLI shows the bound account label and asks for confirmation before storing the credential (section 5.2 step 7). | Distributed abuse of the unauthenticated create route; shared-IP and global lockouts can inconvenience legitimate users (D9). |
 | T11 | **Credential in logs, telemetry, error text, crash reports, draft files** | Redacting transport; errors never include headers or bodies; hosted error messages already exclude secrets (#77 §3.1); canary tests with a synthetic token search every output (section 6). Drafts and the local store never contain tokens (the send path reads drafts but writes only a non-secret ledger). | Third-party host telemetry of MCP *arguments/results*: none contain secrets by construction. |
-| T12 | **Wrong destination** (profile edited, typosquat origin, redirect) | Profile pins exact HTTPS origins; the credential lookup key includes the origin, so an altered origin finds no credential. No redirects followed. Receipt/draft links must resolve to the profile web origin. | Same-user edit of config to a new origin forces a fresh pairing against it; the owner would see the unexpected origin at the pairing prompt. |
+| T12 | **Wrong destination** (profile edited, typosquat origin, redirect) | Profile pins exact HTTPS origins. The keychain item key includes the exact API and web origins (binding ID, section 4.1) and is recomputed from the profile on every use, so an altered origin finds no item and **no authenticated request is sent** to it; editable profile metadata alone is not a binding (LC-O1). No redirects followed. Receipt/draft links must resolve to the profile web origin. | Same-user edit of config to a new origin forces a fresh pairing against it; the owner would see the unexpected origin at the pairing prompt. The original item stays in the keychain but is unreachable until the profile is restored; the user gets a `reconnect_required` error that names the changed origin. |
 | T13 | **Approval page web surface**: CSRF on approve/deny, clickjacking and framing of the approval page, forged `Origin`, a `verification_url` that pre-fills the code | **Owner authentication for `/api/local-client-v1/approvals/*` is the `Authorization: Bearer <Neon JWT>` header verified by `RequireUser`, as the SPA already does for `/api/recipes` (`web/src/recipes/api.ts`, `web/src/auth/service.ts`).** These routes **ignore cookies entirely** (never read `Cookie`, never set one). A cross-site form post or image request carries the session cookie but the server does not look at it, and a cross-origin page has no access to the SPA's token; a cross-origin `fetch` with an `Authorization` header needs a CORS preflight and no CORS is granted. That is the CSRF defense, and it **deliberately differs from the auth proxy's**: `hosted/auth_proxy.go` is cookie-authenticated (provider cookies rewritten to `SameSite=Lax`) and its `authProxyRequestOrigin` **accepts a request with no `Origin` header**, so its posture is Lax cookie plus a best-effort Origin check and must not be copied for approvals. Defense in depth on the approval POST: POST only (GET/HEAD return 405 and never change state; no state-changing GET anywhere); `Content-Type: application/json` required; a mismatched `Origin`, or `Sec-Fetch-Site: cross-site`, returns 403 (OWASP's Fetch Metadata guidance with an Origin fallback; a *missing* `Origin` is accepted only with `Sec-Fetch-Site: same-origin`). **Framing:** the approval page and every `/api/local-client-v1/*` response send `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY` (the second for browsers without `frame-ancestors`; where both are understood, `frame-ancestors` wins). The repository sets neither today (searched `hosted/`, `api/`, `web/`, `vercel.json`), so this is a new deploy-config requirement (section 9). **Typed/fresh confirmation:** approving is not one click on a pre-filled page. The owner must retype the user code in the approval box, and the request must carry a JWT issued within the last 5 minutes (`iat`); an older token gets `401 reauth_required` and the SPA fetches a fresh one. **`verification_url` never embeds `user_code`** (`https://<web_origin>/connect`, no query string). RFC 8628 defines an optional `verification_uri_complete` that includes the code and is "designed for non-textual transmission" (QR/NFC, §3.2, §3.3.1); it removes the typing step, and §5.4 says that makes it "particularly important" to confirm the device is in the user's possession. LC1 omits it, so no link can pre-fill or auto-submit a code. | Clickjacking protection depends on the browser honouring either header (current browsers do; not tested per browser here). An XSS in the SPA could call the approval API with the owner's token; XSS defeats CSRF defenses (OWASP) and is an existing app-wide risk outside this design. A signed-in owner who types a code supplied by a phisher is T3. |
 
 ## 2. Provider capabilities (official sources)
@@ -156,7 +159,7 @@ revoke endpoint remains undocumented (section 2.3, item 1).
    remain fixed (`openid`, `profile`, `email`, `offline_access`), so "send-only"
    still cannot be expressed in the token; it would have to be inferred from
    `client_id` plus a server allowlist, and with no documented revoke or
-   introspection endpoint a leaked token stays valid for its lifetime (1 h
+   introspection endpoint a leaked token must be planned as valid through `exp` (1 h
    access, 30 d rotating refresh).
 4. Whether any device-code behaviour is available but undocumented.
 5. Token field naming: the JWT page shows `session.token`, the
@@ -170,7 +173,7 @@ revoke endpoint remains undocumented (section 2.3, item 1).
 8. Whether the verified Neon JWT carries a session identifier claim. The JWT
    page documents `sub`, `iss`, `aud` only, and nothing in this repo reads one.
    **Treat C1 (section 5.5) as expected-absent**: the design must hold with C2
-   (10 per hour per account) as the first limiter. A session claim, if ever
+   (10 per trailing hour per account) as the first limiter. A session claim, if ever
    found, only adds C1.
 9. How the hosting platform exposes the real client IP (the per-IP counters of
    section 5.5 depend on a trustworthy source).
@@ -231,7 +234,7 @@ shell-host path. This is local tool help, not an official web source.
 | New app persistence | Optional (grant ledger for fast revoke) | Pairing + grant tables | Pairing + grant tables |
 | Send-only scope | Scopes fixed; must be inferred from `client_id` + a server allowlist (**UNVERIFIED**) | Native | Native |
 | Credential visibility | Access/refresh tokens on loopback/back-channel; code in browser URL | Code appears in browser, clipboard, terminal scrollback, possibly model if the agent shares the terminal | **Only a user code is visible; the credential never leaves the HTTPS response to the CLI** |
-| Revocation | Better Auth upstream says JWT access tokens cannot be revoked; Neon documents no revoke endpoint; ≤1 h access, 30 d refresh; revoke endpoint **UNVERIFIED** | Immediate (server lookup) | Immediate (server lookup) |
+| Revocation | 1-hour access tokens with no documented Neon revocation path (plan for validity through `exp`; Better Auth upstream says JWT access tokens cannot be revoked); 30 d refresh; revoke endpoint **UNVERIFIED** | Immediate (server lookup) | Immediate (server lookup) |
 | Production | Blocked by the "disable localhost" checklist item | Possible | Possible |
 | Local attack surface | Loopback listener (port squat, local process race) | None (no listener) | None (no listener) |
 | Standard coverage | RFC 8252, 7636, 9700 directly | RFC 7636 (+ manual transfer) | RFC 8628 properties + 7636 S256 for the polling secret |
@@ -243,7 +246,7 @@ no secret on screen or in the browser, no listener and no provider change.
 Flow A remains the fallback if the owner prefers delegating credential
 issuance to Neon. Its precise blockers are: (1) provider OAuth client creation,
 (2) localhost enablement conflicting with the Production checklist, (3) fixed
-scopes, (4) 1 h unrevocable access tokens, and (5) the remaining UNVERIFIED items in section 2.3 (revoke endpoint; our-API
+scopes, (4) 1-hour access tokens with no documented Neon revocation path (plan for validity through `exp`; Better Auth upstream says JWT access tokens cannot be revoked), and (5) the remaining UNVERIFIED items in section 2.3 (revoke endpoint; our-API
 resource handling).
 Flow B is rejected because the long-lived secret is relayed through channels the
 agent may observe.
@@ -266,7 +269,23 @@ separately approved change (D8).
 | `environment_id` | Server-returned opaque ID recorded on first connect and compared thereafter |
 | `scope` | `draft:send` only |
 | `account` | Selected explicitly; stored as `{label, hash16(issuer,subject)}`; never inferred |
-| `credential_ref` | Keychain service `mealplanner.local-client.v1`, account `preview/<hash16>`; the value is the credential |
+| `credential_ref` | Keychain service `mealplanner.local-client.v1`, account `preview/<binding_id>`; the value is the credential. `binding_id` is the first 128 bits (32 hex characters) of SHA-256 over a length-prefixed encoding of (`environment`, `api_origin`, `web_origin`, `hash16(issuer,subject)`), **recomputed from the profile on every use** |
+
+**Credential-to-origin binding.** The keychain item is bound to the exact API
+origin and web origin as well as the environment and account, by putting all four
+in the item key (`binding_id`). Rules: (1) the store derives the key itself from
+the `Profile` (section 8.1); there is no lookup by environment or account alone,
+no listing, no "most recent" and no fallback key. (2) If the profile's origins
+are edited, the recomputed key misses: the CLI/MCP returns `reconnect_required`
+naming the changed origin **before any network call**, so no `Authorization`
+header is ever sent to the edited origin and the original item is never read
+for it. (3) Reading editable profile metadata (`profiles.json`) is not a
+binding and never selects or authorises a credential. (4) `connect` writes the
+item under the key for the origins the owner confirmed at the pairing prompt.
+Alternative (not recommended): store the origins as attributes or in an envelope
+inside the item and compare them before use; this needs the item to be read
+before the check and relies on the same ACL, so the key binding is the HD
+default. Test: LC-O1.
 
 ### 4.2 Required behaviours
 
@@ -296,7 +315,7 @@ separately approved change (D8).
 5. **No Production credential, no silent fallback.** No Production keychain
    item exists or is read. A missing or expired Preview credential produces
    `not_connected` / `reconnect_required`. It never tries another environment, another
-   account, another origin, an environment variable or a file.
+   account, another origin, an environment variable or a file. A profile whose origins no longer match the origins the credential was bound to (section 4.1) finds no item and fails the same way, before any network call.
 6. **Local-only creation stays local.** `draft_create/update/validate` never
    contact the network (unchanged, `docs/local-workflow.md`); only the explicit
    send path loads the credential.
@@ -309,7 +328,7 @@ Run by Caroline herself; this is not run by this issue.
 2. `mealplanner connect --env preview` → terminal shows the code
    (`BCDF-GHJK` style) and the plain verification URL (no code in it). Open the
    Preview web app, signed in, enter the code, check environment, account,
-   client label, age and fingerprint, retype the code, approve. The CLI prints `Connected: Preview · <origin> ·
+   client label, age and fingerprint, retype the code, approve. The CLI then prints the bound account label (the verified normalized email) and asks you to type that exact email; Enter, EOF or plain `yes` aborts and revokes the grant (section 5.2 step 7). Only after the exact email matches does the CLI print `Connected: Preview · <origin> ·
    Account · <label> · expires <time>` (no secret).
 3. `mealplanner status --env preview` → connected, scope, expiry.
 4. In the agent host: create the synthetic incomplete draft, then `draft_send`.
@@ -328,10 +347,10 @@ All under `/api/local-client-v1`, `Cache-Control: no-store`, `api_version:
 
 | Route | Caller / auth | Purpose |
 | --- | --- | --- |
-| `POST /pairings` | none; rate limited | Create a pairing for `environment` with a `code_challenge` (S256 only) |
-| `POST /pairings/{id}/redeem` | `code_verifier` in body | Poll; returns `authorization_pending`, `slow_down`, denied/expired, or the credential **once** |
+| `POST /pairings` | none; rate limited | Create a pairing for `environment` with a `code_challenge` (S256 only); refused when the atomic pending caps are full (section 5.5) |
+| `POST /pairings/{id}/redeem` | `code_verifier` in body | Poll; returns `authorization_pending`, `slow_down`, denied/expired, `409 grant_limit` (section 5.5), or the credential **once** |
 | `POST /approvals/lookup` | app-owner Neon JWT in `Authorization` (`RequireUser`); cookies ignored | Resolve a typed `user_code` to a summary (client label, age, fingerprint, environment) and an opaque approval `ref`. Never returns `pairing_id`. Subject to the attempt counters of section 5.5 |
-| `POST /approvals/{ref}` | same; JWT `iat` within 5 minutes; JSON body only | `approve` or `deny`, with the retyped code (section 5.4) |
+| `POST /approvals/{ref}` | same; JWT `iat` within 5 minutes; JSON body only | `approve` or `deny`, with the retyped code (section 5.4). `approve` atomically reserves one of the account's 5 grant slots or returns `409 grant_limit` (section 5.5) |
 | `GET /whoami` | send credential | Environment, web origin, scope, expiry, account label |
 | `DELETE /grants/self` | send credential | Disconnect (revoke this grant) |
 | `GET /grants`, `DELETE /grants/{id}`, `DELETE /grants` | app-owner JWT | List, revoke one, revoke all for this account |
@@ -340,10 +359,10 @@ All under `/api/local-client-v1`, `Cache-Control: no-store`, `api_version:
 
 1. CLI (`connect`) generates `code_verifier` (32 random bytes, base64url, 43
    chars; RFC 7636 §4.1, §7.1), `code_challenge = S256(verifier)`. It never
-   sends the verifier, never stores it on disk.
+   sends the verifier anywhere except in the HTTPS body of the redeem call to the pinned redeem endpoint (step 6), and never stores it on disk.
 2. `POST /pairings` `{environment:"preview", code_challenge, code_challenge_method:"S256", client:{name,version}, label}`.
    `label` is a user-chosen ≤64-char printable ASCII host name, shown *untrusted*.
-   Server stores `pairing_id` (128-bit), `user_code_hash` (see D9 note), challenge,
+   Subject to the atomic per-IP and per-environment pending caps (section 5.5), the server stores `pairing_id` (128-bit), `user_code_hash` (see D9 note), challenge,
    `environment_id`, `expires_at = now + 10 min`, `state = pending`, and returns
    `{pairing_id, user_code, verification_url, expires_in:600, interval:5}`.
    `verification_url` is the bare page URL (`<web_origin>/connect`); it never
@@ -366,10 +385,10 @@ All under `/api/local-client-v1`, `Cache-Control: no-store`, `api_version:
    control (T3), not a technical one.
 5. On approve: the server records the owner `(issuer, subject)` and the
    normalized email from the **verified bearer** (never from request fields),
-   plus the membership result, `state = approved`.
+   plus the membership result and, **in the same transaction**, reserves one of the account's 5 active-grant slots (section 5.5). If none is free it returns `409 grant_limit` and changes nothing: the pairing stays `pending`, the `ref` stays valid until it expires, and the refusal is not a wrong confirmation. On success `state = approved`.
 6. CLI polls `POST /pairings/{id}/redeem` `{code_verifier}` every ≥5 s (RFC 8628
    §3.5). Server checks `S256(verifier) == challenge`, state, expiry, then in one
-   transaction creates the grant (`credential = "mp_lc1_pv_" + b64url(32 random
+   transaction, under the same per-account lock as approval, rechecks the active-grant cap (active grants, not counting this pairing's own reserved slot, must be fewer than 5; otherwise `409 grant_limit`, the pairing becomes `denied`, no credential is returned) and creates the grant (`credential = "mp_lc1_pv_" + b64url(32 random
    bytes)`, stores only SHA-256), sets `consumed`, deletes the user code, and
    returns the credential in the HTTPS response body.
 7. With the credential still only in process memory, the CLI calls `whoami`,
@@ -386,7 +405,7 @@ All under `/api/local-client-v1`, `Cache-Control: no-store`, `api_version:
    **types that exact email**; plain `yes` is not accepted, so a reflexive
    confirmation cannot bind the wrong account. On
    "no" or a mismatched entry it calls `DELETE /grants/self` and exits. On a matching email it stores the
-   credential in the keychain (item key from section 4.1), writes non-secret
+   credential in the keychain (item key = binding ID over environment, API origin, web origin and account hash, section 4.1), writes non-secret
    profile metadata and zeroes the verifier. If the keychain write fails, the
    CLI calls `DELETE /grants/self` and exits; it never falls back to a file.
 
@@ -438,13 +457,61 @@ pairing to reset it.
 
 | Counter | Key | Budget (well-formed lookups) | Window | Lockout |
 | --- | --- | --- | --- | --- |
-| C1 per approving session | `(issuer, subject, session id)` from the verified JWT (**expected absent**: Neon's JWT has no documented session-id claim; C1 is then dropped and C2 is the first limiter) | 5 | 10 min (one pairing lifetime) | 15 min of `429 locked` + `Retry-After`; correct codes are not evaluated while locked |
-| C2 per account | `(issuer, subject)` | 10 | 60 min | until the window ends; after 3 lockouts in 24 h, 24 h, plus an operator alert (hashed identity only) |
-| C3 per IP | hash of the client IP (**UNVERIFIED** trusted source) | 20 lookups; separately 10 `POST /pairings` and 3 pending pairings | 60 min | 60 min |
-| C4 global (per environment) | environment | 100 | 60 min | until the window ends (an intentional availability trade-off) |
-| Pending cap per environment | environment | 10 pending pairings | pairing TTL (10 min) | new `POST /pairings` refused while full; alert when hit. Availability lever (D9). Option (iii): expire unredeemed rows after 2 minutes until first poll |
-| Active grants per account | `(issuer, subject)` | 5 active grants | until revoked or expired | approval of a 6th grant refused until one is revoked |
+| C1 per approving session | `(issuer, subject, session id)` from the verified JWT (**expected absent**: Neon's JWT has no documented session-id claim; C1 is then dropped and C2 is the first limiter) | 5 | 10 min, rolling (one pairing lifetime) | one 15 min lockout episode of `429 locked` + `Retry-After`; correct codes are not evaluated while locked |
+| C2 per account | `(issuer, subject)` | 10 | 60 min, rolling | `429 locked` while 10 charges lie in the trailing 60 min (ends when the oldest ages out); on the 3rd distinct lockout episode starting within a trailing 24 h, a 24 h lock plus an operator alert (hashed identity only) |
+| C3 per IP | hash of the client IP (**UNVERIFIED** trusted source) | 20 lookups; separately 10 `POST /pairings` and 3 pending pairings | 60 min, rolling | `429` while the budget is full (ends when the oldest charge ages out) |
+| C4 global (per environment) | environment | 100 | 60 min, rolling | `429` while the budget is full, until the oldest charge ages out (an intentional availability trade-off) |
+| Pending cap per environment | environment | 10 pending pairings | pairing TTL (10 min) | new `POST /pairings` refused while full (checked and inserted atomically, not count-then-insert); alert when hit. Availability lever (D9). Option (iii): expire unredeemed rows after 2 minutes until first poll |
+| Active grants per account | `(issuer, subject)` | 5 (active grants + reserved slots) | a slot is held from approval until its pairing is redeemed, expires or is denied; a grant counts until revoked or expired | `409 grant_limit` at approval (and at redeem if the recheck fails) until a grant is revoked or a reservation is released |
 
+- **Window and lockout semantics (precise).**
+  - *Rolling windows.* C1-C4 are **trailing** windows, not clock-aligned or
+    reset-on-first-use. Each charge is a timestamped event (pruned once older
+    than the window). A lookup is charged only if, in one atomic step (a
+    conditional insert under a per-key lock or a serializable transaction,
+    never read-then-write), fewer than `budget` charges with `t > now - W`
+    exist for that key; otherwise it is refused with `429`. Refused lookups are
+    **not charged**, do not evaluate the code and do not extend any lock.
+    Hence, for every key, at most `budget` lookups are evaluated in **any**
+    interval of length W, including one that straddles a clock-hour boundary.
+  - *C1.* The 6th lookup inside the trailing 10 minutes starts one 15-minute
+    lockout episode. During it every lookup from that session is refused
+    uncharged and does not extend it. When it ends, all charges are older than
+    15 minutes, so the 10-minute window is empty.
+  - *C2, C3, C4.* "Locked" means the budget is full. It ends when the oldest
+    charge ages out of the trailing window, so at most W after that charge;
+    `Retry-After` gives the exact seconds.
+  - *Lockout episode (for the C2 escalation).* An episode starts at the first
+    budget refusal for a key that was not already refused, and ends when a
+    lookup would be evaluated again (a charge aged out). Further refused
+    requests during the same lock belong to the **same** episode. **"3 lockouts
+    in 24 h" means 3 distinct episodes that start within a trailing 24 h**,
+    never three rejected requests in one lock. When the 3rd starts, a 24 h lock
+    begins at that moment (refusals uncharged, no new episodes while it
+    holds) and one operator alert is emitted. All three episodes are then
+    older than 24 h, so the history is empty when the lock ends.
+  - Nothing resets on success, sign-in or a new pairing.
+- **Atomic pending caps.** The per-environment cap (10 pending, i.e. state
+  `pending` and unexpired) and the per-IP caps (3 pending, 10 creates in a
+  trailing hour) are enforced by a conditional insert under a per-environment
+  (or per-IP) lock or a serializable transaction. Parallel creates can never
+  exceed a cap (LC-P7k).
+- **Atomic active-grant cap (slot reservation).** An *active grant* is not
+  revoked and not expired. A *reserved slot* is an `approved`, unexpired,
+  unredeemed pairing. At approval the owner is known from the verified bearer,
+  so inside one transaction under a per-account lock (keyed by
+  `(issuer, subject)`) the server requires `active grants + reserved slots < 5`
+  and records the reservation on the pairing; otherwise it returns
+  `409 grant_limit`, changing nothing. At redeem, under the same lock, it
+  rechecks that active grants (excluding this pairing's own reservation) are
+  fewer than 5; otherwise `409 grant_limit`, pairing `denied`, no credential
+  (defence in depth, for example a lowered cap or an out-of-band insert). The
+  reservation is **released** when the pairing is redeemed (the slot becomes
+  the grant), expires (10 minutes after creation, so a reservation never
+  outlives it), or is denied. A revoked or expired grant frees its slot. The
+  CLI and page show a fixed `grant_limit` message ("revoke a connected tool in
+  the app, then retry"). This is the same 5-per-account number as before; only
+  the enforcement point changed.
 - **Typos.** The page validates format before submitting. The alphabet
   (`BCDFGHJKLMNPQRSTVWXZ`) has no vowels or digits, so there are no `0/O`, `1/I`
   confusions; input is normalised (case-insensitive, spaces/hyphens stripped). A
@@ -452,11 +519,12 @@ pairing to reset it.
   C1/C2 (it cannot match, so it gains the guesser nothing) and is covered only by
   a coarse request-rate limit. A well-formed typo costs one attempt. **With C1
   expected-absent (section 2.3, item 8), the budget is C2's**: 10 well-formed
-  lookups per account per hour, shared by every session and every pairing, so an
+  lookups per account per trailing hour, shared by every session and every pairing, so an
   owner survives 9 typos in an hour and the 10th lookup is the last one
   evaluated. If C1 exists, it adds a tighter 5-per-10-minutes limit per session
-  (4 typos). On a C2 lockout the owner waits until the window ends (up to an
-  hour; 24 h after 3 lockouts in 24 h); the page shows `Retry-After`, and
+  (4 typos). On a C2 lockout the owner waits until the oldest of the 10 charged
+  lookups is 60 minutes old (up to an hour; 24 h after 3 distinct lockout
+  episodes in 24 h); the page shows `Retry-After`, and
   signing in again or creating a new pairing does not help. An owner who burned the
   budget on typos cannot pair until it resets. **Creating a new pairing resets nothing.**
 - **Uniform responses.** Nonexistent, expired, consumed, denied and
@@ -466,14 +534,14 @@ pairing to reset it.
 - **Attacker success probability (recomputed).** Let N = 20⁸ = 2.56×10¹⁰. The
   attacker needs the *owner's* pending code (hitting their own pairing gains
   nothing) within its 10-minute life. Single attacker account (another #78
-  member): C2 caps guesses at 10 per hour, so **p ≤ 10 / N ≈ 3.9×10⁻¹⁰ per
+  member): C2 (rolling) caps evaluated guesses at 10 in any 60 minutes, hence at 10 during any 10-minute pairing life wherever it falls relative to clock hours, so **p ≤ 10 / N ≈ 3.9×10⁻¹⁰ per
   owner pairing** (≈2⁻³¹·³, comparable to the RFC 8628 §5.1 example of 5 attempts
-  for ≈2⁻³²). With several colluding members or IPs, C4 caps everyone at 100 per
+  for ≈2⁻³²). With several colluding members or IPs, C4 (rolling) caps everyone at 100 in any 60 minutes, i.e. 100 per
   hour: **p ≤ 100 / N ≈ 3.9×10⁻⁹ per pairing**. If the owner pairs once per day,
   one account's cumulative chance over a year is ≲1.4×10⁻⁷. The previous text
   ("≤5 attempts per pairing") enforced none of this, because a wrong code never
   reached a pairing; its effective bound was only the generic request rate.
-  These figures depend on N being uniform (a CSPRNG code) and on the counters
+  These figures assume the **rolling** windows above (a fixed-window implementation doubles every bound, D9) and depend on N being uniform (a CSPRNG code) and on the counters
   being enforced in the database.
 - **What a hit gives the attacker**: the owner's CLI is bound to the attacker's
   account (so the owner's drafts are sent into it). Residual handled by the CLI
@@ -493,20 +561,22 @@ and in-memory fakes. None needs a provider, account or credential.
 | LC-P4 | Redeem with a wrong or plain-method verifier | `invalid_grant`; counts toward the **per-pairing redeem limit** (5 wrong verifiers invalidate the pairing; this works because `pairing_id` matched); no state change otherwise |
 | LC-P5 | Poll faster than interval | `slow_down`, interval +5 s |
 | LC-P6 | Redeem after 10 min | `expired`; user code unusable |
-| LC-P7a | Only if a session claim exists (C1 is expected absent). C1: 5 well-formed wrong codes from one session, then the 6th lookup with the **correct** code | 6th returns `429 locked` with `Retry-After`; the correct code is not evaluated and not consumed; after 15 min (fake clock) it works |
+| LC-P7a | Only if a session claim exists (C1 is expected absent). C1: 5 well-formed wrong codes from one session, then the 6th lookup with the **correct** code of the still-unexpired pairing | 6th returns `429 locked` with `Retry-After`; the correct code is not evaluated and not consumed. At +15 min (fake clock) the lockout has ended, but **that pairing has expired (10 min TTL, LC-P6) and stays unusable: its code returns `404 code_not_found`**. A **fresh** pairing created after the unlock is found with its correct code and works |
 | LC-P7b | C2: 11 wrong codes spread across 3 sessions of one account | Locked at the 11th; each session's own C1 was not the limiter |
-| LC-P7c | C3: 21 lookups from one IP using different accounts | Locked at the 21st; `POST /pairings` 11th in an hour refused; 4th pending pairing per IP refused |
-| LC-P7d | C4: 101 lookups in an hour from many accounts/IPs | Locked for everyone until the window ends |
+| LC-P7c | C3: 21 lookups from one IP using different accounts | Locked at the 21st; `POST /pairings` 11th in a trailing hour refused; 4th pending pairing per IP refused |
+| LC-P7d | C4: 101 lookups in a trailing hour from many accounts/IPs | Refused for everyone until the oldest charge is 60 minutes old |
 | LC-P7e | An attacker alternates lookups of their own **valid** pairing with wrong guesses | A successful lookup does **not** reset any counter; the limits still bite |
 | LC-P7f | Parallel burst of 50 guesses | At most the budget is evaluated (atomic pre-increment); no counter race |
-| LC-P7g | Only if a session claim exists (C1 is expected absent). Typo handling: 4 well-formed typos, then the right code in one 10-min window | Succeeds; a 5th typo then a correct code is locked; a malformed code returns `400`, is not charged to C1/C2 |
+| LC-P7g | Only if a session claim exists (C1 is expected absent). Typo handling: 4 well-formed typos, then the right code of the unexpired pairing, inside one 10-minute window with every other counter free | Succeeds; a 5th typo then a correct code is locked; a malformed code returns `400`, is not charged to C1/C2 |
 | LC-P7h | Nonexistent / expired / consumed / denied / other-environment codes | Byte-identical `404 code_not_found`; lockouts byte-identical `429` |
 | LC-P7i | `ref` hygiene: no response, header, log line or error from `/approvals/*` contains `pairing_id`; `ref` used by another account, after 2 min, after 3 wrong confirmations, or on `/pairings/{id}/redeem` | All rejected with the same `404`/`401`; `redeem` is unaffected by any approval call |
 | LC-P7j | Non-member session calls `/approvals/lookup` | `403` before any counter or code evaluation (member gate first) |
-| LC-P7k | Per-environment pending cap: 10 pending pairings exist (different IPs), an 11th `POST /pairings` | Refused (cap response); an existing pairing still redeems; after one expires (fake clock) a new create succeeds; alert emitted |
-| LC-P7l | Active-grant cap: an account has 5 active grants, a 6th approval | Refused; revoking one grant lets the 6th approval succeed |
-| LC-P7m | C2-only typo budget (no session claim): 9 well-formed typos then the correct code, within one hour | Succeeds (the 10th lookup is evaluated) |
-| LC-P7n | C2-only: 10 well-formed typos then the correct code (the 11th lookup) | `429 locked`; the correct code is not evaluated or consumed; a new pairing or sign-in does not help |
+| LC-P7k | Per-environment pending cap: 10 pending pairings exist (different IPs), an 11th `POST /pairings`; and 20 **parallel** creates (different IPs) with 9 pending; and 20 parallel creates from one IP | Refused (cap response); an existing pairing still redeems; after one expires (fake clock) a new create succeeds; alert emitted. Under parallelism exactly one create succeeds and pending never exceeds 10 (per IP: never more than 3 pending / 10 creates per trailing hour): atomic conditional insert, not count-then-insert |
+| LC-P7l | Active-grant cap (slot reservation, section 5.5). (i) 5 active grants, a 6th approval. (ii) 4 active grants; approve pairing A, then approve pairing B. (iii) 4 active grants; approve A and B **in parallel**. (iv) 3 active grants; approve A and B, then redeem A and B **in parallel**. (v) 4 active grants; approve A, let A expire unredeemed (fake clock), approve B. (vi) Force the redeem-time recheck to fail (cap lowered or a grant inserted out of band) | (i) `409 grant_limit`; revoking one grant lets the approval succeed. (ii) A succeeds (reserves the 5th slot), B gets `409 grant_limit`. (iii) exactly one succeeds. (iv) both succeed, exactly 5 active grants, a further approval is `409 grant_limit`, never 6. (v) A's slot is released at expiry, B succeeds. (vi) `409 grant_limit`, pairing `denied`, no credential, no grant. A refused approval leaves the pairing `pending` and the `ref` valid |
+| LC-P7m | C2-only typo budget (no session claim): 9 well-formed typos then the correct code, all inside the target pairing's unexpired 10-minute life, with C2, C3 and C4 otherwise at zero (the hour is the C2 budget window, not a pairing lifetime) | Succeeds (the 10th lookup is evaluated) |
+| LC-P7n | C2-only: 10 well-formed typos then the correct code (the 11th lookup), target pairing unexpired and the other counters free | `429 locked`; the correct code is not evaluated or consumed; a new pairing or sign-in does not help |
+| LC-P7o | Rolling-window boundary crossing (fake clock). Pairing created 00:58:30 (expires 01:08:30). One account makes 10 well-formed lookups at 00:59:00, then an 11th at 01:00:00; separately 100 lookups across 10 accounts at 00:59:00 and a 101st from a new account at 01:00:00; separately 20 lookups from one IP at 00:59:00 and a 21st at 01:00:00 | Each 11th/101st/21st is refused `429` although a clock-hour reset would have freed it; at most 10 per account and 100 globally are evaluated against that pairing; at 01:59:01 lookups are evaluated again |
+| LC-P7p | Lockout episodes (C2). (i) 50 further requests during one lock. (ii) Three distinct episodes starting within 24 h. (iii) Episodes starting 25 h apart | (i) one episode, no escalation. (ii) the 3rd start begins a 24 h lock (the correct code is refused throughout, sign-in or a new pairing does not help) and exactly one alert. (iii) no escalation |
 | LC-P8 | Approve with a send credential, no session, or a cookie-only request | 401/403; no approval |
 | LC-P9 | Concurrent approve/deny/redeem | Exactly one terminal state; at most one grant |
 | LC-S1 | Attacker pairing code typed by owner but CLI holds a different pairing | CLI never receives a credential for the other pairing |
@@ -516,6 +586,7 @@ and in-memory fakes. None needs a provider, account or credential.
 | LC-E3 | Token prefix `pv`, profile `production` or reverse | Abort before network |
 | LC-E4 | Link in response with a different origin | Rejected; reported; not opened |
 | LC-E5 | Missing Preview credential with a Production credential present | `not_connected`; Production item never read |
+| LC-O1 | Credential-to-origin binding (T12, section 4.1). With a connected Preview item, edit `api_origin` in `profiles.json` to another synthetic HTTPS origin, keeping environment and account hash; repeat editing only `web_origin`; run `status` and `draft_send` | A recording stub at the changed origin receives **no request at all** (so no `Authorization` header); the fake store sees only the recomputed key, which misses; the original item is never read or reused (no lookup by environment/account alone); the user gets `reconnect_required` naming the changed origin. Restoring the original origins makes the original item work again without re-pairing |
 | LC-A1 | Account A grant, request for account B's draft, receipt, review | Same 404 as absent; no B metadata |
 | LC-A2 | Switch account without a second pairing | Refused; no credential reuse; local ledger remains per account |
 | LC-A3 | Same subject, different issuer | Treated as a different owner (#77) |
@@ -533,14 +604,16 @@ and in-memory fakes. None needs a provider, account or credential.
 | LC-R5 | Provider session revoked or password reset (simulated), calls made **directly** to the provider | Grant **still valid** (documented, section 7). If the D7 proxy-cascade option is chosen: the same calls made through the app proxy revoke that account's grants (LC-R6) |
 | LC-R6 | (D7 proxy cascade only) `revoke-other-sessions` or a successful `email-otp/reset-password` through the proxy | The account's grants are revoked on the next request; a plain `sign-out` is left alone |
 | LC-T1 | Canary: synthetic token string; run connect, status, send, errors, mismatch, panic paths | The canary is absent from stdout, stderr, MCP results, logs, local store, draft files, config, env and argv |
-| LC-T2 | MCP `tools/list` and schemas | No tool accepts or returns token/URL/environment/credential fields |
+| LC-T2 | MCP `tools/list` and schemas | No tool **accepts** a caller-selected destination, environment, origin or URL, or any credential-bearing field (token, header, secret, a path or variable naming one), and no result contains a credential-bearing field. The listed non-secret outputs are **allowed** and asserted: `auth_status` returns `environment`, `web_origin`, `connected`, `account_label`, `scope`, `expires_at`; `draft_send` returns the receipt subset and absolute links resolved against the profile `web_origin` (section 8.1) |
 | LC-T3 | Prompt-injection draft text asking for the token | Tool results contain no secret; there is no tool that could return it |
 | LC-T4 | Redirect (301/302/307) from the API origin | Not followed; `Authorization` not forwarded |
+| LC-T5 | Credential redaction contract (S2): format a `Credential` with `%v %+v %#v %s %q %x`, `fmt.Sprint`, `json.Marshal`, `MarshalText` and structured logging | Every path yields `[redacted]` and never the secret; there is no accessor outside the transport package |
 | LC-K1 | Keychain write, read and delete through the real macOS Keychain on a developer machine, covering the `security -w` argv exposure | (a) Static: the credential package does not import `os/exec` and no code path runs `/usr/bin/security` (`add-generic-password -w <secret>` puts the secret on argv; `find-generic-password -w` prints it), the library calls the Security framework API directly. (b) Dynamic: with a canary secret, repeatedly sample `ps -ww -o pid,args` and `ps -wwE` (argv and environment) for the process tree during Put/Get/Delete, and run under process-exec tracing where available; the canary never appears. (c) The test fails if the implementation is switched to shelling out. **UNVERIFIED until run on a real machine** |
 | LC-K2 | Keychain unavailable | `credential_store_unavailable`; no file, no env fallback |
 | LC-K3 | Item read by a different binary, including `/usr/bin/security find-generic-password -w` run by the same OS user from a non-interactive shell (the T1 shell-host path) | Record whether it prompts, denies or returns the secret; if it returns the secret silently, T1/D10 must be upgraded to a blocker for anything beyond synthetic Preview data. **UNVERIFIED** |
 | LC-D1 | `connect` without a TTY (as an MCP/agent subprocess) | Refuses; no pairing. Not a boundary against an agent that allocates a pty (T1) |
 | LC-D2 | CLI surface: enumerate every subcommand and flag | No `send`, no command or flag that prints, exports or accepts a credential; adding one fails the test. If D5 option (2) is chosen, the only allowed variant is `send confirm`, which refuses without a TTY on stdin **and** stdout, reads confirmation from `/dev/tty`, and has its own test; it is documented as a human-typing control, not a boundary against a pty-capable shell |
+| LC-D3 | Direct MCP invocation (T1, D5, D10). From a plain shell, not the agent host, launch the MCP server binary over stdio against a stub API with a fake store and call `draft_send` for a local synthetic draft with no host approval | LC1 default: **the send is performed** (no per-send enforcement outside the host prompt); the credential is not printed and the result is the allowlisted subset. This pins the residual. If D5 option (2) or (3) is chosen: the call is refused or blocks until the out-of-band human confirmation, which cannot be answered over the stdio/MCP channel. No document may claim that a human approves each send until this test passes in that mode |
 | LC-W1 | Approve/deny with only the session cookie (no `Authorization`) | `401`; no state change; no `Set-Cookie` |
 | LC-W2 | `GET`/`HEAD`/form-encoded request to approve/deny | `405`/`415`; no state change |
 | LC-W3 | Approve with `Origin` of another site, or `Sec-Fetch-Site: cross-site`; `Origin` missing without `Sec-Fetch-Site: same-origin` | `403` |
@@ -583,8 +656,11 @@ type Profile struct {
     Name, WebOrigin, APIOrigin, EnvironmentID string // Name == "preview" in LC1
     AccountLabel string; AccountHash string
 }
+// BindingID(p) = first 128 bits of SHA-256 over a length-prefixed encoding of
+// (Name, APIOrigin, WebOrigin, AccountHash); the only way a store derives a key.
 type CredentialStore interface { // keychain implementation + in-memory fake
-    Get(ctx context.Context, p Profile) (Credential, error)   // Credential has no String()/MarshalJSON/format verb
+    // Key = (service, "preview/"+BindingID(p)). No lookup by environment/account alone, no listing, no fallback key.
+    Get(ctx context.Context, p Profile) (Credential, error)   // ErrNotConnected if the derived key has no item; Credential redacts every format verb (below)
     Put(ctx context.Context, p Profile, c Credential) error
     Delete(ctx context.Context, p Profile) error
 }
@@ -592,22 +668,24 @@ type Pairer interface{ Pair(ctx context.Context, p Profile, show func(UserPrompt
 type Sender interface{ Send(ctx context.Context, p Profile, in SendInput) (Receipt, error) }
 ```
 
-`Credential` is an opaque type with redaction (`String()` and `MarshalJSON`
-return `[redacted]`), consumed only by the HTTP transport. There is no `Token()`
+`Credential` is an opaque type with **one** redaction contract: `String()`,
+`GoString()`, `Format` (every fmt verb), `MarshalJSON` and `MarshalText` all
+return or print `[redacted]` (LC-T5). It is consumed only by the HTTP transport. There is no `Token()`
 accessor outside the transport package.
 
 CLI (TTY required for `connect`): `mealplanner connect|status|use|accounts|disconnect --env preview`.
 **There is no CLI `send`** (decision for LC1, resolving the earlier mismatch
-between sections 4.1 and 8.1): sending exists only as the MCP `draft_send` tool,
-so a shell-capable agent cannot send through the CLI and bypass the host's
-tool-approval prompt (D5). There is also no command that prints, exports or
+between sections 4.1 and 8.1): sending exists only as the MCP `draft_send` tool.
+That leaves the CLI with no send path. It is **not** a claim that a shell cannot
+send: a shell-capable agent can launch the MCP server directly over stdio and
+call `draft_send` without the host's tool-approval prompt (T1, D5, LC-D3). There is also no command that prints, exports or
 accepts a credential (LC-D2). `status` prints profile, account label, scope,
 expiry and connected state; never a secret. MCP adds exactly:
 
 | Tool | Arguments | Result | Notes |
 | --- | --- | --- | --- |
 | `auth_status` | `{}` (no environment argument; uses the selected profile) | `{environment, web_origin, connected, account_label, scope, expires_at}` | read-only |
-| `draft_send` | `{draft_id, expected_revision}` | #77 receipt subset and absolute links | Annotated destructive/open-world so hosts prompt. Does not accept a destination, environment, origin, header, credential, or idempotency key. The key is generated and retained in the local ledger (#77 §9). |
+| `draft_send` | `{draft_id, expected_revision}` | #77 receipt subset and absolute links | Annotated destructive/open-world so hosts prompt (the annotation only helps when a host mediates the call; direct MCP invocation is a residual, T1). Does not accept a destination, environment, origin, header, credential, or idempotency key. The key is generated and retained in the local ledger (#77 §9). |
 
 There is no MCP tool to connect, disconnect, or select accounts.
 
@@ -649,14 +727,13 @@ client treats it as `reconnect_required`).
 - If the owner chooses a fallback (D4 options), it must be an explicit flag,
   Preview-only, mode 0600 in a 0700 directory, with absolute expiry ≤ 24 h, and
   a printed warning. No default.
-- Metadata in `profiles.json` is non-secret and never trusted to select an
-  origin without a matching keychain item.
+- Metadata in `profiles.json` is non-secret and editable, so it is **not** a binding. The keychain item key is the binding ID over the exact environment, API origin, web origin and account hash (section 4.1), recomputed on every use; a changed origin finds no item and no authenticated request is sent (LC-O1). A D4 fallback file, if ever chosen, must be named by the same binding ID.
 
 ## 9. What needs separate approval (nothing here is authorized)
 
 | Item | Needed by | Approval |
 | --- | --- | --- |
-| Reviewed migration: `local_client_pairings` (incl. hashed `ref` columns), `local_client_grants` (owner-composite keys, unique credential hash index) and `local_client_attempts` (counter key hash, window, count, `locked_until`) in **Preview** first | LC1 | Separate reviewed migration and persistent-data approval |
+| Reviewed migration: `local_client_pairings` (incl. hashed `ref` columns and the reserved-owner columns for the slot reservation), `local_client_grants` (owner-composite keys, unique credential hash index) and `local_client_attempts` (counter key hash, timestamped charge events for the trailing window, `locked_until` for C1, lockout-episode start times for C2) plus atomic per-account slot and per-environment/per-IP pending counters in **Preview** first | LC1 | Separate reviewed migration and persistent-data approval |
 | New hosted routes and a per-environment enable flag / environment ID setting | LC1 | Deploy and configuration approval (not provider settings) |
 | Web "Connect a tool" approval page and grants list | LC1 | UI review (P1 copy) |
 | New server rate-limit counters (attempts table, section 5.5) and pending-row caps | LC1 | Reviewed migration + operational approval |
@@ -681,12 +758,12 @@ None of these is silently chosen. Recommendations are design input.
 | D2 | Approve the new-persistence path (section 9) for Preview, or take Flow A's provider path | Persistence in Preview first; provider path | Persistence in Preview first, via a reviewed migration |
 | D3 | Credential lifetime | 24 h; 7 days; 30 days; short credential + rotating refresh | **7 days absolute**, no refresh (revocation is instant, so a refresh adds complexity without a bound benefit) |
 | D4 | File fallback | None; explicit Preview-only 0600 file ≤24 h; none until signed binaries | **None** |
-| D5 | Send confirmation UX | (1) MCP `draft_send` behind the host's tool-approval prompt; no CLI `send`; (2) MCP only prepares, and the human confirms in a TTY (`mealplanner send confirm`) showing destination, account and content hash | **(1) for the Preview test** (it is the flow Caroline will use); evaluate (2) for Production, because a host prompt shows arguments but not the destination. **State plainly:** with either option, a shell-capable agent host (e.g. Claude Code) can run CLI commands and attempt `security find-generic-password` itself; the only barrier is the keychain ACL/prompt, **UNVERIFIED** (LC-K3). Option (2)'s TTY check does not stop an agent that allocates a pty, so (2) adds a human typing step, not a boundary |
+| D5 | Send confirmation UX | (1) MCP `draft_send` behind the host's tool-approval prompt; no CLI `send`; (2) MCP only prepares, and the human confirms in a TTY (`mealplanner send confirm`) showing destination, account and content hash; (3) independent per-send human confirmation outside the MCP channel that a shell cannot answer, for example an OS user-presence prompt (a keychain item whose access control requires user presence on each read, or a native confirmation dialog showing destination, account and content hash); **not researched, UNVERIFIED**, likely needs a signed helper | **(1) for the Preview test** (it is the flow Caroline will use); evaluate (2) for Production, because a host prompt shows arguments but not the destination. **State plainly:** with either option, a shell-capable agent host (e.g. Claude Code) can run CLI commands and attempt `security find-generic-password` itself; the only barrier is the keychain ACL/prompt, **UNVERIFIED** (LC-K3). Option (2)'s TTY check does not stop an agent that allocates a pty, so (2) adds a human typing step, not a boundary. **Direct MCP invocation:** with option (1) a shell-capable agent can launch the MCP server over stdio and call `draft_send` with no host prompt; the keychain ACL does not apply because the MCP binary is the permitted reader. This is a residual on *permission to send*, separate from secret confidentiality (LC-K3 covers only the latter). Recommend accepting it for synthetic Preview data only; LC-D3 pins it, and any stronger claim that a human approves each send requires option (3) (or (2), with its pty caveat) and LC-D3 passing |
 | D6 | Send-credential read scope | Owner-wide drafts/receipts reachable by ID; only drafts created by that grant | Current exposure is narrow: the credential can fetch only drafts/receipts whose unguessable IDs it already knows, and #77 gives it no listing. **Recommended #77 follow-up (additive, not a #77 blocker):** narrow reads to drafts created by the grant (record the grant ID on submissions), so a stolen credential cannot read drafts the owner submitted from elsewhere |
 | D7 | Cascade on compromise | (a) Manual "revoke all" plus a visible grant list; (b) grant tied to the Neon session (impossible: no events); (c) **proxy cascade**: when `hosted/auth_proxy.go` successfully forwards `revoke-other-sessions`, or a successful `email-otp/reset-password` (identity is in the request body), also revoke that account's grants; optionally `sign-out` | **(a) now.** Add **(c)** for `revoke-other-sessions` and password reset only, as a follow-up after the Preview test; do **not** cascade on plain `sign-out` (it would disconnect tools every time the owner signs out). (c) limits: calls made directly to Neon bypass the proxy; the proxy sees a cookie, so it must resolve the account (for example through `get-session`, design not specified here); the app must still say password reset does not revoke tools unless (c) is on |
 | D8 | Production profile | Not enabled until the #55 gate; enable C after; use Flow A (blocked) | Not enabled before the owner test; revisit after; Production needs its own approval |
-| D9 | Pairing abuse limits and concurrent grants | (a) The section 5.5 numbers: C1 5/10 min, C2 10/h, C3 20/h and 10 creates/h and 3 pending per IP, C4 100/h, 10 pending per environment, 5 active grants per account; (b) tighter (3 / 5 / 10 / 50) at the cost of fewer typo retries; (c) a longer code (10 characters, 20¹⁰ ≈ 1.0×10¹³) with the same counters | **(a)**, tuned by ops after the Preview test. Store `user_code` as a keyed HMAC (unusable without the server key) with a 10 min TTL. Typo budget (C1 expected-absent): 9 well-formed typos per account per hour from C2, shared across sessions and pairings; 4 per 10 minutes per session only if a session claim exists (section 5.5). Attacker success ≈3.9×10⁻¹⁰ per owner pairing for one account, ≤3.9×10⁻⁹ at the global cap (section 5.5). Decide whether C4 lockout (a global availability lever) is acceptable. **Pending-pairing cap as an availability lever:** `POST /pairings` is unauthenticated, so an attacker with spoofed or rotating IPs (C3 is only as good as the IP source, section 2.3 item 9) can fill the 10-pending-per-environment cap and block the owner's pairing for up to 10 minutes (the pairing TTL), repeatedly. Mitigation options: (i) accept and document it (Preview is small; owner retries); (ii) reserve cap slots for requests that pass a cheap proof-of-work or a per-IP token; (iii) make the cap per client-supplied nonce plus IP and expire unredeemed rows faster (for example 2 minutes until first poll); (iv) require a signed-in member to start pairing (changes the flow: the web app issues the code). Recommend **(i) for the Preview test**, with an alert when the cap is hit, and revisit (iii) before Production |
-| D10 | Same-user malicious-process and shell-capable-host stance | Accept; require signed binary and a keychain ACL; block real data until LC-K3 is run | Accept for Preview with synthetic data only; require LC-K3 evidence and signing before real data or Production |
+| D9 | Pairing abuse limits and concurrent grants | (a) The section 5.5 numbers as **rolling (trailing) windows**: C1 5/10 min, C2 10/h, C3 20/h and 10 creates/h and 3 pending per IP, C4 100/h, 10 pending per environment (atomic), 5 active grants per account (reserved atomically at approval, rechecked at redeem, `409 grant_limit`); (b) tighter (3 / 5 / 10 / 50) at the cost of fewer typo retries; (c) a longer code (10 characters, 20¹⁰ ≈ 1.0×10¹³) with the same counters; (d) fixed (clock-aligned or reset-on-first-use) windows with the same numbers: simpler to store, but a pairing that straddles a boundary can see up to twice the budget, so every bound doubles: ≤20/N ≈ 7.8×10⁻¹⁰ per account, ≤200/N ≈ 7.8×10⁻⁹ at the global cap, yearly account union bound ≲2.9×10⁻⁷ | **(a)** with rolling windows (the stated bounds then hold across any boundary), tuned by ops after the Preview test. Store `user_code` as a keyed HMAC (unusable without the server key) with a 10 min TTL. Typo budget (C1 expected-absent): 9 well-formed typos per account per trailing hour from C2, shared across sessions and pairings; 4 per 10 minutes per session only if a session claim exists (section 5.5). Attacker success ≈3.9×10⁻¹⁰ per owner pairing for one account, ≤3.9×10⁻⁹ at the global cap (section 5.5). Decide whether C4 lockout (a global availability lever) is acceptable. **Pending-pairing cap as an availability lever:** `POST /pairings` is unauthenticated, so an attacker with spoofed or rotating IPs (C3 is only as good as the IP source, section 2.3 item 9) can fill the 10-pending-per-environment cap and block the owner's pairing for up to 10 minutes (the pairing TTL), repeatedly. Mitigation options: (i) accept and document it (Preview is small; owner retries); (ii) reserve cap slots for requests that pass a cheap proof-of-work or a per-IP token; (iii) make the cap per client-supplied nonce plus IP and expire unredeemed rows faster (for example 2 minutes until first poll); (iv) require a signed-in member to start pairing (changes the flow: the web app issues the code). Recommend **(i) for the Preview test**, with an alert when the cap is hit, and revisit (iii) before Production |
+| D10 | Same-user malicious-process and shell-capable-host stance | Accept; require signed binary and a keychain ACL; block real data until LC-K3 is run; additionally require independent per-send enforcement (D5 option (3)) before real data | Accept for Preview with synthetic data only; require LC-K3 evidence and signing before real data or Production. The direct-MCP-invocation send path (T1, LC-D3) is accepted on the same terms (synthetic Preview data only); D5 option (3) plus LC-D3 gate any stronger claim |
 | D11 | Provider email change (T9) | (a) State the limitation: the grant works while `email_at_approval` stays in the #78 allowlist, a provider-side email change is not detected, re-pair to update; (b) per-request lookup of the account's current email by `(issuer, subject)` and deny on mismatch (**UNVERIFIED** data source); (c) key #78 membership to `(issuer, subject)` instead of email (a #78 change) | **(a)** now, stated in the UI and runbook; revisit (b) only once a Neon user data source is verified. User-facing: an owner who changes email keeps tools connected until expiry or revocation |
 | D12 | Removal then re-add of the same email | (a) State the risk plainly and require the operator runbook step "revoke that member's grants before or at removal"; (b) (a) plus an operator-only "revoke grants by email" procedure (the removed member can no longer sign in to revoke their own); (c) code-enforced: add a per-email added-at stamp to the #78 membership config and reject grants approved before it | **(a) + (b) for Preview**; consider (c) as a #78 follow-up before multi-member Production use. D3's 7-day cap bounds the revival window. User-facing: removing a member does not permanently end their tools if the email is re-added early |
 | D13 | Account label and CLI confirmation (F4) | (a) Label is only the verified, allowlist-gated, normalized email; the CLI requires typing that exact email, default "no" (HD default); (b) (a) plus a sanitized, length-capped `name` suffix (printable text only); (c) (a) with plain `yes` also accepted | **(a)**: no unsanitized provider text reaches the terminal, and a typed email cannot be confirmed by habit. User-facing tradeoff: a longer confirmation to type, and no friendly display name next to the email; (b) or (c) are available if the owner finds that too heavy |
@@ -705,7 +782,7 @@ None of these is silently chosen. Recommendations are design input.
 | Acceptance item | Where | Status |
 | --- | --- | --- |
 | Supported vs unsupported capabilities backed by official sources; unresolved marked unverified | Section 2 | Done; items listed as **UNVERIFIED** |
-| Flow prevents pairing replay, callback/state substitution, cross-environment/account reuse, credential exposure to model | Sections 1 (T1, T3, T10, T13), 5, 6 | Designed; tests specified. Model exposure holds by construction without a shell tool; with a shell-capable host it rests on the **UNVERIFIED** keychain ACL (T1) |
+| Flow prevents pairing replay, callback/state substitution, cross-environment/account reuse, credential exposure to model | Sections 1 (T1, T3, T10, T13), 5, 6 | Designed; tests specified. Model exposure holds by construction without a shell tool; with a shell-capable host it rests on the **UNVERIFIED** keychain ACL, and a shell can also invoke the MCP server directly and send without the host prompt (T1, D5, LC-D3) |
 | Removed membership, expired/revoked credentials, account switching with testable outcomes and a bound | Sections 6, 7 | Designed. Provider email change is not detected and removal-then-re-add revives grants (T9, D11, D12) |
 | Required new persistent grants/config and separate approvals identified | Section 9 | Done |
 | Security review approves, or records a precise blocker and bounded alternatives | Section 10 plus reviewer list below | **Pending.** This document is the review input |
@@ -719,7 +796,8 @@ None of these is silently chosen. Recommendations are design input.
 4. Is the keychain-only policy sufficient without verified ACL behavior (section 2.5)?
 5. D6: should a stolen credential be able to fetch any of the owner's drafts it can name (IDs are unguessable), or only those created by the grant?
 6. Does the order of checks (401 before 403 before 404) match #77's 403-before-lookup rule?
-7. Are the section 5.5 counters, windows, lockouts and the recomputed probabilities adequate, and is the global-cap availability trade-off acceptable?
+7. Are the section 5.5 counters, rolling windows, lockout-episode semantics, atomic pending and active-grant caps, and the recomputed probabilities adequate, and is the global-cap availability trade-off acceptable?
 8. Is the T13 approval-surface design (bearer-header auth with cookies ignored, fresh JWT, retyped code, `frame-ancestors 'none'`, no code in the URL) sufficient?
-9. Is accepting the shell-capable-host path (T1) acceptable for Preview with synthetic data, pending LC-K3?
+9. Is accepting the shell-capable-host path (T1), including direct MCP invocation of `draft_send` (LC-D3), acceptable for Preview with synthetic data, pending LC-K3?
 10. Are the stated T9 limits (undetected provider email change; removal-then-re-add revival) acceptable under D11/D12?
+11. Is the keychain key binding to the exact API and web origins (T12, section 4.1, LC-O1) sufficient, given that the ACL itself is UNVERIFIED?
