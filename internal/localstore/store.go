@@ -215,7 +215,7 @@ func checkEnvelope(d draft.Draft) error {
 	return nil
 }
 
-// prepare encodes d and enforces the stored-file size cap.
+// prepare encodes d, enforces the stored-file size cap and validates d's content.
 func (s *Store) prepare(d draft.Draft) ([]byte, error) {
 	data, err := encode(d)
 	if err != nil {
@@ -223,6 +223,10 @@ func (s *Store) prepare(d draft.Draft) ([]byte, error) {
 	}
 	if len(data) > draft.MaxStoredFileBytes {
 		return nil, newError(draft.CategoryInternal, draft.CodeEncodedTooLarge, "the encoded draft exceeds the stored file size limit", nil)
+	}
+	// Never write what the decoder would refuse to read: apply the same shared validator.
+	if !draft.Validate(d.Content).StructurallyValid {
+		return nil, internal("draft has invalid content", nil)
 	}
 	return data, nil
 }

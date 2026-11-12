@@ -193,7 +193,7 @@ func (h *handlers) update(ctx context.Context, in updateArgs) outcome {
 	c, issues := draft.DecodeContent(in.Draft)
 	if len(issues) > 0 {
 		// The core reports a bad ID or revision before it looks at content; keep that order.
-		if !draft.ValidID(in.ID) || in.ExpectedRevision < 1 {
+		if !draft.ValidID(in.ID) || in.ExpectedRevision < 1 || in.ExpectedRevision > draft.MaxRevision {
 			_, err := h.svc.Update(ctx, in.ID, in.ExpectedRevision, draft.Content{})
 			return outcome{err: err, id: in.ID}
 		}

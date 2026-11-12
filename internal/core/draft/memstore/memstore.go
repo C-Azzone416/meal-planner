@@ -44,6 +44,9 @@ func (s *Store) Create(ctx context.Context, d draft.Draft) error {
 	if err := canceled(ctx); err != nil {
 		return err
 	}
+	if !draft.Validate(d.Content).StructurallyValid {
+		return &draft.Error{Category: draft.CategoryInternal, Code: draft.CodeInternal, Message: "the draft has invalid content"}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.drafts[d.ID]; ok {
@@ -79,6 +82,9 @@ func (s *Store) Get(ctx context.Context, id string) (draft.Draft, error) {
 func (s *Store) Replace(ctx context.Context, id string, expectedRevision int64, next draft.Draft) error {
 	if err := canceled(ctx); err != nil {
 		return err
+	}
+	if !draft.Validate(next.Content).StructurallyValid {
+		return &draft.Error{Category: draft.CategoryInternal, Code: draft.CodeInternal, Message: "the draft has invalid content"}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

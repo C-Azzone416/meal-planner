@@ -183,3 +183,29 @@ func TestDirectionalMarksRoundTrip(t *testing.T) {
 		t.Fatalf("List = %+v, %v", list, err)
 	}
 }
+
+func TestStoreRefusesInvalidContentOnWrite(t *testing.T) {
+	s, root := newStore(t)
+	bad := minimal(strings.Repeat("x", draft.MaxTitleRunes+1))
+
+	if err := s.Create(ctxb(), mkDraft(testID(2), 1, bad)); err == nil {
+		t.Fatal("Create accepted invalid content")
+	}
+	if _, err := s.Get(ctxb(), testID(2)); err == nil {
+		t.Fatal("invalid Create left a draft behind")
+	}
+
+	good := mkDraft(testID(1), 1, minimal("T"))
+	mustCreate(t, s, good)
+	before := snapshot(t, root)
+	next := mkDraft(testID(1), 2, bad)
+	next.CreatedAt = good.CreatedAt
+	if err := s.Replace(ctxb(), testID(1), 1, next); err == nil {
+		t.Fatal("Replace accepted invalid content")
+	}
+	equalSnapshots(t, before, snapshot(t, root))
+	got, err := s.Get(ctxb(), testID(1))
+	if err != nil || got.Revision != 1 {
+		t.Fatalf("Get after refused Replace = %+v, %v", got, err)
+	}
+}

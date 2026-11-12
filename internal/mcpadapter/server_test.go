@@ -311,6 +311,7 @@ func TestDomainErrorsAreToolErrorsAndDoNotMutate(t *testing.T) {
 		{"list negative offset", "draft_list", map[string]any{"offset": -1}, "invalid_argument", "invalid_offset"},
 		{"update bad id", "draft_update", map[string]any{"id": "x", "expected_revision": 1, "draft": map[string]any{"title": "T"}}, "invalid_argument", "invalid_id"},
 		{"update zero revision", "draft_update", map[string]any{"id": id, "expected_revision": 0, "draft": map[string]any{"title": "T"}}, "invalid_argument", "invalid_revision"},
+		{"update above-cap revision with invalid content", "draft_update", map[string]any{"id": id, "expected_revision": 9007199254740992, "draft": map[string]any{"title": "X", "unknown": 1}}, "invalid_argument", "invalid_revision"},
 		{"update unknown", "draft_update", map[string]any{"id": "drf_00000000000000000000", "expected_revision": 1, "draft": map[string]any{"title": "T"}}, "not_found", "draft_not_found"},
 		{"update invalid content", "draft_update", map[string]any{"id": id, "expected_revision": 1, "draft": map[string]any{"title": " "}}, "invalid_argument", "validation_failed"},
 		{"create blank title", "draft_create", map[string]any{"draft": map[string]any{"title": " "}}, "invalid_argument", "validation_failed"},
