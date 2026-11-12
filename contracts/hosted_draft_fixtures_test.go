@@ -613,16 +613,101 @@ func TestHostedDraftFixtureRejections(t *testing.T) {
 	if err != nil || len(files) != len(seen) {
 		t.Fatal("every rejected fixture must be listed and checked")
 	}
-	for _, scope := range []string{"root", "content"} {
-		for _, field := range []string{"owner", "owner_issuer", "owner_subject", "approval", "approved", "status", "origin", "id", "receipt_id", "recipe_id", "revision", "created_at", "updated_at", "schema_version", "review"} {
-			if !seen[fmt.Sprintf("rejected/%s-%s.json", scope, field)] {
-				t.Fatalf("missing authoritative-field rejection: %s/%s", scope, field)
-			}
-		}
+	required := []string{
+		"array-content",
+		"bom-prefix",
+		"boolean-version",
+		"case-basis-kind",
+		"case-content-title",
+		"case-content-title-pair",
+		"case-estimate-active-minutes",
+		"case-root-content",
+		"case-variant",
+		"claim-without-basis",
+		"content-approval",
+		"content-approved",
+		"content-created_at",
+		"content-id",
+		"content-origin",
+		"content-owner",
+		"content-owner_issuer",
+		"content-owner_subject",
+		"content-receipt_id",
+		"content-recipe_id",
+		"content-review",
+		"content-revision",
+		"content-schema_version",
+		"content-status",
+		"content-updated_at",
+		"control-character",
+		"dangling-source-reference",
+		"decimal-version",
+		"duplicate-content",
+		"duplicate-estimate-value",
+		"duplicate-root",
+		"duplicate-source-id",
+		"empty-body",
+		"estimate-without-value",
+		"exponent-version",
+		"huge-version",
+		"ingredients-null-element",
+		"ingredients-number-element",
+		"invalid-utf8",
+		"missing-content",
+		"missing-version",
+		"nul-character",
+		"null-content",
+		"null-version",
+		"number-title",
+		"oversized-body",
+		"raw-control-byte",
+		"root-approval",
+		"root-approved",
+		"root-array",
+		"root-boolean",
+		"root-created_at",
+		"root-id",
+		"root-null",
+		"root-number",
+		"root-origin",
+		"root-owner",
+		"root-owner_issuer",
+		"root-owner_subject",
+		"root-receipt_id",
+		"root-recipe_id",
+		"root-review",
+		"root-revision",
+		"root-schema_version",
+		"root-status",
+		"root-string",
+		"root-updated_at",
+		"string-content",
+		"string-ingredients",
+		"string-version",
+		"trailing-json",
+		"truncated-json",
+		"unknown-field-null",
+		"unpaired-surrogate",
+		"unsupported-version",
+		"version-array",
+		"version-negative",
+		"version-negative-zero",
+		"version-object",
+		"version-zero",
 	}
-	for _, name := range []string{"unsupported-version", "duplicate-source-id", "duplicate-estimate-value", "case-content-title", "case-content-title-pair", "case-estimate-active-minutes", "case-basis-kind", "case-root-content", "invalid-utf8", "missing-content", "missing-version", "oversized-body", "nul-character", "control-character", "raw-control-byte", "huge-version", "root-null", "root-array", "empty-body", "array-content", "string-content", "number-title", "string-ingredients"} {
+	if len(required) != 80 {
+		t.Fatalf("required rejection list must name all 80 cases; got %d", len(required))
+	}
+	requiredSet := map[string]bool{}
+	for _, name := range required {
+		requiredSet[name] = true
 		if !seen["rejected/"+name+".json"] {
 			t.Fatalf("missing required rejection fixture: %s", name)
+		}
+	}
+	for file := range seen {
+		if name := strings.TrimSuffix(strings.TrimPrefix(file, "rejected/"), ".json"); !requiredSet[name] {
+			t.Fatalf("unlisted rejection fixture: %s", name)
 		}
 	}
 	if !bytes.Contains(readHostedDraftFixture(t, "rejected/invalid-utf8.json"), []byte{0xff}) {
