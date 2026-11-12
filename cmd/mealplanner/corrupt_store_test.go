@@ -13,7 +13,7 @@ func TestShowAndListRejectAmbiguousStoredDraft(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "data")
 	seed(t, root, `{"title":"Good"}`)
 	const id = "drf_aaaaaaaaaaaaaaaaaaaa"
-	const raw = `{"schema_version":1,"id":"` + id + `","revision":1,"status":"draft","title":"first","t\u0069tle":"second"}`
+	const raw = `{"schema_version":1,"id":"` + id + `","revision":1,"status":"draft","created_at":"2026-11-04T09:30:00Z","updated_at":"2026-11-04T09:30:00Z","title":"first","t\u0069tle":"second"}`
 	if err := os.WriteFile(filepath.Join(root, "drafts", id+".json"), []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestShowAndListRejectInvalidStoredContent(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "data")
 			seed(t, root, `{"title":"Good"}`)
 			const id = "drf_aaaaaaaaaaaaaaaaaaaa"
-			raw := `{"schema_version":1,"id":"` + id + `","revision":1,"status":"draft",` + fields + "}"
+			raw := `{"schema_version":1,"id":"` + id + `","revision":1,"status":"draft","created_at":"2026-11-04T09:30:00Z","updated_at":"2026-11-04T09:30:00Z",` + fields + "}"
 			if err := os.WriteFile(filepath.Join(root, "drafts", id+".json"), []byte(raw), 0o600); err != nil {
 				t.Fatal(err)
 			}

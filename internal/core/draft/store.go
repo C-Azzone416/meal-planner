@@ -37,7 +37,8 @@ type Store interface {
 	// revision equals expectedRevision. The check and the replacement are one atomic step
 	// with respect to every other Store user of the same data root, including other
 	// processes. Errors: conflict/revision_mismatch (with CurrentRevision; nothing written),
-	// not_found, corrupt/* and unsupported_schema (the damaged file is NOT replaced), io/*.
+	// not_found, corrupt/* and unsupported_schema (the damaged file is NOT replaced), io/*,
+	// limit_exceeded/revision_limit when expectedRevision is already MaxRevision (nothing written).
 	// The store also requires next.ID == id, next.Revision == expectedRevision+1 and
 	// next.CreatedAt equal to the stored value; a violation is internal/internal and writes
 	// nothing. On any error the previous valid file is intact.

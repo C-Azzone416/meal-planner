@@ -715,7 +715,7 @@ func TestStoredCharacterCorruptionIsSkippedAndLeftIntact(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	const raw = `{"schema_version":1,"id":"` + id + `","revision":1,"status":"draft","title":"synthetic\u001b\u0085\u202e"}`
+	const raw = `{"schema_version":1,"id":"` + id + `","revision":1,"status":"draft","created_at":"2026-11-04T09:30:00Z","updated_at":"2026-11-04T09:30:00Z","title":"synthetic\u001b\u0085\u202e"}`
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}

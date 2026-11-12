@@ -24,7 +24,7 @@ func TestSubprocessUpdateLeavesCorruptDraftIntact(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			raw := `{"schema_version":1,"id":"` + id + `","revision":1,"status":"draft",` + tc.field + "}"
+			raw := `{"schema_version":1,"id":"` + id + `","revision":1,"status":"draft","created_at":"2026-11-04T09:30:00Z","updated_at":"2026-11-04T09:30:00Z",` + tc.field + "}"
 			if err := os.Mkdir(filepath.Join(dir, "drafts"), 0o700); err != nil {
 				t.Fatal(err)
 			}

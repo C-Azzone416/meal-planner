@@ -176,3 +176,22 @@ func TestConcurrentUse(t *testing.T) {
 		t.Fatalf("info = %+v", info)
 	}
 }
+
+func TestReplaceRefusesToExceedMaxRevision(t *testing.T) {
+	s := memstore.New()
+	d := storetest.Minimal(storetest.ID(1))
+	d.Revision = draft.MaxRevision
+	if err := s.Create(bg, d); err != nil {
+		t.Fatal(err)
+	}
+	next := d
+	next.Revision = draft.MaxRevision + 1
+	err := s.Replace(bg, d.ID, draft.MaxRevision, next)
+	var de *draft.Error
+	if !errors.As(err, &de) || de.Category != draft.CategoryLimitExceeded || de.Code != draft.CodeRevisionLimit {
+		t.Fatalf("Replace = %v, want limit_exceeded/revision_limit", err)
+	}
+	if got, err := s.Get(bg, d.ID); err != nil || got.Revision != draft.MaxRevision {
+		t.Fatalf("Get = %+v, %v", got, err)
+	}
+}

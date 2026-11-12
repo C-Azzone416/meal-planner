@@ -166,6 +166,9 @@ func (s *Store) Replace(ctx context.Context, id string, expectedRevision int64, 
 	if !idRe.MatchString(id) {
 		return invalidID()
 	}
+	if expectedRevision >= draft.MaxRevision {
+		return newError(draft.CategoryLimitExceeded, draft.CodeRevisionLimit, "the draft is at the maximum revision and cannot be updated", nil)
+	}
 	if next.ID != id || expectedRevision < 1 || next.Revision != expectedRevision+1 {
 		return internal("replacement does not match the id and expected revision", nil)
 	}
@@ -205,6 +208,9 @@ func (s *Store) Replace(ctx context.Context, id string, expectedRevision int64, 
 func checkEnvelope(d draft.Draft) error {
 	if d.SchemaVersion != draft.SchemaVersion || d.Status != draft.StatusDraft {
 		return internal("draft has an invalid schema version or status", nil)
+	}
+	if !validEnvelope(d, time.Now()) {
+		return internal("draft has an invalid revision or timestamp", nil)
 	}
 	return nil
 }

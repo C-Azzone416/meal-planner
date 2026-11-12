@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"time"
 	"unicode/utf8"
 
 	"github.com/C-Azzone416/meal-planner/internal/core/draft"
@@ -142,11 +143,33 @@ func decode(raw []byte, id string) (draft.Draft, error) {
 	if d.ID != id {
 		return draft.Draft{}, corrupt(draft.CodeIDMismatch, "the draft id does not match its file name", nil)
 	}
-	if d.Status != draft.StatusDraft || d.Revision < 1 {
-		return draft.Draft{}, corrupt(draft.CodeInvalidContent, "the draft file has an invalid status or revision", nil)
+	if d.Status != draft.StatusDraft {
+		return draft.Draft{}, corrupt(draft.CodeInvalidContent, "the draft file has an invalid status", nil)
+	}
+	if !validStoredEnvelope(raw, d) {
+		return draft.Draft{}, corrupt(draft.CodeInvalidContent, "the draft file has an invalid revision or timestamp", nil)
 	}
 	if !draft.Validate(d.Content).StructurallyValid {
 		return draft.Draft{}, corrupt(draft.CodeInvalidContent, "the draft file has invalid content", nil)
 	}
 	return normalize(d), nil
+}
+
+// validStoredEnvelope checks the revision and timestamp fields of a decoded stored draft, including
+// the exact spelling of both timestamps in the raw file.
+func validStoredEnvelope(raw []byte, d draft.Draft) bool {
+	var env struct {
+		CreatedAt json.RawMessage `json:"created_at"`
+		UpdatedAt json.RawMessage `json:"updated_at"`
+	}
+	if json.Unmarshal(raw, &env) != nil {
+		return false
+	}
+	if _, ok := parseStoredTime(env.CreatedAt); !ok {
+		return false
+	}
+	if _, ok := parseStoredTime(env.UpdatedAt); !ok {
+		return false
+	}
+	return validEnvelope(d, time.Now())
 }

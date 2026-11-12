@@ -145,7 +145,7 @@ func (h *handlers) register(s *mcp.Server) {
 		Description: draftText + " Replaces the whole draft; send the complete content and the revision you last read.",
 		InputSchema: obj(map[string]any{
 			"id":                prop("string", idDesc),
-			"expected_revision": prop("integer", "The revision you last read, 1 or more. A stale value is a revision_mismatch conflict and nothing is written."),
+			"expected_revision": prop("integer", "The revision you last read, 1 to 9007199254740991. A stale value is a revision_mismatch conflict and nothing is written."),
 			"draft":             prop("object", draftDesc),
 		}, "id", "expected_revision", "draft"),
 		Annotations: annotations(false, true),

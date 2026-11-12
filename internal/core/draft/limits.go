@@ -1,5 +1,7 @@
 package draft
 
+import "time"
+
 // Limits (contract section 6). Runes are Unicode code points. They are exported so adapters and
 // tests share them.
 const (
@@ -30,6 +32,15 @@ const (
 	MaxListLimit       = 100
 	MaxSkippedReported = 20
 	MaxIssuesReported  = 50 // errors and warnings each, per validation
+
+	// MaxRevision is the largest revision a draft can have: 2^53-1, the largest integer every
+	// JSON client represents exactly. An update from this revision is refused (revision_limit).
+	MaxRevision int64 = 1<<53 - 1
+
+	// MaxFutureSkew is how far past the local clock a stored created_at or updated_at may be
+	// before the file is treated as corrupt. It tolerates a clock that was briefly ahead (another
+	// machine, a synced folder, a manual change) without accepting an obviously wrong date.
+	MaxFutureSkew = 24 * time.Hour
 
 	// MaxStoredFileBytes is the store read cap: a larger file is treated as corrupt without being
 	// fully read.

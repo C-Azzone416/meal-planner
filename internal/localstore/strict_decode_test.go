@@ -12,7 +12,7 @@ import (
 
 func TestDecodeStoredDraftHeaderAndMembers(t *testing.T) {
 	const id = "drf_00000000000000000001"
-	const fields = `,"id":"` + id + `","revision":1,"status":"draft","title":"first"`
+	const fields = `,"id":"` + id + `","revision":1,"status":"draft","created_at":"2026-11-04T09:30:00Z","updated_at":"2026-11-04T09:30:00Z","title":"first"`
 	for _, tc := range []struct {
 		name, raw string
 		category  draft.Category
@@ -54,7 +54,7 @@ func TestDecodeStoredDraftHeaderAndMembers(t *testing.T) {
 
 func TestDecodeStoredDraftContentCharacters(t *testing.T) {
 	const id = "drf_00000000000000000001"
-	const header = `{"schema_version":1,"id":"` + id + `","revision":1,"status":"draft",`
+	const header = `{"schema_version":1,"id":"` + id + `","revision":1,"status":"draft","created_at":"2026-11-04T09:30:00Z","updated_at":"2026-11-04T09:30:00Z",`
 	for _, tc := range []struct {
 		name, fields string
 		valid        bool
