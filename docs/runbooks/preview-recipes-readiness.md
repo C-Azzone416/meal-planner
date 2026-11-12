@@ -311,7 +311,7 @@ Nothing here is authorized. Each item needs Caroline's explicit approval at acti
 
 ### A0. Recheck immediately before setup (read-only; no approval beyond running section 2)
 - Re-run Q1 to Q10 the same day. The 2026-11-09 inventory is stale evidence.
-- Confirm the deployed Preview commit is `ef7e561` or newer; the 2026-11-09 inventory said it was `aaff49c`, 27 commits behind reviewed main. Automatic Preview deploys only when a push to `develop` changes hosted code (`web/`, `api/`, `hosted/`, `vercel.json`, `contracts/`, `internal/core/`, or toolchain paths) and `PREVIEW_ENABLED=true`; a docs-only push does not deploy (hosted-deploy.md section 2; `.github/scripts/classify.sh`, `ci.yml` `hosted_preview` gate). Confirm the deployed commit; do not assume a push has refreshed it.
+- Confirm the deployed Preview commit is `ef7e561` or newer; the 2026-11-09 inventory said it was `aaff49c`, 27 commits behind reviewed main. Automatic Preview deploys, under normal classification, only when a push to `develop` changes hosted code (`web/`, `api/`, `hosted/`, `vercel.json`, `contracts/`, `internal/core/`, or toolchain paths) and `PREVIEW_ENABLED=true`; under normal classification with an available diff base, a docs-only push does not deploy (hosted-deploy.md section 2; `.github/scripts/classify.sh`, `ci.yml` `hosted_preview` gate). CI's fail-safe (`CLASSIFY_ALL=true` when the base is unavailable or the diff fails, and for unknown paths; `ci.yml:75-81`, `classify.sh`) can select Preview anyway; it is not a deploy method and must not be relied on or provoked. Confirm the deployed commit; do not assume a push has refreshed it.
 
 ### A1. Grant fixes (only if Q1 to Q9 deviate)
 
@@ -333,25 +333,67 @@ GRANT SELECT, INSERT ON meal_planner.recipe_creates, meal_planner.recipe_updates
 COMMIT;
 ```
 Privileges the role holds through role membership (Q2) are not fixed by these statements; they go through A1b.
-Rollback: **before any change**, privately record the Q3/Q5/Q6 outputs (the pre-change ACL snapshot; never in chat or the repo). Reverse from that snapshot, not from the statement list, and invert each applied change by type:
-- **GRANT** applied: `REVOKE` only the privileges the snapshot shows were newly added. Do not revoke a privilege that already existed before the change (a repeated GRANT is a no-op, and revoking it would strip the original).
-- **REVOKE** applied (including the `PUBLIC` alternative): `GRANT` back exactly the privileges and grantees the snapshot shows were removed, nothing more.
+
+**Pre-change ACL snapshot queries (Q11a to Q11d; SELECT-only, run with the admin connection, substitute `<db>` privately).** Each returns the raw ACL array plus an exploded per-grantee view. `datacl`/`nspacl`/`relacl`/`attacl` being NULL means the built-in default ACL (owner holds all rights; for a database PUBLIC holds CONNECT and TEMPORARY), so the exploded views substitute `acldefault(...)` and show `acl_is_null` explicitly. A grantee shown as `PUBLIC` is the pseudo-role (OID 0); `is_grantable` is the WITH GRANT OPTION flag.
+```sql
+-- Q11a database ACL
+SELECT d.datname, d.datacl IS NULL AS acl_is_null, d.datacl::text AS raw_acl,
+       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee,
+       a.grantor::regrole::text AS grantor, a.privilege_type, a.is_grantable
+FROM pg_database d
+CROSS JOIN LATERAL aclexplode(COALESCE(d.datacl, acldefault('d', d.datdba))) a
+WHERE d.datname = '<db>'
+ORDER BY grantee, a.privilege_type;
+
+-- Q11b schema ACL
+SELECT n.nspname, n.nspacl IS NULL AS acl_is_null, n.nspacl::text AS raw_acl,
+       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee,
+       a.grantor::regrole::text AS grantor, a.privilege_type, a.is_grantable
+FROM pg_namespace n
+CROSS JOIN LATERAL aclexplode(COALESCE(n.nspacl, acldefault('n', n.nspowner))) a
+WHERE n.nspname = 'meal_planner'
+ORDER BY grantee, a.privilege_type;
+
+-- Q11c table ACLs
+SELECT c.relname, c.relacl IS NULL AS acl_is_null, c.relacl::text AS raw_acl,
+       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee,
+       a.grantor::regrole::text AS grantor, a.privilege_type, a.is_grantable
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
+WHERE n.nspname = 'meal_planner' AND c.relkind IN ('r', 'p')
+ORDER BY c.relname, grantee, a.privilege_type;
+
+-- Q11d column-level ACLs (zero rows means no column-specific grants)
+SELECT c.relname, t.attname, t.attacl::text AS raw_acl,
+       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee,
+       a.grantor::regrole::text AS grantor, a.privilege_type, a.is_grantable
+FROM pg_attribute t
+JOIN pg_class c ON c.oid = t.attrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN LATERAL aclexplode(t.attacl) a
+WHERE n.nspname = 'meal_planner' AND t.attacl IS NOT NULL AND NOT t.attisdropped
+ORDER BY c.relname, t.attname, grantee, a.privilege_type;
+```
+Rollback: **before any change**, privately record the pre-change ACL snapshot: Q3 (ownership), Q5 and Q6, plus the exact ACL catalog queries Q11a to Q11d below (never in chat or the repo). Q6's effective booleans are not sufficient: they cannot tell a direct grant from one inherited through PUBLIC or membership. Reverse from the snapshot, not from the statement list, and invert each applied change by type:
+- **GRANT** applied: `REVOKE` only the privileges the snapshot shows were newly added (compare direct grantee rows, including grantability). Do not revoke a privilege that already existed before the change (a repeated GRANT is a no-op, and revoking it would strip the original).
+- **REVOKE** applied (including the `PUBLIC` alternative): `GRANT` back exactly the privileges, grantees and grantability the snapshot shows were removed, nothing more.
 - Tightened privileges (excess removed by the REVOKE templates) normally stay tightened on rollback. Restoring an excess privilege is a separate action that needs Caroline's explicit approval.
-After rollback, re-run Q3/Q5/Q6 and compare with the snapshot. A missing grant leaves the feature failing closed with 503, which is safe.
+After rollback, re-run Q3/Q5/Q6 and Q11a to Q11d and compare with the snapshot; the only permitted differences are the separately approved ones (tightened privileges that stay tightened). A missing grant leaves the feature failing closed with 503, which is safe.
 Verify: re-run Q4, Q5, Q6; the matrix must match exactly.
 
 **A1b. Remove over-privilege (Q1/Q2 show superuser-like attributes or memberships, e.g. `neon_superuser`).** **Caroline approves before anything is run.** `neon_superuser` also brings `REPLICATION`, `pg_read_all_data`/`pg_write_all_data` and `GRANT ALL ON public WITH GRANT OPTION`; all of these must be gone from the final role. Neon documents `neon roles create --access read_only|read_write` as a scoped role option; that such a role is not a `neon_superuser` member is implied, not stated (**UNVERIFIED**). Whether to use it is Caroline's decision, and it also means a new role and credential. Exact action depends on how the role was created: **UNVERIFIED** whether `REVOKE <role> FROM <runtime_role>` and `ALTER ROLE ... NOBYPASSRLS NOCREATEDB NOCREATEROLE` are permitted on Neon for a Console-created role. If not removable, the least-privilege role needs to be a SQL-created role, which means a new role and a new credential; the issue forbids that without a decision, so **stop and ask Caroline** (it also changes A2). Do not weaken the requirement in the runbook to fit the role.
-Rollback: re-grant the membership/attributes removed (record them first).
+Rollback: record the memberships/attributes first. Tightened privileges stay tightened; restoring a removed membership or attribute is a separate action that needs Caroline's explicit approval, as in A1a.
 Verify: Q1, Q2, Q6 (second query).
 
-**A1c. Ownership transfer** (Q3/Q3b show the runtime role owning objects). **Caroline approves before anything is run.** `ALTER ... OWNER TO <migration_owner>` for each, or reassign. Record original owners first; rollback is the reverse `ALTER`. Verify: Q3, Q3b.
+**A1c. Ownership transfer** (Q3/Q3b show the runtime role owning objects). **Caroline approves before anything is run.** `ALTER ... OWNER TO <migration_owner>` for each, or reassign. Record original owners first. Tightened privileges stay tightened: reversing the `ALTER` would hand ownership back to the runtime role, so it needs Caroline's separate explicit approval, as in A1a. Verify: Q3, Q3b.
 
 ### A2. Credential issuance or rotation (only if section 3 fails, the password is unknown, or Q1 showed expiry)
 
 **Who:** Caroline in the Neon console (or CLI/API), on the Preview branch only. Not an agent. The password is shown once, so copy it straight to a password manager / the Vercel Secret form; never to chat, shell history or this repo.
 **Action:** reset the existing runtime role's password (no new role) via the Neon Console, `neon roles reset-password`, or the API. Per Neon docs (QA-verified 2026-11-11) the reset takes effect immediately and the old password fails on the next connection; behavior for already-open sessions is not stated (**UNVERIFIED**). **Never** use `ALTER ROLE ... PASSWORD`: it puts the password in the SQL text (logs, history).
-**Rollback:** the old password cannot be restored once reset; rollback is to reset again and re-set the Vercel Secret. If Preview already had a working Secret, rotate by updating the Secret immediately after the reset, accepting a window of 503s on Preview. Updating the Secret does not reach the running deployment: the new value applies only after a new Preview deployment (see A3 "Then"), so the old deployment keeps the old (now failing) password until then.
-**Verify:** section 3 with the new password, then A3 and section 5.
+**Rollback:** the old password cannot be restored once reset; rollback is to reset again and re-set the Vercel Secret. If Preview already had a working Secret, rotate by updating the Secret immediately after the reset, accepting a window of 503s on Preview. Updating the Secret does not reach the running deployment: the new value applies only after a new Preview deployment, so the old deployment keeps the old (now failing) password until then. Rotation and reset-again recovery both follow the **Secret-change deployment sequence** defined under A3 (deploy, confirm served deployment and alias, then verify).
+**Verify:** section 3 with the new password, then the A3 Secret-change deployment sequence (the served-deployment confirmation is part of it), then section 5.
 
 ### A3. Set the Vercel Preview Secret `MEAL_RECIPES_DATABASE_URL` (currently absent)
 
@@ -362,11 +404,12 @@ Verify: Q1, Q2, Q6 (second query).
 - Environment: **Preview only**. Not Production, not Development.
 - Value: the pooled DSN of section 1.2 with `?sslmode=verify-full` (plus `sslrootcert` only if section 3 needed it). No `channel_binding`. Do not apply the Preview scope to a single branch unless Caroline decides to (UNVERIFIED how the repo's Preview deployments are branched; default is all Preview).
 - Never `VITE_`-prefixed.
-**Then:** a new Preview deployment is needed for the function to see the variable. **VERIFIED** (Vercel docs): environment variable changes "only apply to new deployments". The hosted-deploy runbook documents no manual Preview deploy; the only documented path is automatic Preview from `ci.yml` on a push to `develop` that changes hosted code with `PREVIEW_ENABLED=true` (hosted-deploy.md section 2). A docs-only or empty push does NOT redeploy Preview (the classifier sets `hosted_preview=false`; reproduced by QA with `PREVIEW_TRUSTED=true PREVIEW_ENABLED=true`). So after a Secret change, a new Preview needs an approved, reviewed `develop` commit touching hosted code, or a separately approved method from Caroline; do not improvise a manual deploy. Record the resulting deployment's SHA/URL from the Preview summary.
-**Rollback:** delete (or replace) the variable in the dashboard. This alone does NOT affect the running deployment, which keeps the credential it was built with (env changes "only apply to new deployments"). Then:
-1. Obtain an approved new Preview deployment after the deletion/replacement, by the same trigger as the "Then" step above (a hosted-code `develop` push with `PREVIEW_ENABLED=true`).
-2. Confirm the deployment being served (Preview summary SHA/URL, and the alias deployment ID if `PREVIEW_ALIAS` is used) is that new deployment, not the earlier one.
-3. Verify the expected result on it: after deletion, the API returns the generic 503 (fail-closed); after replacement, the restored credential works (section 5 checks).
+**Then (Secret-change deployment sequence; applies to every Secret change: A2 rotation and reset-again, A3 set, replace and delete, and the A3 rollback):** a Secret edit alone changes nothing that is running. **VERIFIED** (Vercel docs): environment variable changes "only apply to new deployments". In order:
+1. Obtain an approved new Preview deployment after the Secret edit. hosted-deploy.md documents no routine manual Preview deployment after bootstrap; the only documented path is automatic Preview from `ci.yml` on a push to `develop` that changes hosted code with `PREVIEW_ENABLED=true` (hosted-deploy.md section 2). Under normal classification with an available diff base, a docs-only or empty push does NOT redeploy Preview (the classifier sets `hosted_preview=false`; reproduced by QA with `PREVIEW_TRUSTED=true PREVIEW_ENABLED=true`). CI's fail-safe (`CLASSIFY_ALL=true` when the base is unavailable or the diff fails, and for unknown paths; `ci.yml:75-81`, `classify.sh`) may select Preview anyway; it is not a deploy method and must not be relied on or provoked. So a new Preview needs an approved, reviewed `develop` commit touching hosted code, or a separately approved method from Caroline. The one-time bootstrap in hosted-deploy.md section 1 must not be used as a Secret-refresh path; do not improvise a manual deploy.
+2. Confirm the deployment that is actually served: Preview summary SHA/URL, and the alias deployment ID if `PREVIEW_ALIAS` is used (a deployment can exist without the alias having moved; hosted-deploy.md section 2), is the new deployment, not the earlier one. Record it.
+3. Only then verify on that deployment (the expected result for the change, then section 5).
+Until step 2 is confirmed, assume the previous credential state is still live.
+**Rollback:** delete (or replace) the variable in the dashboard. This alone does NOT affect the running deployment, which keeps the credential it was built with (env changes "only apply to new deployments"). Then follow the Secret-change deployment sequence above (steps 1 to 3). Step 3 here: after deletion, the API returns the generic 503 (fail-closed); after replacement, the restored credential works (section 5 checks).
 Until step 2 is confirmed, assume the old credential is still live. A Secret cannot be converted to Config; recreate if a mistake was made.
 **Verify (no values revealed):**
 1. Dashboard/`vercel env list`: lists `MEAL_RECIPES_DATABASE_URL` for Preview only, type Secret, no Production or Development entry.
