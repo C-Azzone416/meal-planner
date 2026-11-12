@@ -1,0 +1,531 @@
+# Preview recipe persistence: live-readiness packet (#61)
+
+Status: **preparation only.** Refs #61. Nothing in this document has been run. The author had no database, Neon, Vercel or credential access and handled no secret. Every live step below is for the owner (Caroline) or someone she explicitly approves. This packet is not an approval.
+
+Related: [recipes.md](recipes.md) (contract and gates), [hosted-deploy.md](hosted-deploy.md) (deploy and env guard), [authentication.md](authentication.md).
+
+Ground rules for every step below:
+
+- Preview only. No Production schema, role, Secret, auth or deployment.
+- Never put a DSN, password, token, project/branch/endpoint ID or role name in a command argument, ticket, PR, chat or log. Use placeholders; supply real values through the shell environment or a prompt.
+- Do **not** reapply `hosted/migrations/001_recipes.sql` (it deliberately fails on a second run) and do **not** create a second runtime role. The issue records that both already exist on Preview.
+- Read-only means `SELECT` on catalogs only. Run the section 2 queries as a privileged *owner/admin* login, never as the runtime login (the runtime role cannot see everything and must not be given more to make the checks pass).
+
+## 1. Repo-side readiness (verified from code at develop `ef7e561`)
+
+### 1.1 Environment variable
+
+| Item | Value | Source |
+|---|---|---|
+| Name read by the store | `MEAL_RECIPES_DATABASE_URL` (the only one) | `api/recipes/index.go:20`, `os.Getenv(...)` passed to `hosted.OpenRecipeStore` |
+| Vercel type / scope | Secret, **Preview only**, server-only, never `VITE_` | `recipes.md`; `tools/deploy/check-pulled-env.sh:41,116` accepts only the literal `[SENSITIVE]` for this name and rejects lookalike or frontend-prefixed names |
+| Missing or invalid | fails closed, generic 503; no browser-only fallback | `recipes.md` |
+
+The migration is never run by the application (`hosted/recipe_store.go` header comment, `001_recipes.sql` header).
+
+### 1.2 DSN shape (no real values)
+
+```
+postgres://<runtime_role>:<password>@<endpoint>-pooler.<region>.aws.neon.tech/<database>?sslmode=verify-full
+```
+
+Checked by `recipeDatabaseURL` in `hosted/recipe_store.go` (except the host recommendation below, which the code does **not** enforce):
+
+- Scheme `postgres` or `postgresql`; non-empty host, username, and database path.
+- `sslmode=verify-full` is **required**. Anything else is rejected.
+- The only other query option allowed is `sslrootcert`; each key must appear once. Everything else (including `channel_binding`, `options`, `host`) is rejected. Omit `channel_binding`: the pinned lib/pq does not support it.
+- The code appends `connect_timeout=5` and `application_name=meal-planner-recipes` itself. Do not add them.
+- Pool: 4 open / 2 idle connections per warm function, 5 min max lifetime, 1 min idle. `statement_timeout=10s` and `lock_timeout=5s` are sent as `SET LOCAL` inside each transaction, not as startup parameters.
+- The **pooled** hostname (the endpoint ID plus `-pooler`) is a **recommendation, not enforced**: `recipeDatabaseURL` does not check the host for `-pooler`, so a direct host would be accepted by the code. Use the pooled host because the app opens up to 4 connections per warm function. The Neon pooler is PgBouncer in transaction mode; the startup parameters it accepts include `client_encoding`, `datestyle`, `timezone`, `standard_conforming_strings` and `application_name` (Neon's list is introduced with "These include", so treat it as non-exhaustive), and session-level `SET` is unsupported. This is why the code uses `SET LOCAL`.
+- Trust roots: `sslrootcert` is optional. Neon's certificates chain to ISRG Root X1, normally in the OS store. Whether the Vercel Go runtime image trusts it without `sslrootcert`, and how the pinned lib/pq locates system roots in that image: **UNVERIFIED** (confirmed only by the Preview acceptance in section 5). If needed, the fix is to bundle a root file and set `sslrootcert` to its in-function path, which is a code change and out of scope here.
+
+### 1.3 Exact privileges the runtime role needs
+
+Derived from `001_recipes.sql` and every SQL string in `hosted/recipe_store.go`:
+
+| Object | Privilege | Used by |
+|---|---|---|
+| database | `CONNECT` | any connection |
+| schema `meal_planner` | `USAGE` | all statements |
+| `meal_planner.recipes` | `SELECT`, `INSERT`, `UPDATE` | create (INSERT), get/list (SELECT), update (`SELECT ... FOR UPDATE` + UPDATE; `FOR UPDATE` needs UPDATE) |
+| `meal_planner.recipe_creates` | `SELECT`, `INSERT` | idempotent-create receipt lookup and write |
+| `meal_planner.recipe_updates` | `SELECT`, `INSERT` | update receipt lookup and write |
+| `meal_planner.schema_migrations` | **none** | the app never reads it |
+
+The foreign keys from the two receipt tables to `recipes` need no extra grant: PostgreSQL runs referential-integrity checks with the referenced table owner's rights. (If a deviation appears here at acceptance time, treat it as a finding, not a reason to broaden grants.) No sequences exist (UUID keys, no serials), so no sequence grants are needed. No user-defined functions or triggers are used. The built-in `pg_advisory_xact_lock(hashtextextended(...))` call (`recipe_store.go:149`) is executable by PUBLIC by default, so no grant is needed.
+
+### 1.4 What the role must NOT have
+
+- Ownership of the database, the schema, any table, index, sequence or function or procedure (checked in Q3b and Q3c; the migration owner owns them; separate login).
+- Schema `CREATE` on `meal_planner`, `public`, or anything else (Q6b); `CREATE` on the database; `TEMPORARY` is not needed (PUBLIC has it by default; see query 8).
+- `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER` on any of the four tables; any privilege on `schema_migrations`; any column-level extras.
+- Superuser, `CREATEROLE`, `CREATEDB`, `REPLICATION`, `BYPASSRLS`; membership in any other role (in particular `neon_superuser`, `pg_read_all_data`, `pg_write_all_data`).
+- Any access to `neon_auth`/`auth` schemas or `public` tables. Default privileges or PUBLIC grants must not reach `meal_planner`.
+
+**Highest-risk suspicion.** Neon documents that roles created through the Console or API are made members of `neon_superuser` (which carries `CREATEDB`, `CREATEROLE`, `BYPASSRLS`), while roles created by SQL are not. Neon documents `--access read_only|read_write` roles as scoped; that they are not `neon_superuser` members is implied, not stated (**UNVERIFIED**). Beyond `CREATEDB`, `CREATEROLE` and `BYPASSRLS`, `neon_superuser` also carries `REPLICATION`, membership in `pg_read_all_data`/`pg_write_all_data`, and `GRANT ALL ON public WITH GRANT OPTION` (all per the Neon roles page, section 1.5). If the existing runtime role was created via Console/API, it likely fails section 1.4 regardless of the migration's grants. Queries 1 and 2 test this directly. Whether membership can be removed (`REVOKE neon_superuser FROM ...`) on the owner's plan: **UNVERIFIED**; see approval item A1b.
+
+### 1.5 Provider references (accessed 2026-11-11)
+
+| Claim | Source |
+|---|---|
+| `-pooler` host, PgBouncer transaction mode, `SET`/`RESET` unsupported | https://neon.com/docs/connect/connection-pooling |
+| Pooler rejects non-allowlisted startup parameters | https://neon.com/docs/connect/connection-errors (Unsupported startup parameter) |
+| Console/API roles (and `neon roles create` without `--access`) join `neon_superuser`; SQL-created roles do not; `neon_superuser` attributes (CREATEDB, CREATEROLE, BYPASSRLS, REPLICATION, `pg_read_all_data`/`pg_write_all_data`, `GRANT ALL ON public WITH GRANT OPTION`); `neon roles create --access read_only\|read_write` documented as scoped; non-membership in `neon_superuser` implied, not stated (**UNVERIFIED**); docs give no SQL for listing role attributes | https://neon.com/docs/manage/roles |
+| Password reset (Console, `neon roles reset-password`, API) takes effect immediately; the old password fails on the next connection; behavior for already-open sessions is not stated | https://neon.com/docs/manage/roles |
+| Environment variable changes "only apply to new deployments" (**VERIFIED**: a redeploy is needed) | https://vercel.com/docs/environment-variables |
+| `vercel env add NAME --environment preview --sensitive` (or `--type secret`); value via prompt or stdin | https://vercel.com/docs/cli/env |
+| `verify-full` recommended; ISRG Root X1; `PGSSLROOTCERT` | https://neon.com/docs/connect/connect-securely |
+| Secret type is write-only after save; cannot be converted to Config in place | https://vercel.com/docs/environment-variables/sensitive-environment-variables |
+
+The Neon, Vercel Secret, redeploy and CLI rows were checked live by independent QA on 2026-11-11; the rest were read by a research helper through page fetches, not by hand-checking in the console. Anything not in this table (Go runtime CA trust, whether Neon role-membership can be removed, open-session behavior on password reset) is **UNVERIFIED** and is marked where used.
+
+## 2. Read-only verification SQL (owner-run, Preview)
+
+Connect as a privileged admin/owner login to the Preview branch **database**, using the *direct* (unpooled) host and libpq environment variables (see 3.1 for the safe pattern). For this admin login, run `export PGSSLMODE=verify-full` first, then enter the direct (non-`-pooler`) host and the admin role at the same prompts in 3.1. The 3.1 blocks begin with `unset PGSSLMODE`, so run the export again after the prompts and before `psql`. Every statement is `SELECT`. Set the role name privately; do not paste it anywhere:
+
+Requires **psql 15 or newer** (for `\getenv`). Set the role name in your shell without putting it on a command line (zsh: `read "?runtime role: " RUNTIME_ROLE`; bash: `read -r -p 'runtime role: ' RUNTIME_ROLE`), then `export RUNTIME_ROLE`. Make the first line of your local `preview-readiness-checks.sql` (a copy of the queries below):
+
+```
+\getenv rt RUNTIME_ROLE
+```
+
+(On older psql, use ``\set rt `printenv RUNTIME_ROLE` `` instead.) Then run, with no name, DSN or secret on argv (the connection comes from `PG*` environment variables):
+
+```bash
+psql -X -v ON_ERROR_STOP=1 -f preview-readiness-checks.sql
+unset RUNTIME_ROLE
+```
+
+`:'rt'` is psql variable substitution. An exported `PGPASSWORD` is visible to `ps -E` for the same user while the script runs; this is acceptable on the owner's own machine. Output stays on the owner's terminal; record only PASS/FAIL per query, never role names or identifiers.
+
+**Q1. Role attributes**
+```sql
+SELECT rolcanlogin, rolsuper, rolcreaterole, rolcreatedb, rolreplication,
+       rolbypassrls, rolconnlimit, rolvaliduntil IS NOT NULL AS has_expiry
+FROM pg_roles WHERE rolname = :'rt';
+```
+Expect one row: `rolcanlogin=t`, all others `f`; `rolconnlimit` -1 or a sane cap. Zero rows: wrong name or role absent (stop; do not create it, report). `rolsuper/createrole/createdb/replication/bypassrls = t`: over-privileged (A1b). `rolcanlogin=f`: credential cannot work. `has_expiry=t`: a password expiry may silently break Preview later.
+
+**Q2. Role memberships**
+```sql
+SELECT g.rolname AS granted_role, m.admin_option
+FROM pg_auth_members m
+JOIN pg_roles g ON g.oid = m.roleid
+JOIN pg_roles u ON u.oid = m.member
+WHERE u.rolname = :'rt';
+```
+Expect zero rows. Any row (`neon_superuser`, `pg_*_all_data`, an app/owner role) means inherited privileges beyond section 1.3: over-privileged (A1b).
+
+**Q3. Ownership**
+```sql
+SELECT 'schema' AS kind, nspname AS name, pg_get_userbyid(nspowner) AS owner
+  FROM pg_namespace WHERE nspname = 'meal_planner'
+UNION ALL
+SELECT CASE relkind WHEN 'r' THEN 'table' WHEN 'i' THEN 'index' ELSE relkind::text END,
+       c.relname, pg_get_userbyid(c.relowner)
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'meal_planner'
+ORDER BY 1, 2;
+```
+Expect: schema, 4 tables, their indexes (`*_pkey`, unique constraints, `recipes_owner_page`), all owned by the **same migration-owner role, not the runtime role**. Compare owners by eye or `owner <> :'rt'`. Any object owned by the runtime role: the role can DROP/GRANT it (A1c, owner transfer). Mixed owners: schema drift from the reviewed migration; stop and report.
+
+**Q3b. Anything the runtime role owns anywhere in this database**
+```sql
+SELECT n.nspname, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relowner = (SELECT oid FROM pg_roles WHERE rolname = :'rt')
+UNION ALL SELECT nspname, '(schema)' FROM pg_namespace
+WHERE nspowner = (SELECT oid FROM pg_roles WHERE rolname = :'rt')
+UNION ALL SELECT 'database', datname FROM pg_database
+WHERE datdba = (SELECT oid FROM pg_roles WHERE rolname = :'rt');
+```
+Expect zero rows. Any row is an ownership deviation (note: a Neon Console role that is also the project's default role would own the default database).
+
+**Q3c. Functions and procedures the runtime role owns (any schema)**
+```sql
+SELECT n.nspname, p.oid::regprocedure::text AS routine, p.prokind
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE p.proowner = (SELECT oid FROM pg_roles WHERE rolname = :'rt')
+ORDER BY 1, 2;
+```
+Expect zero rows. `regprocedure` shows the schema-qualified name with argument types, so overloads are unambiguous. Any row means the role can ALTER or DROP that routine (forbidden by 1.4): FAIL, stop and report to Caroline. Do not reassign or drop it on your own; the decision is the separately approved A1c.
+
+**Q4. Table privilege matrix (effective, includes PUBLIC and inherited)**
+```sql
+SELECT t.tbl,
+  has_table_privilege(:'rt', 'meal_planner.'||t.tbl, 'SELECT')     AS sel,
+  has_table_privilege(:'rt', 'meal_planner.'||t.tbl, 'INSERT')     AS ins,
+  has_table_privilege(:'rt', 'meal_planner.'||t.tbl, 'UPDATE')     AS upd,
+  has_table_privilege(:'rt', 'meal_planner.'||t.tbl, 'DELETE')     AS del,
+  has_table_privilege(:'rt', 'meal_planner.'||t.tbl, 'TRUNCATE')   AS trunc,
+  has_table_privilege(:'rt', 'meal_planner.'||t.tbl, 'REFERENCES') AS refs,
+  has_table_privilege(:'rt', 'meal_planner.'||t.tbl, 'TRIGGER')    AS trig
+FROM (VALUES ('recipes'),('recipe_creates'),('recipe_updates'),('schema_migrations')) t(tbl)
+ORDER BY 1;
+```
+Expected exactly:
+
+| table | sel | ins | upd | del | trunc | refs | trig |
+|---|---|---|---|---|---|---|---|
+| recipe_creates | t | t | f | f | f | f | f |
+| recipe_updates | t | t | f | f | f | f | f |
+| recipes | t | t | t | f | f | f | f |
+| schema_migrations | f | f | f | f | f | f | f |
+
+A missing `t` means the feature fails (503 at runtime); a grant fix is A1a. An extra `t` (especially `del`, `trunc`, `upd` on receipts, any on `schema_migrations`) violates least privilege (A1a revoke). Zero-row/error "relation does not exist": schema drift, stop.
+
+**Q5. Raw ACLs (shows direct vs PUBLIC grants)**
+```sql
+SELECT c.relname,
+       CASE a.grantee WHEN 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END AS grantee,
+       a.privilege_type, a.is_grantable
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN LATERAL aclexplode(c.relacl) a
+WHERE n.nspname = 'meal_planner' AND c.relkind = 'r'
+ORDER BY 1, 2, 3;
+```
+Expect: owner rows (all privileges), runtime role rows exactly as the table in Q4, **no `PUBLIC` rows** (the migration revokes them), no `is_grantable = true` for the runtime role. A PUBLIC row means the migration's `REVOKE` was undone or a default privilege applies (see Q7). `c.relacl IS NULL` for a table would mean default owner-only ACL, which would also fail Q4 for the runtime role.
+
+**Q5b. Column-level grants**
+```sql
+SELECT c.relname, a.attname, a.attacl
+FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'meal_planner' AND a.attacl IS NOT NULL AND NOT a.attisdropped;
+```
+Expect zero rows. Rows mean unreviewed column-level grants.
+
+**Q6. Schema and database access, and reach into other schemas**
+```sql
+SELECT has_database_privilege(:'rt', current_database(), 'CONNECT') AS db_connect,
+       has_database_privilege(:'rt', current_database(), 'CREATE')  AS db_create,
+       has_schema_privilege(:'rt', 'meal_planner', 'USAGE')         AS mp_usage,
+       has_schema_privilege(:'rt', 'meal_planner', 'CREATE')        AS mp_create,
+       has_schema_privilege(:'rt', 'public', 'CREATE')              AS public_create;
+```
+Expect `t, f, t, f, f`. `db_connect=f` or `mp_usage=f`: not usable (A1a). `db_create`, `mp_create` or `public_create = t`: can create objects (A1a revoke; `public_create=t` may stem from an older default or inheritance: investigate Q2. Note that on PostgreSQL 14 and earlier PUBLIC has `CREATE` on schema `public` by default, so `public_create` is version-dependent: `t` there is the engine default, not necessarily a deviation by the role; PG15+ defaults to `f`).
+
+```sql
+SELECT n.nspname, c.relname,
+       concat_ws(',',
+         CASE WHEN has_table_privilege(:'rt', c.oid, 'SELECT')   THEN 'SELECT' END,
+         CASE WHEN has_table_privilege(:'rt', c.oid, 'INSERT')   THEN 'INSERT' END,
+         CASE WHEN has_table_privilege(:'rt', c.oid, 'UPDATE')   THEN 'UPDATE' END,
+         CASE WHEN has_table_privilege(:'rt', c.oid, 'DELETE')   THEN 'DELETE' END) AS privs
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r','p','v','m')
+  AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast','meal_planner')
+  AND (has_table_privilege(:'rt', c.oid, 'SELECT') OR has_table_privilege(:'rt', c.oid, 'INSERT')
+    OR has_table_privilege(:'rt', c.oid, 'UPDATE') OR has_table_privilege(:'rt', c.oid, 'DELETE'))
+ORDER BY 1, 2;
+```
+Expect zero rows. Extension-provided views that PUBLIC can read may appear as false positives in this second query; judge them by name before treating them as a deviation, and record each one you accept as a named provider-view exception (an unnamed exception is not a PASS). Rows in `neon_auth`/`auth` are a serious deviation (the runtime login could read auth data; likely via `neon_superuser` membership, Q2). Rows in `public` mean existing public tables are readable or writable by the runtime role (directly or via PUBLIC); report the table names privately and decide whether to revoke; do not change `public` as part of this work without a separate approval.
+
+The checks Q6b to Q6e close the remaining outside-`meal_planner` gaps. All are owner-run and SELECT-only, use the role OID through `has_*_privilege` (so direct, PUBLIC and inherited paths are all counted), and never run DDL or TRUNCATE to prove anything. **Expected result for each: zero rows. Any row is FAIL: stop and ask Caroline.** Do not revoke or alter public, auth or other unrelated objects without her separate approval. A provider-supplied view that PUBLIC can read (for example an extension view) is the only tolerated kind of row, and only as a named, explicit exception recorded privately, never as a silent PASS.
+
+**Q6b. Effective CREATE on every non-system persistent schema**
+```sql
+SELECT n.nspname
+FROM pg_namespace n
+WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND n.nspname !~ '^pg_(toast|temp)'
+  AND has_schema_privilege(:'rt', n.oid, 'CREATE')
+ORDER BY 1;
+```
+Expect zero rows (this covers `meal_planner` and `public` again, plus every other schema). On PostgreSQL 14 and earlier a `public` row can be the PUBLIC engine default (see the Q6 note); it is still not a PASS: report the server version and stop for Caroline's decision.
+
+**Q6c. Auth schemas (`neon_auth` and `auth`)**
+```sql
+SELECT n.nspname, 'schema USAGE' AS access, NULL::text AS object
+FROM pg_namespace n
+WHERE n.nspname IN ('neon_auth', 'auth')
+  AND has_schema_privilege(:'rt', n.oid, 'USAGE')
+UNION ALL
+SELECT n.nspname, 'table or column access', c.relname::text
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname IN ('neon_auth', 'auth')
+  AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+  AND (has_table_privilege(:'rt', c.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+    OR has_any_column_privilege(:'rt', c.oid, 'SELECT,INSERT,UPDATE,REFERENCES'))
+ORDER BY 1, 2, 3;
+```
+Expect zero rows. A schema that does not exist simply contributes no rows. Any row means the runtime login can reach auth data or structure: FAIL (usually via `neon_superuser` membership, Q2).
+
+**Q6d. Other table privileges outside `meal_planner`: TRUNCATE, REFERENCES, TRIGGER**
+```sql
+SELECT n.nspname, c.relname,
+       concat_ws(',',
+         CASE WHEN has_table_privilege(:'rt', c.oid, 'TRUNCATE')   THEN 'TRUNCATE' END,
+         CASE WHEN has_table_privilege(:'rt', c.oid, 'REFERENCES') THEN 'REFERENCES' END,
+         CASE WHEN has_table_privilege(:'rt', c.oid, 'TRIGGER')    THEN 'TRIGGER' END) AS privs
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'meal_planner')
+  AND n.nspname !~ '^pg_(toast|temp)'
+  AND has_table_privilege(:'rt', c.oid, 'TRUNCATE,REFERENCES,TRIGGER')
+ORDER BY 1, 2;
+```
+Expect zero rows. These three are independent of the four DML checks in the second Q6 query, so that query alone cannot show them.
+
+**Q6e. Column-only privileges outside `meal_planner`**
+```sql
+SELECT n.nspname, c.relname, a.attname, p.priv
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('REFERENCES')) p(priv)
+WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'meal_planner')
+  AND n.nspname !~ '^pg_(toast|temp)'
+  AND has_column_privilege(:'rt', c.oid, a.attnum, p.priv)
+  AND NOT has_table_privilege(:'rt', c.oid, p.priv)
+ORDER BY 1, 2, 3, 4;
+```
+Expect zero rows. A row is a privilege held only at column level (the table-level check is false), which table-level queries cannot see.
+
+**Q7. Default privileges**
+```sql
+SELECT pg_get_userbyid(d.defaclrole) AS for_role,
+       CASE WHEN d.defaclnamespace = 0 THEN '(all schemas)'
+            ELSE d.defaclnamespace::regnamespace::text END AS schema,
+       d.defaclobjtype AS objtype, d.defaclacl
+FROM pg_default_acl d ORDER BY 1, 2, 3;
+```
+Expect no entry whose ACL mentions the runtime role or `=` (PUBLIC) for the migration owner in `meal_planner` or all schemas (an unscoped default granting the runtime role table rights would silently give it DELETE etc. on future tables; one for `PUBLIC` with `r` would undo the migration's REVOKE). Entries not touching the runtime role or PUBLIC are fine.
+
+**Q8. Database owner, TEMP, and role-level settings**
+```sql
+SELECT pg_get_userbyid(datdba) AS db_owner,
+       has_database_privilege(:'rt', datname, 'TEMPORARY') AS temp
+FROM pg_database WHERE datname = current_database();
+
+SELECT setrole::regrole::text AS role, setconfig FROM pg_db_role_setting
+WHERE setrole = (SELECT oid FROM pg_roles WHERE rolname = :'rt');
+```
+Expect `db_owner` is not the runtime role. `temp=t` is the PostgreSQL default for PUBLIC and is tolerated (the app does not need it; revoking it is optional hardening, not part of this approval). Expect no role settings, or only benign ones. A `search_path` or `statement_timeout` setting could conflict with the code, which uses schema-qualified names and `SET LOCAL`; report it.
+
+**Q9. Migration version and schema shape**
+```sql
+SELECT version, applied_at FROM meal_planner.schema_migrations ORDER BY version;
+
+SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'meal_planner' AND relkind = 'r' ORDER BY 1;
+
+SELECT conrelid::regclass AS tbl, conname, contype FROM pg_constraint
+WHERE connamespace = 'meal_planner'::regnamespace ORDER BY 1, 2;
+```
+Expect exactly one row, `version=1`; four tables, all `relrowsecurity=f` (RLS is intentionally not implemented; the server is the ownership boundary); constraints consistent with `001_recipes.sql` (primary keys on all four tables, unique `(owner_issuer, owner_subject, id)` plus check constraints on `recipes`, two foreign keys). A different or extra version means the issue's inventory is stale: stop and reconcile against the reviewed migration; never reapply it. Missing constraints mean drift.
+
+**Q10. Row counts (private; do not paste)**
+```sql
+SELECT (SELECT count(*) FROM meal_planner.recipes) AS recipes,
+       (SELECT count(*) FROM meal_planner.recipe_creates) AS creates,
+       (SELECT count(*) FROM meal_planner.recipe_updates) AS updates;
+```
+Expect zeros (or only the owner's own synthetic test rows). Unexpected rows: report, do not delete under this approval.
+
+## 3. Credential usability check (no secret revealed)
+
+Run by the owner on her own machine, never in CI, a shared terminal or a recorded session. It proves: pooled host, verified TLS (enforced by libpq `verify-full`), role can log in. It prints only PASS/FAIL and the server version.
+
+### 3.1 Safe pattern
+
+Do not use a URL on the command line (visible in `ps`, history). Use libpq environment variables fed by silent prompts. The prompt syntax differs by shell: macOS's default shell is **zsh**, where bash's `read -p` does not work. Either use the zsh block below in zsh, or start `bash --noprofile --norc` and use the bash block. Both blocks then continue with the shared block.
+
+zsh (macOS default):
+
+```zsh
+set +x
+unset PGSSLMODE PGSSLROOTCERT PGOPTIONS
+read "?pooled host (<endpoint>-pooler...): " PGHOST ; export PGHOST
+read "?database: "                           PGDATABASE ; export PGDATABASE
+read "?runtime role: "                       PGUSER ; export PGUSER
+read -rs "?password (hidden): "              PGPASSWORD ; echo ; export PGPASSWORD
+```
+
+bash (run inside `bash --noprofile --norc`):
+
+```bash
+set +x
+unset PGSSLMODE PGSSLROOTCERT PGOPTIONS
+read -r  -p 'pooled host (<endpoint>-pooler...): ' PGHOST ; export PGHOST
+read -r  -p 'database: '                           PGDATABASE ; export PGDATABASE
+read -r  -p 'runtime role: '                       PGUSER ; export PGUSER
+read -rs -p 'password (hidden): '                  PGPASSWORD ; echo ; export PGPASSWORD
+```
+
+Shared block (valid in both shells):
+
+```sh
+export PGSSLMODE=verify-full PGCONNECT_TIMEOUT=5 PGAPPNAME=meal-planner-readiness-check
+# add: export PGSSLROOTCERT=/path/to/system-or-isrg-root.pem   only if the OS store is not picked up
+if out=$(psql -X -w -At -c "SELECT 'PASS server=' || current_setting('server_version')" 2>/dev/null); then echo "$out"; rc=0; else echo "FAIL (connection or auth error; details withheld)"; rc=1; fi
+unset PGHOST PGDATABASE PGUSER PGPASSWORD PGSSLMODE PGSSLROOTCERT
+exit "$rc"
+```
+
+No name, DSN or secret is on argv in any of these commands; the `-c` text is a fixed query. An exported `PGPASSWORD` is visible to `ps -E` for the same user while the script runs.
+
+The shared block ends with `exit "$rc"` (0 on PASS, 1 on FAIL), so run it as a script (`zsh file` or `bash file`) or inside a subshell, `( ... )`. Pasted directly into your login shell, that `exit` closes the terminal. A subshell's `unset` does not reach your login shell, so if you ran the check in a subshell, run the `unset` line again in your shell afterwards.
+
+Notes:
+
+- There is deliberately no `pg_stat_ssl` check: through the pooler it would report the PgBouncer-to-Postgres leg, not the client's TLS. `sslmode=verify-full` makes libpq itself fail when the certificate chain or hostname is wrong, so a PASS implies verified client TLS. `psql` error text can echo the host: the `2>/dev/null` discards all of psql's stderr and stdout is captured, so only the single FAIL line prints. Do not remove that redirection.
+- Run it twice, first with the pooled host, expecting PASS. A direct (unpooled) host is not what the app uses and is not a substitute.
+- Optional least-privilege probe with the same environment (SELECT-only, harmless): `SELECT has_table_privilege('meal_planner.recipes','INSERT'), has_table_privilege('meal_planner.recipes','DELETE'), has_schema_privilege('meal_planner','CREATE');` expecting `t, f, f`. This repeats Q4/Q6 from the runtime role's own point of view and also confirms the login sees the schema.
+- Do **not** test DELETE/DDL by actually running them on Preview. The denied-statement behavior is covered against a disposable database in `hosted/recipe_store_integration_test.go`; live proof is Q3b/Q3c/Q4/Q6 to Q6e plus the section 5 acceptance.
+- The pooled connection holds an unprivileged login only; it cannot show whether the password stored in Vercel later matches. That is proven by section 5 (end-to-end save) and by an exact-name-and-scope check (A3).
+
+## 4. Approval packet
+
+Nothing here is authorized. Each item needs Caroline's explicit approval at action time. Do the section 2 and 3 checks first; items A1x are conditional on their findings. Rollback and verification are per item.
+
+### A0. Recheck immediately before setup (read-only; no approval beyond running section 2)
+- Re-run Q1 to Q10 the same day, including every suffixed query (Q3b, Q3c, Q5b, Q6b to Q6e). The 2026-11-09 inventory is stale evidence.
+- Confirm the deployed Preview commit is `ef7e561` or newer; the 2026-11-09 inventory said it was `aaff49c`, 27 commits behind reviewed main. Automatic Preview deploys, under normal classification, only when a push to `develop` changes hosted code (`web/`, `api/`, `hosted/`, `vercel.json`, `contracts/`, `internal/core/`, or toolchain paths) and `PREVIEW_ENABLED=true`; under normal classification with an available diff base, a docs-only push does not deploy (hosted-deploy.md section 2; `.github/scripts/classify.sh`, `ci.yml` `hosted_preview` gate). CI's fail-safe can select Preview anyway through two independent mechanisms: `CLASSIFY_ALL=true` is set when the diff base is unavailable or the diff fails (`ci.yml:75-81`), and separately an unknown path sets `unknown=true`, which independently selects everything (`classify.sh:44` and `:50`) without `CLASSIFY_ALL`; it is not a deploy method and must not be relied on or provoked. Confirm the deployed commit; do not assume a push has refreshed it.
+
+### A1. Grant fixes (only if Q1 to Q9, including Q3b, Q3c, Q5b and Q6b to Q6e, deviate)
+
+**Who:** the migration owner / project admin, on a trusted machine, via a privately supplied admin connection (the pattern in recipes.md "Migration review and application"). Not an agent.
+
+**A1a. Align the grants to section 1.3.** Template; substitute names privately, review the diff against the Q4 matrix, and run only the statements that are needed:
+```sql
+BEGIN;
+GRANT CONNECT ON DATABASE <db> TO <runtime_role>;
+GRANT USAGE ON SCHEMA meal_planner TO <runtime_role>;
+GRANT SELECT, INSERT, UPDATE ON meal_planner.recipes TO <runtime_role>;
+GRANT SELECT, INSERT ON meal_planner.recipe_creates, meal_planner.recipe_updates TO <runtime_role>;
+-- revoke excess (only if Q4/Q5/Q6 showed it):
+-- REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER ON ALL TABLES IN SCHEMA meal_planner FROM <runtime_role>;
+-- REVOKE ALL ON meal_planner.schema_migrations FROM <runtime_role>;
+-- REVOKE CREATE ON SCHEMA meal_planner FROM <runtime_role>;
+-- alternative, ONLY if Q5 showed a PUBLIC row (the grant is to PUBLIC, so revoking from the role does nothing):
+-- REVOKE ALL ON meal_planner.recipes, meal_planner.recipe_creates, meal_planner.recipe_updates, meal_planner.schema_migrations FROM PUBLIC;
+COMMIT;
+```
+Privileges the role holds through role membership (Q2) are not fixed by these statements; they go through A1b.
+
+**Pre-change ACL snapshot queries (Q11a to Q11d; SELECT-only, run with the admin connection, substitute `<db>` privately).** Each returns the raw ACL array plus an exploded per-grantee view. For Q11a to Q11c only: `datacl`/`nspacl`/`relacl` being NULL means the built-in default ACL (owner holds all rights; for a database PUBLIC holds CONNECT and TEMPORARY), so those exploded views substitute `acldefault(...)` and show `acl_is_null` explicitly. They use `LEFT JOIN LATERAL ... ON true`, so an object whose ACL is the empty array `{}` still appears (one row with NULL grantee, grantor, privilege and grantability, meaning no grants) rather than vanishing from the snapshot. Q11d is different: a NULL `attacl` means no column-specific grants (table privileges still apply), so it explodes only non-NULL `attacl` values, uses no `acldefault`, has no `acl_is_null` flag, and zero rows is the normal result. A grantee shown as `PUBLIC` is the pseudo-role (OID 0); `is_grantable` is the WITH GRANT OPTION flag.
+```sql
+-- Q11a database ACL
+SELECT d.datname, d.datacl IS NULL AS acl_is_null, d.datacl::text AS raw_acl,
+       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee,
+       a.grantor::regrole::text AS grantor, a.privilege_type, a.is_grantable
+FROM pg_database d
+LEFT JOIN LATERAL aclexplode(COALESCE(d.datacl, acldefault('d', d.datdba))) a ON true
+WHERE d.datname = '<db>'
+ORDER BY grantee, a.privilege_type;
+
+-- Q11b schema ACL
+SELECT n.nspname, n.nspacl IS NULL AS acl_is_null, n.nspacl::text AS raw_acl,
+       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee,
+       a.grantor::regrole::text AS grantor, a.privilege_type, a.is_grantable
+FROM pg_namespace n
+LEFT JOIN LATERAL aclexplode(COALESCE(n.nspacl, acldefault('n', n.nspowner))) a ON true
+WHERE n.nspname = 'meal_planner'
+ORDER BY grantee, a.privilege_type;
+
+-- Q11c table ACLs
+SELECT c.relname, c.relacl IS NULL AS acl_is_null, c.relacl::text AS raw_acl,
+       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee,
+       a.grantor::regrole::text AS grantor, a.privilege_type, a.is_grantable
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+LEFT JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a ON true
+WHERE n.nspname = 'meal_planner' AND c.relkind IN ('r', 'p')
+ORDER BY c.relname, grantee, a.privilege_type;
+
+-- Q11d column-level ACLs (NULL attacl = no column-specific grants; zero rows is normal)
+SELECT c.relname, t.attname, t.attacl::text AS raw_acl,
+       CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE a.grantee::regrole::text END AS grantee,
+       a.grantor::regrole::text AS grantor, a.privilege_type, a.is_grantable
+FROM pg_attribute t
+JOIN pg_class c ON c.oid = t.attrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN LATERAL aclexplode(t.attacl) a
+WHERE n.nspname = 'meal_planner' AND t.attacl IS NOT NULL AND NOT t.attisdropped
+ORDER BY c.relname, t.attname, grantee, a.privilege_type;
+```
+Rollback: **before any change**, privately record the pre-change ACL snapshot: Q3 (ownership), Q5 and Q6, plus the exact ACL catalog queries Q11a to Q11d below (never in chat or the repo). Q6's effective booleans are not sufficient: they cannot tell a direct grant from one inherited through PUBLIC or membership. Keep raw ACL text and `acl_is_null` as private diagnostic evidence only. Reverse from the snapshot, not from the statement list, and invert each applied change by type, always preserving the captured **grantor**: run each inverse GRANT/REVOKE in a context that is an authorized grantor for the snapshot's grantor (grants from different grantors to the same grantee are separate entries, and revoking as another grantor can leave the entry or remove the wrong one). If exact restoration under the captured grantor is not available, stop and ask Caroline.
+- **GRANT** applied: `REVOKE` only the privileges the snapshot shows were newly added (compare direct grantee rows, including grantor and grantability). Do not revoke a privilege that already existed before the change (a repeated GRANT is a no-op, and revoking it would strip the original).
+- **REVOKE** applied (including the `PUBLIC` alternative): `GRANT` back exactly the privileges, grantees, grantor and grantability the snapshot shows were removed, nothing more.
+- Tightened privileges (excess removed by the REVOKE templates) normally stay tightened on rollback. Restoring an excess privilege is a separate action that needs Caroline's explicit approval.
+After rollback, re-run Q3/Q5/Q6 and Q11a to Q11d and compare with the snapshot by **semantic ACL equality**, not by text:
+- Compare the SET of exploded grants, each as (object, grantee including `PUBLIC`, privilege, `is_grantable`), with the grantor tracked and compared separately. For Q11a to Q11c, treat a NULL ACL as equal to its `acldefault()` expansion (the queries already expand it).
+- Ignore array ordering. Do not compare `raw_acl` or `acl_is_null`.
+- GRANT followed by its correct inverse REVOKE can turn a NULL ACL into an explicit array holding exactly the default grants. That is equal under these rules and is not a failed rollback; do not edit catalogs directly to restore NULL.
+- The only permitted differences are the separately approved ones (tightened privileges that stay tightened). A missing grant leaves the feature failing closed with 503, which is safe.
+Verify: re-run Q4, Q5, Q6; the matrix must match exactly.
+
+**A1b. Remove over-privilege (Q1/Q2 show superuser-like attributes or memberships, e.g. `neon_superuser`).** **Caroline approves before anything is run.** `neon_superuser` also brings `REPLICATION`, `pg_read_all_data`/`pg_write_all_data` and `GRANT ALL ON public WITH GRANT OPTION`; all of these must be gone from the final role. Neon documents `neon roles create --access read_only|read_write` as a scoped role option; that such a role is not a `neon_superuser` member is implied, not stated (**UNVERIFIED**). Whether to use it is Caroline's decision, and it also means a new role and credential. Exact action depends on how the role was created: **UNVERIFIED** whether `REVOKE <role> FROM <runtime_role>` and `ALTER ROLE ... NOBYPASSRLS NOCREATEDB NOCREATEROLE` are permitted on Neon for a Console-created role. If not removable, the least-privilege role needs to be a SQL-created role, which means a new role and a new credential; the issue forbids that without a decision, so **stop and ask Caroline** (it also changes A2). Do not weaken the requirement in the runbook to fit the role.
+Rollback: record the memberships/attributes first. Tightened privileges stay tightened; restoring a removed membership or attribute is a separate action that needs Caroline's explicit approval, as in A1a.
+Verify: Q1, Q2, Q6 (both queries), Q6b, Q6c, Q6d, Q6e. A row in any of them is FAIL and stops for Caroline; the role cannot be marked PASS while one remains. Changing unrelated, public or auth objects to clear a row needs a separate approval.
+
+**A1c. Ownership transfer** (Q3/Q3b/Q3c show the runtime role owning objects, including functions). **Caroline approves before anything is run.** `ALTER ... OWNER TO <migration_owner>` for each, or reassign. Record original owners first. Tightened privileges stay tightened: reversing the `ALTER` would hand ownership back to the runtime role, so it needs Caroline's separate explicit approval, as in A1a. Verify: Q3, Q3b, Q3c (function ownership, `pg_proc`; each row reported by schema and `regprocedure` identity, with its disposition decided by Caroline here, not by blanket reassignment).
+
+### A2. Credential issuance or rotation (only if section 3 fails, the password is unknown, or Q1 showed expiry)
+
+**Who:** Caroline in the Neon console (or CLI/API), on the Preview branch only. Not an agent. The password is shown once, so copy it straight to a password manager / the Vercel Secret form; never to chat, shell history or this repo.
+**Action:** reset the existing runtime role's password (no new role) via the Neon Console, `neon roles reset-password`, or the API. Per Neon docs (QA-verified 2026-11-11) the reset takes effect immediately and the old password fails on the next connection; behavior for already-open sessions is not stated (**UNVERIFIED**). **Never** use `ALTER ROLE ... PASSWORD`: it puts the password in the SQL text (logs, history).
+**Rollback:** the old password cannot be restored once reset; rollback is to reset again and re-set the Vercel Secret. If Preview already had a working Secret, rotate by updating the Secret immediately after the reset, accepting a window of 503s on Preview. Updating the Secret does not reach the running deployment: the new value applies only after a new Preview deployment, so the old deployment keeps the old (now failing) password until then. Rotation and reset-again recovery both follow the **Secret-change deployment sequence** defined under A3 (deploy, confirm served deployment and alias, then verify).
+**Verify:** section 3 with the new password, then the A3 Secret-change deployment sequence (the served-deployment confirmation is part of it), then section 5.
+
+### A3. Set the Vercel Preview Secret `MEAL_RECIPES_DATABASE_URL` (currently absent)
+
+**Who:** Caroline, in the Vercel dashboard (Settings, Environment Variables) for the Meal Planner project. If she approves the CLI instead, the value must come from stdin or the interactive prompt, never argv; the documented form is `vercel env add MEAL_RECIPES_DATABASE_URL --environment preview --sensitive` (or `--type secret`), with the value typed at the interactive prompt or supplied on stdin. **NEVER** use `--value` (it puts the secret on argv), and avoid `echo x | vercel ...` (the secret lands in shell history). The repo pins `vercel@65.9.0`; check that version's `vercel env add --help` before running.
+**Action:**
+- Name exactly `MEAL_RECIPES_DATABASE_URL`.
+- Type **Secret** (the write-only type; Vercel documents Secrets as unreadable after save).
+- Environment: **Preview only**. Not Production, not Development.
+- Value: the pooled DSN of section 1.2 with `?sslmode=verify-full` (plus `sslrootcert` only if section 3 needed it). No `channel_binding`. Do not apply the Preview scope to a single branch unless Caroline decides to (UNVERIFIED how the repo's Preview deployments are branched; default is all Preview).
+- Never `VITE_`-prefixed.
+**Then (Secret-change deployment sequence; applies to every Secret change: A2 rotation and reset-again, A3 set, replace and delete, and the A3 rollback):** a Secret edit alone changes nothing that is running. **VERIFIED** (Vercel docs): environment variable changes "only apply to new deployments". In order:
+1. Obtain an approved new Preview deployment after the Secret edit. hosted-deploy.md documents no routine manual Preview deployment after bootstrap; the only documented path is automatic Preview from `ci.yml` on a push to `develop` that changes hosted code with `PREVIEW_ENABLED=true` (hosted-deploy.md section 2). Under normal classification with an available diff base, a docs-only or empty push does NOT redeploy Preview (the classifier sets `hosted_preview=false`; reproduced by QA with `PREVIEW_TRUSTED=true PREVIEW_ENABLED=true`). CI's fail-safe may select Preview anyway through two independent mechanisms: `CLASSIFY_ALL=true` is set when the diff base is unavailable or the diff fails (`ci.yml:75-81`), and separately an unknown path sets `unknown=true`, which independently selects everything (`classify.sh:44` and `:50`) without `CLASSIFY_ALL`; it is not a deploy method and must not be relied on or provoked. So a new Preview needs an approved, reviewed `develop` commit touching hosted code, or a separately approved method from Caroline. The one-time bootstrap in hosted-deploy.md section 1 must not be used as a Secret-refresh path; do not improvise a manual deploy.
+2. Confirm the deployment that is actually served: Preview summary SHA/URL, and the alias deployment ID if `PREVIEW_ALIAS` is used (a deployment can exist without the alias having moved; hosted-deploy.md section 2), is the new deployment, not the earlier one. Record it.
+3. Only then verify on that deployment (the expected result for the change, then section 5).
+Until step 2 is confirmed, assume the previous credential state is still live.
+**Rollback:** delete (or replace) the variable in the dashboard. This alone does NOT affect the running deployment, which keeps the credential it was built with (env changes "only apply to new deployments"). Then follow the Secret-change deployment sequence above (steps 1 to 3). Step 3 here: after deletion or disabling, verify only the fail-closed generic 503; full section 5 persistence acceptance does not apply and resumes only after a working configuration is restored. After replacement with a working credential, the restored credential works (section 5 checks).
+Until step 2 is confirmed, assume the old credential is still live. A Secret cannot be converted to Config; recreate if a mistake was made.
+**Verify (no values revealed):**
+1. Dashboard/`vercel env list`: lists `MEAL_RECIPES_DATABASE_URL` for Preview only, type Secret, no Production or Development entry.
+2. The Preview pull job passes `tools/deploy/check-pulled-env.sh` (it accepts only `[SENSITIVE]` and fails on a literal URL or lookalike names); the CI log names the variable, never the value.
+3. Section 5.
+
+### A4. Nothing else
+No Production changes, no migration, no new role (unless A1b forces a decision), no auth changes (#74 owns that), no database branch operations.
+
+## 5. Post-setup acceptance
+
+Preconditions: A0 to A3 done; the new Preview deployment is READY; you have approved Preview auth for the test identity (auth readiness is #74; identities for cross-account tests are #53/#74). Use synthetic recipe data only, and record evidence privately against the exact commit SHA, the migration version, and the deployed URL.
+
+### 5.1 Manual-recipe end-to-end test (this packet; satisfies the #61 remaining checklist)
+1. Signed out: `GET /api/recipes` is rejected (401), no data.
+2. Sign in on the Preview URL; open Recipes; the list loads from the server (empty is fine).
+3. Create a synthetic recipe; success appears only after the server confirms; note that the label does not call local planning "synced".
+4. Reload: the recipe persists. Sign out, sign in, reopen: still there.
+5. Open a second browser/profile, sign in as the same account: the recipe appears. Edit there; reload in the first; the edit shows.
+6. Lost-response retry: with network throttle or request blocking, repeat a create with the same operation identity; verify (privately, owner query) exactly one `recipes` row and one `recipe_creates` receipt.
+7. Stale revision: edit the same recipe in two windows; the second save conflicts (409) and neither person's form is silently overwritten.
+8. Failure states: offline, session expiry, repeated Save, cancel: honest messages, unsaved fields preserved, no success navigation before confirmation.
+9. Account switch: sign out and in as another approved identity: no recipes of the first account visible (cache isolation). Cross-account/cross-issuer ID access returns the same 404 (needs #53/#74 identities; synthetic tests can proceed first).
+10. Runtime privileges: after steps 3 to 7, re-run Q3b, Q3c, Q4 to Q7 and Q6b to Q6e from section 2 (nothing should have changed) and confirm the browser bundle and public build artifacts contain no DSN/`postgres://` string (search the deployed static assets for `postgres`).
+11. Owner-side row check (Q10): row counts match the test actions; delete nothing under this approval.
+12. Record Preview acceptance in the private evidence log; record remaining Production requirements separately. No Production step is implied.
+
+### 5.2 How this differs from the #55 Preview MCP test
+| | This acceptance (#61) | #55 owner test |
+|---|---|---|
+| Client | The web app, signed in, manual form | The local MCP server to hosted Preview draft/review workflow |
+| API | `/api/recipes` manual approved path only | Draft submission/review (not implemented; paused) |
+| Runner | Any approved tester or agent with synthetic data | Caroline personally, hands-on |
+| Gate | Prerequisite for #55 persistence | Required before Production shipment of #25/#55 |
+
+Passing section 5.1 **does not** satisfy or replace Caroline's personal #55 test, and the manual model is not a lossless draft contract (#72).
+
+## 6. Open items and unverified claims
+
+- Whether the existing role is Console/API-created, and so inherits `neon_superuser` (section 1.4): unknown until Q1/Q2.
+- Trust roots for verify-full in the Vercel Go runtime without `sslrootcert`: UNVERIFIED until acceptance.
+- Neon password-reset effect on already-open sessions, and whether `neon_superuser` membership can be removed: UNVERIFIED. (Reset timing, the Vercel CLI `env add` flags and the redeploy requirement are now verified; see section 1.5.)
+- Aggregate serverless concurrency (4 open connections per warm function) versus Neon capacity: needs provider monitoring (recipes.md).
+- None of this packet was executed. All "Expect" values are derived from the migration and code, not from observing Preview.
