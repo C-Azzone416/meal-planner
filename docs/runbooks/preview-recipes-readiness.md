@@ -29,14 +29,14 @@ The migration is never run by the application (`hosted/recipe_store.go` header c
 postgres://<runtime_role>:<password>@<endpoint>-pooler.<region>.aws.neon.tech/<database>?sslmode=verify-full
 ```
 
-Enforced by `recipeDatabaseURL` in `hosted/recipe_store.go`:
+Checked by `recipeDatabaseURL` in `hosted/recipe_store.go` (except the host recommendation below, which the code does **not** enforce):
 
 - Scheme `postgres` or `postgresql`; non-empty host, username, and database path.
 - `sslmode=verify-full` is **required**. Anything else is rejected.
 - The only other query option allowed is `sslrootcert`; each key must appear once. Everything else (including `channel_binding`, `options`, `host`) is rejected. Omit `channel_binding`: the pinned lib/pq does not support it.
 - The code appends `connect_timeout=5` and `application_name=meal-planner-recipes` itself. Do not add them.
 - Pool: 4 open / 2 idle connections per warm function, 5 min max lifetime, 1 min idle. `statement_timeout=10s` and `lock_timeout=5s` are sent as `SET LOCAL` inside each transaction, not as startup parameters.
-- Host must be the **pooled** hostname (the endpoint ID plus `-pooler`). The Neon pooler is PgBouncer in transaction mode and rejects startup options outside `client_encoding`, `datestyle`, `timezone`, `standard_conforming_strings`, `application_name`; session-level `SET` is unsupported. This is why the code uses `SET LOCAL`.
+- The **pooled** hostname (the endpoint ID plus `-pooler`) is a **recommendation, not enforced**: `recipeDatabaseURL` does not check the host for `-pooler`, so a direct host would be accepted by the code. Use the pooled host because the app opens up to 4 connections per warm function. The Neon pooler is PgBouncer in transaction mode; the startup parameters it accepts include `client_encoding`, `datestyle`, `timezone`, `standard_conforming_strings` and `application_name` (Neon's list is introduced with "These include", so treat it as non-exhaustive), and session-level `SET` is unsupported. This is why the code uses `SET LOCAL`.
 - Trust roots: `sslrootcert` is optional. Neon's certificates chain to ISRG Root X1, normally in the OS store. Whether the Vercel Go runtime image trusts it without `sslrootcert`, and how the pinned lib/pq locates system roots in that image: **UNVERIFIED** (confirmed only by the Preview acceptance in section 5). If needed, the fix is to bundle a root file and set `sslrootcert` to its in-function path, which is a code change and out of scope here.
 
 ### 1.3 Exact privileges the runtime role needs
@@ -62,7 +62,7 @@ The foreign keys from the two receipt tables to `recipes` need no extra grant: P
 - Superuser, `CREATEROLE`, `CREATEDB`, `REPLICATION`, `BYPASSRLS`; membership in any other role (in particular `neon_superuser`, `pg_read_all_data`, `pg_write_all_data`).
 - Any access to `neon_auth`/`auth` schemas or `public` tables. Default privileges or PUBLIC grants must not reach `meal_planner`.
 
-**Highest-risk suspicion.** Neon documents that roles created through the Console or API are made members of `neon_superuser` (which carries `CREATEDB`, `CREATEROLE`, `BYPASSRLS`), while roles created by SQL are not. If the existing runtime role was created via Console/API, it likely fails section 1.4 regardless of the migration's grants. Queries 1 and 2 test this directly. Whether it can be removed (`REVOKE neon_superuser FROM ...`) on the owner's plan: **UNVERIFIED**; see approval item A1b.
+**Highest-risk suspicion.** Neon documents that roles created through the Console or API are made members of `neon_superuser` (which carries `CREATEDB`, `CREATEROLE`, `BYPASSRLS`), while roles created by SQL are not. Beyond `CREATEDB`, `CREATEROLE` and `BYPASSRLS`, `neon_superuser` also carries `REPLICATION`, membership in `pg_read_all_data`/`pg_write_all_data`, and `GRANT ALL ON public WITH GRANT OPTION` (all per the Neon roles page, section 1.5). If the existing runtime role was created via Console/API, it likely fails section 1.4 regardless of the migration's grants. Queries 1 and 2 test this directly. Whether membership can be removed (`REVOKE neon_superuser FROM ...`) on the owner's plan: **UNVERIFIED**; see approval item A1b.
 
 ### 1.5 Provider references (accessed 2026-11-11)
 
@@ -70,21 +70,33 @@ The foreign keys from the two receipt tables to `recipes` need no extra grant: P
 |---|---|
 | `-pooler` host, PgBouncer transaction mode, `SET`/`RESET` unsupported | https://neon.com/docs/connect/connection-pooling |
 | Pooler rejects non-allowlisted startup parameters | https://neon.com/docs/connect/connection-errors (Unsupported startup parameter) |
-| Console/API roles join `neon_superuser`; SQL-created roles do not; docs give no SQL for listing role attributes | https://neon.com/docs/manage/roles |
+| Console/API roles (and `neon roles create` without `--access`) join `neon_superuser`; SQL-created roles do not; `neon_superuser` attributes (CREATEDB, CREATEROLE, BYPASSRLS, REPLICATION, `pg_read_all_data`/`pg_write_all_data`, `GRANT ALL ON public WITH GRANT OPTION`); `neon roles create --access read_only\|read_write` is a non-superuser option; docs give no SQL for listing role attributes | https://neon.com/docs/manage/roles |
+| Password reset (Console, `neon roles reset-password`, API) takes effect immediately; the old password fails on the next connection; behavior for already-open sessions is not stated | https://neon.com/docs/manage/roles |
+| Environment variable changes "only apply to new deployments" (**VERIFIED**: a redeploy is needed) | https://vercel.com/docs/environment-variables |
+| `vercel env add NAME --environment preview --sensitive` (or `--type secret`); value via prompt or stdin | https://vercel.com/docs/cli/env |
 | `verify-full` recommended; ISRG Root X1; `PGSSLROOTCERT` | https://neon.com/docs/connect/connect-securely |
 | Secret type is write-only after save; cannot be converted to Config in place | https://vercel.com/docs/environment-variables/sensitive-environment-variables |
 
-These were read by a research helper through page fetches, not by hand-checking in the console. Anything not in this table (CLI flags, whether an env change needs a redeploy, Neon password-reset behavior) is **UNVERIFIED** and is marked where used.
+The Neon, Vercel Secret, redeploy and CLI rows were checked live by independent QA on 2026-11-11; the rest were read by a research helper through page fetches, not by hand-checking in the console. Anything not in this table (Go runtime CA trust, whether Neon role-membership can be removed, open-session behavior on password reset) is **UNVERIFIED** and is marked where used.
 
 ## 2. Read-only verification SQL (owner-run, Preview)
 
 Connect as a privileged admin/owner login to the Preview branch **database**, using the *direct* (unpooled) host and libpq environment variables (see 3.1 for the safe pattern). Every statement is `SELECT`. Set the role name privately; do not paste it anywhere:
 
-```bash
-psql -X -v ON_ERROR_STOP=1 -v rt="$RUNTIME_ROLE" -f preview-readiness-checks.sql   # your local copy of the queries below
+Requires **psql 15 or newer** (for `\getenv`). Set the role name in your shell without putting it on a command line (zsh: `read "?runtime role: " RUNTIME_ROLE`; bash: `read -r -p 'runtime role: ' RUNTIME_ROLE`), then `export RUNTIME_ROLE`. Make the first line of your local `preview-readiness-checks.sql` (a copy of the queries below):
+
+```
+\getenv rt RUNTIME_ROLE
 ```
 
-`:'rt'` is psql variable substitution. Output stays on the owner's terminal; record only PASS/FAIL per query, never role names or identifiers.
+(On older psql, use ``\set rt `printenv RUNTIME_ROLE` `` instead.) Then run, with no name, DSN or secret on argv (the connection comes from `PG*` environment variables):
+
+```bash
+psql -X -v ON_ERROR_STOP=1 -f preview-readiness-checks.sql
+unset RUNTIME_ROLE
+```
+
+`:'rt'` is psql variable substitution. An exported `PGPASSWORD` is visible to `ps -E` for the same user while the script runs; this is acceptable on the owner's own machine. Output stays on the owner's terminal; record only PASS/FAIL per query, never role names or identifiers.
 
 **Q1. Role attributes**
 ```sql
@@ -181,7 +193,7 @@ SELECT has_database_privilege(:'rt', current_database(), 'CONNECT') AS db_connec
        has_schema_privilege(:'rt', 'meal_planner', 'CREATE')        AS mp_create,
        has_schema_privilege(:'rt', 'public', 'CREATE')              AS public_create;
 ```
-Expect `t, f, t, f, f`. `db_connect=f` or `mp_usage=f`: not usable (A1a). `db_create`, `mp_create` or `public_create = t`: can create objects (A1a revoke; `public_create=t` may stem from an older default or inheritance: investigate Q2).
+Expect `t, f, t, f, f`. `db_connect=f` or `mp_usage=f`: not usable (A1a). `db_create`, `mp_create` or `public_create = t`: can create objects (A1a revoke; `public_create=t` may stem from an older default or inheritance: investigate Q2. Note that on PostgreSQL 14 and earlier PUBLIC has `CREATE` on schema `public` by default, so `public_create` is version-dependent: `t` there is the engine default, not necessarily a deviation by the role; PG15+ defaults to `f`).
 
 ```sql
 SELECT n.nspname, c.relname,
@@ -197,12 +209,13 @@ WHERE c.relkind IN ('r','p','v','m')
     OR has_table_privilege(:'rt', c.oid, 'UPDATE') OR has_table_privilege(:'rt', c.oid, 'DELETE'))
 ORDER BY 1, 2;
 ```
-Expect zero rows. Rows in `neon_auth`/`auth` are a serious deviation (the runtime login could read auth data; likely via `neon_superuser` membership, Q2). Rows in `public` mean existing public tables are readable or writable by the runtime role (directly or via PUBLIC); report the table names privately and decide whether to revoke; do not change `public` as part of this work without a separate approval.
+Expect zero rows. Extension-provided views that PUBLIC can read may appear as false positives in this second query; judge them by name before treating them as a deviation. Rows in `neon_auth`/`auth` are a serious deviation (the runtime login could read auth data; likely via `neon_superuser` membership, Q2). Rows in `public` mean existing public tables are readable or writable by the runtime role (directly or via PUBLIC); report the table names privately and decide whether to revoke; do not change `public` as part of this work without a separate approval.
 
 **Q7. Default privileges**
 ```sql
 SELECT pg_get_userbyid(d.defaclrole) AS for_role,
-       COALESCE(d.defaclnamespace::regnamespace::text, '(all schemas)') AS schema,
+       CASE WHEN d.defaclnamespace = 0 THEN '(all schemas)'
+            ELSE d.defaclnamespace::regnamespace::text END AS schema,
        d.defaclobjtype AS objtype, d.defaclacl
 FROM pg_default_acl d ORDER BY 1, 2, 3;
 ```
@@ -242,31 +255,49 @@ Expect zeros (or only the owner's own synthetic test rows). Unexpected rows: rep
 
 ## 3. Credential usability check (no secret revealed)
 
-Run by the owner on her own machine, never in CI, a shared terminal or a recorded session. It proves: pooled host, verified TLS, role can log in, TLS actually is `verify-full`. It prints only PASS/FAIL, the server version, and booleans.
+Run by the owner on her own machine, never in CI, a shared terminal or a recorded session. It proves: pooled host, verified TLS (enforced by libpq `verify-full`), role can log in. It prints only PASS/FAIL and the server version.
 
 ### 3.1 Safe pattern
 
-Do not use a URL on the command line (visible in `ps`, history). Use libpq environment variables fed by silent prompts:
+Do not use a URL on the command line (visible in `ps`, history). Use libpq environment variables fed by silent prompts. The prompt syntax differs by shell: macOS's default shell is **zsh**, where bash's `read -p` does not work. Either use the zsh block below in zsh, or start `bash --noprofile --norc` and use the bash block. Both blocks then continue with the shared block.
+
+zsh (macOS default):
+
+```zsh
+set +x
+unset PGSSLMODE PGSSLROOTCERT PGOPTIONS
+read "?pooled host (<endpoint>-pooler...): " PGHOST ; export PGHOST
+read "?database: "                           PGDATABASE ; export PGDATABASE
+read "?runtime role: "                       PGUSER ; export PGUSER
+read -rs "?password (hidden): "              PGPASSWORD ; echo ; export PGPASSWORD
+```
+
+bash (run inside `bash --noprofile --norc`):
 
 ```bash
-# begin credential usability check
 set +x
 unset PGSSLMODE PGSSLROOTCERT PGOPTIONS
 read -r  -p 'pooled host (<endpoint>-pooler...): ' PGHOST ; export PGHOST
 read -r  -p 'database: '                           PGDATABASE ; export PGDATABASE
 read -r  -p 'runtime role: '                       PGUSER ; export PGUSER
 read -rs -p 'password (hidden): '                  PGPASSWORD ; echo ; export PGPASSWORD
+```
+
+Shared block (valid in both shells):
+
+```sh
 export PGSSLMODE=verify-full PGCONNECT_TIMEOUT=5 PGAPPNAME=meal-planner-readiness-check
 # add: export PGSSLROOTCERT=/path/to/system-or-isrg-root.pem   only if the OS store is not picked up
-if psql -X -w -At -c "SELECT 'PASS server=' || current_setting('server_version') || ' ssl=' || (SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid())" ; then :; else echo FAIL; fi 2>&1 | sed 's/^psql: error: .*/FAIL (connection or auth error; details withheld)/'
+if psql -X -w -At -c "SELECT 'PASS server=' || current_setting('server_version')" ; then :; else echo FAIL; fi 2>&1 | sed 's/^psql: error: .*/FAIL (connection or auth error; details withheld)/'
 unset PGHOST PGDATABASE PGUSER PGPASSWORD PGSSLMODE PGSSLROOTCERT
-# end credential usability check
 ```
+
+No name, DSN or secret is on argv in any of these commands; the `-c` text is a fixed query. An exported `PGPASSWORD` is visible to `ps -E` for the same user while the script runs.
 
 Notes:
 
-- `pg_stat_ssl` shows a boolean for the session; no secret. `sslmode=verify-full` makes libpq itself fail when the certificate chain or hostname is wrong, so a PASS implies verified TLS. `psql` error text can echo the host: the `sed` line suppresses it. Do not remove it.
-- Run it twice, first with the pooled host, expecting PASS. A direct (unpooled) host is not what the app uses and is not a substitute. Whether `pg_stat_ssl` is readable by a non-privileged role on Neon is **UNVERIFIED**; if that column returns an error, drop the `ssl=` part, because `verify-full` already enforces TLS.
+- There is deliberately no `pg_stat_ssl` check: through the pooler it would report the PgBouncer-to-Postgres leg, not the client's TLS. `sslmode=verify-full` makes libpq itself fail when the certificate chain or hostname is wrong, so a PASS implies verified client TLS. `psql` error text can echo the host: the `sed` line suppresses it. Do not remove it.
+- Run it twice, first with the pooled host, expecting PASS. A direct (unpooled) host is not what the app uses and is not a substitute.
 - Optional least-privilege probe with the same environment (SELECT-only, harmless): `SELECT has_table_privilege('meal_planner.recipes','INSERT'), has_table_privilege('meal_planner.recipes','DELETE'), has_schema_privilege('meal_planner','CREATE');` expecting `t, f, f`. This repeats Q4/Q6 from the runtime role's own point of view and also confirms the login sees the schema.
 - Do **not** test DELETE/DDL by actually running them on Preview. The denied-statement behavior is covered against a disposable database in `hosted/recipe_store_integration_test.go`; live proof is Q4/Q6 plus the section 5 acceptance.
 - The pooled connection holds an unprivileged login only; it cannot show whether the password stored in Vercel later matches. That is proven by section 5 (end-to-end save) and by an exact-name-and-scope check (A3).
@@ -294,37 +325,40 @@ GRANT SELECT, INSERT ON meal_planner.recipe_creates, meal_planner.recipe_updates
 -- REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER ON ALL TABLES IN SCHEMA meal_planner FROM <runtime_role>;
 -- REVOKE ALL ON meal_planner.schema_migrations FROM <runtime_role>;
 -- REVOKE CREATE ON SCHEMA meal_planner FROM <runtime_role>;
+-- alternative, ONLY if Q5 showed a PUBLIC row (the grant is to PUBLIC, so revoking from the role does nothing):
+-- REVOKE ALL ON meal_planner.recipes, meal_planner.recipe_creates, meal_planner.recipe_updates, meal_planner.schema_migrations FROM PUBLIC;
 COMMIT;
 ```
+Privileges the role holds through role membership (Q2) are not fixed by these statements; they go through A1b.
 Rollback: the inverse `REVOKE` of exactly the statements applied (keep the pre-change Q4/Q5 output privately to know the starting state). Rolling back leaves the feature failing closed with 503, which is safe.
 Verify: re-run Q4, Q5, Q6; the matrix must match exactly.
 
-**A1b. Remove over-privilege (Q1/Q2 show superuser-like attributes or memberships, e.g. `neon_superuser`).** Exact action depends on how the role was created: **UNVERIFIED** whether `REVOKE <role> FROM <runtime_role>` and `ALTER ROLE ... NOBYPASSRLS NOCREATEDB NOCREATEROLE` are permitted on Neon for a Console-created role. If not removable, the least-privilege role needs to be a SQL-created role, which means a new role and a new credential; the issue forbids that without a decision, so **stop and ask Caroline** (it also changes A2). Do not weaken the requirement in the runbook to fit the role.
+**A1b. Remove over-privilege (Q1/Q2 show superuser-like attributes or memberships, e.g. `neon_superuser`).** **Caroline approves before anything is run.** `neon_superuser` also brings `REPLICATION`, `pg_read_all_data`/`pg_write_all_data` and `GRANT ALL ON public WITH GRANT OPTION`; all of these must be gone from the final role. Neon documents `neon roles create --access read_only|read_write` as a non-superuser path (the role is not made a member of `neon_superuser`); whether to use it is Caroline's decision, and it also means a new role and credential. Exact action depends on how the role was created: **UNVERIFIED** whether `REVOKE <role> FROM <runtime_role>` and `ALTER ROLE ... NOBYPASSRLS NOCREATEDB NOCREATEROLE` are permitted on Neon for a Console-created role. If not removable, the least-privilege role needs to be a SQL-created role, which means a new role and a new credential; the issue forbids that without a decision, so **stop and ask Caroline** (it also changes A2). Do not weaken the requirement in the runbook to fit the role.
 Rollback: re-grant the membership/attributes removed (record them first).
 Verify: Q1, Q2, Q6 (second query).
 
-**A1c. Ownership transfer** (Q3/Q3b show the runtime role owning objects): `ALTER ... OWNER TO <migration_owner>` for each, or reassign. Record original owners first; rollback is the reverse `ALTER`. Verify: Q3, Q3b.
+**A1c. Ownership transfer** (Q3/Q3b show the runtime role owning objects). **Caroline approves before anything is run.** `ALTER ... OWNER TO <migration_owner>` for each, or reassign. Record original owners first; rollback is the reverse `ALTER`. Verify: Q3, Q3b.
 
 ### A2. Credential issuance or rotation (only if section 3 fails, the password is unknown, or Q1 showed expiry)
 
 **Who:** Caroline in the Neon console (or CLI/API), on the Preview branch only. Not an agent. The password is shown once, so copy it straight to a password manager / the Vercel Secret form; never to chat, shell history or this repo.
-**Action:** reset the existing runtime role's password (no new role). Exact Neon UI/API action and whether a reset invalidates open sessions: **UNVERIFIED** (not in the pages read). Prefer verifying on the Neon docs/console before acting.
+**Action:** reset the existing runtime role's password (no new role) via the Neon Console, `neon roles reset-password`, or the API. Per Neon docs (QA-verified 2026-11-11) the reset takes effect immediately and the old password fails on the next connection; behavior for already-open sessions is not stated (**UNVERIFIED**). **Never** use `ALTER ROLE ... PASSWORD`: it puts the password in the SQL text (logs, history).
 **Rollback:** the old password cannot be restored once reset; rollback is to reset again and re-set the Vercel Secret. If Preview already had a working Secret, rotate by updating the Secret immediately after the reset, accepting a short window of 503s on Preview.
 **Verify:** section 3 with the new password, then A3 and section 5.
 
 ### A3. Set the Vercel Preview Secret `MEAL_RECIPES_DATABASE_URL` (currently absent)
 
-**Who:** Caroline, in the Vercel dashboard (Settings, Environment Variables) for the Meal Planner project. If she approves the CLI instead, the value must come from stdin or the interactive prompt, never argv; the exact CLI flags for marking a Secret are **UNVERIFIED** (the repo pins `vercel@65.9.0`; check its `env add --help` locally).
+**Who:** Caroline, in the Vercel dashboard (Settings, Environment Variables) for the Meal Planner project. If she approves the CLI instead, the value must come from stdin or the interactive prompt, never argv; the documented form is `vercel env add MEAL_RECIPES_DATABASE_URL --environment preview --sensitive` (or `--type secret`), with the value typed at the interactive prompt or supplied on stdin. **NEVER** use `--value` (it puts the secret on argv), and avoid `echo x | vercel ...` (the secret lands in shell history). The repo pins `vercel@65.9.0`; check that version's `vercel env add --help` before running.
 **Action:**
 - Name exactly `MEAL_RECIPES_DATABASE_URL`.
 - Type **Secret** (the write-only type; Vercel documents Secrets as unreadable after save).
 - Environment: **Preview only**. Not Production, not Development.
 - Value: the pooled DSN of section 1.2 with `?sslmode=verify-full` (plus `sslrootcert` only if section 3 needed it). No `channel_binding`. Do not apply the Preview scope to a single branch unless Caroline decides to (UNVERIFIED how the repo's Preview deployments are branched; default is all Preview).
 - Never `VITE_`-prefixed.
-**Then:** a new Preview deployment is needed for the function to see the variable. Whether Vercel applies a changed env var to existing deployments: **UNVERIFIED** (assume not). Trigger it by the normal path (a push to develop), not by manual deploy.
+**Then:** a new Preview deployment is needed for the function to see the variable. **VERIFIED** (Vercel docs): environment variable changes "only apply to new deployments". Trigger it by the normal path (a push to develop), not by manual deploy.
 **Rollback:** delete the variable in the dashboard (or replace it); the API returns the generic 503 and the app keeps its fail-closed behavior. A Secret cannot be converted to Config; recreate if a mistake was made.
 **Verify (no values revealed):**
-1. Dashboard/`vercel env ls`: lists `MEAL_RECIPES_DATABASE_URL` for Preview only, type Secret, no Production or Development entry.
+1. Dashboard/`vercel env list`: lists `MEAL_RECIPES_DATABASE_URL` for Preview only, type Secret, no Production or Development entry.
 2. The Preview pull job passes `tools/deploy/check-pulled-env.sh` (it accepts only `[SENSITIVE]` and fails on a literal URL or lookalike names); the CI log names the variable, never the value.
 3. Section 5.
 
@@ -363,6 +397,6 @@ Passing section 5.1 **does not** satisfy or replace Caroline's personal #55 test
 
 - Whether the existing role is Console/API-created, and so inherits `neon_superuser` (section 1.4): unknown until Q1/Q2.
 - Trust roots for verify-full in the Vercel Go runtime without `sslrootcert`: UNVERIFIED until acceptance.
-- Neon password-reset semantics, Vercel CLI `env add` Secret flags, whether env changes apply without a redeploy, `pg_stat_ssl` visibility for the runtime role: UNVERIFIED.
+- Neon password-reset effect on already-open sessions, and whether `neon_superuser` membership can be removed: UNVERIFIED. (Reset timing, the Vercel CLI `env add` flags and the redeploy requirement are now verified; see section 1.5.)
 - Aggregate serverless concurrency (4 open connections per warm function) versus Neon capacity: needs provider monitoring (recipes.md).
 - None of this packet was executed. All "Expect" values are derived from the migration and code, not from observing Preview.
