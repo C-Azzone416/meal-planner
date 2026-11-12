@@ -56,8 +56,8 @@ The foreign keys from the two receipt tables to `recipes` need no extra grant: P
 
 ### 1.4 What the role must NOT have
 
-- Ownership of the database, the schema, any table, index, sequence or function (the migration owner owns them; separate login).
-- Schema `CREATE` on `meal_planner`, `public`, or anything else; `CREATE` on the database; `TEMPORARY` is not needed (PUBLIC has it by default; see query 8).
+- Ownership of the database, the schema, any table, index, sequence or function or procedure (checked in Q3b and Q3c; the migration owner owns them; separate login).
+- Schema `CREATE` on `meal_planner`, `public`, or anything else (Q6b); `CREATE` on the database; `TEMPORARY` is not needed (PUBLIC has it by default; see query 8).
 - `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER` on any of the four tables; any privilege on `schema_migrations`; any column-level extras.
 - Superuser, `CREATEROLE`, `CREATEDB`, `REPLICATION`, `BYPASSRLS`; membership in any other role (in particular `neon_superuser`, `pg_read_all_data`, `pg_write_all_data`).
 - Any access to `neon_auth`/`auth` schemas or `public` tables. Default privileges or PUBLIC grants must not reach `meal_planner`.
@@ -140,6 +140,15 @@ WHERE datdba = (SELECT oid FROM pg_roles WHERE rolname = :'rt');
 ```
 Expect zero rows. Any row is an ownership deviation (note: a Neon Console role that is also the project's default role would own the default database).
 
+**Q3c. Functions and procedures the runtime role owns (any schema)**
+```sql
+SELECT n.nspname, p.oid::regprocedure::text AS routine, p.prokind
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE p.proowner = (SELECT oid FROM pg_roles WHERE rolname = :'rt')
+ORDER BY 1, 2;
+```
+Expect zero rows. `regprocedure` shows the schema-qualified name with argument types, so overloads are unambiguous. Any row means the role can ALTER or DROP that routine (forbidden by 1.4): FAIL, stop and report to Caroline. Do not reassign or drop it on your own; the decision is the separately approved A1c.
+
 **Q4. Table privilege matrix (effective, includes PUBLIC and inherited)**
 ```sql
 SELECT t.tbl,
@@ -209,7 +218,69 @@ WHERE c.relkind IN ('r','p','v','m')
     OR has_table_privilege(:'rt', c.oid, 'UPDATE') OR has_table_privilege(:'rt', c.oid, 'DELETE'))
 ORDER BY 1, 2;
 ```
-Expect zero rows. Extension-provided views that PUBLIC can read may appear as false positives in this second query; judge them by name before treating them as a deviation. Rows in `neon_auth`/`auth` are a serious deviation (the runtime login could read auth data; likely via `neon_superuser` membership, Q2). Rows in `public` mean existing public tables are readable or writable by the runtime role (directly or via PUBLIC); report the table names privately and decide whether to revoke; do not change `public` as part of this work without a separate approval.
+Expect zero rows. Extension-provided views that PUBLIC can read may appear as false positives in this second query; judge them by name before treating them as a deviation, and record each one you accept as a named provider-view exception (an unnamed exception is not a PASS). Rows in `neon_auth`/`auth` are a serious deviation (the runtime login could read auth data; likely via `neon_superuser` membership, Q2). Rows in `public` mean existing public tables are readable or writable by the runtime role (directly or via PUBLIC); report the table names privately and decide whether to revoke; do not change `public` as part of this work without a separate approval.
+
+The checks Q6b to Q6e close the remaining outside-`meal_planner` gaps. All are owner-run and SELECT-only, use the role OID through `has_*_privilege` (so direct, PUBLIC and inherited paths are all counted), and never run DDL or TRUNCATE to prove anything. **Expected result for each: zero rows. Any row is FAIL: stop and ask Caroline.** Do not revoke or alter public, auth or other unrelated objects without her separate approval. A provider-supplied view that PUBLIC can read (for example an extension view) is the only tolerated kind of row, and only as a named, explicit exception recorded privately, never as a silent PASS.
+
+**Q6b. Effective CREATE on every non-system persistent schema**
+```sql
+SELECT n.nspname
+FROM pg_namespace n
+WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND n.nspname !~ '^pg_(toast|temp)'
+  AND has_schema_privilege(:'rt', n.oid, 'CREATE')
+ORDER BY 1;
+```
+Expect zero rows (this covers `meal_planner` and `public` again, plus every other schema). On PostgreSQL 14 and earlier a `public` row can be the PUBLIC engine default (see the Q6 note); it is still not a PASS: report the server version and stop for Caroline's decision.
+
+**Q6c. Auth schemas (`neon_auth` and `auth`)**
+```sql
+SELECT n.nspname, 'schema USAGE' AS access, NULL::text AS object
+FROM pg_namespace n
+WHERE n.nspname IN ('neon_auth', 'auth')
+  AND has_schema_privilege(:'rt', n.oid, 'USAGE')
+UNION ALL
+SELECT n.nspname, 'table or column access', c.relname::text
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname IN ('neon_auth', 'auth')
+  AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+  AND (has_table_privilege(:'rt', c.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+    OR has_any_column_privilege(:'rt', c.oid, 'SELECT,INSERT,UPDATE,REFERENCES'))
+ORDER BY 1, 2, 3;
+```
+Expect zero rows. A schema that does not exist simply contributes no rows. Any row means the runtime login can reach auth data or structure: FAIL (usually via `neon_superuser` membership, Q2).
+
+**Q6d. Other table privileges outside `meal_planner`: TRUNCATE, REFERENCES, TRIGGER**
+```sql
+SELECT n.nspname, c.relname,
+       concat_ws(',',
+         CASE WHEN has_table_privilege(:'rt', c.oid, 'TRUNCATE')   THEN 'TRUNCATE' END,
+         CASE WHEN has_table_privilege(:'rt', c.oid, 'REFERENCES') THEN 'REFERENCES' END,
+         CASE WHEN has_table_privilege(:'rt', c.oid, 'TRIGGER')    THEN 'TRIGGER' END) AS privs
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'meal_planner')
+  AND n.nspname !~ '^pg_(toast|temp)'
+  AND has_table_privilege(:'rt', c.oid, 'TRUNCATE,REFERENCES,TRIGGER')
+ORDER BY 1, 2;
+```
+Expect zero rows. These three are independent of the four DML checks in the second Q6 query, so that query alone cannot show them.
+
+**Q6e. Column-only privileges outside `meal_planner`**
+```sql
+SELECT n.nspname, c.relname, a.attname, p.priv
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('REFERENCES')) p(priv)
+WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'meal_planner')
+  AND n.nspname !~ '^pg_(toast|temp)'
+  AND has_column_privilege(:'rt', c.oid, a.attnum, p.priv)
+  AND NOT has_table_privilege(:'rt', c.oid, p.priv)
+ORDER BY 1, 2, 3, 4;
+```
+Expect zero rows. A row is a privilege held only at column level (the table-level check is false), which table-level queries cannot see.
 
 **Q7. Default privileges**
 ```sql
@@ -302,7 +373,7 @@ Notes:
 - There is deliberately no `pg_stat_ssl` check: through the pooler it would report the PgBouncer-to-Postgres leg, not the client's TLS. `sslmode=verify-full` makes libpq itself fail when the certificate chain or hostname is wrong, so a PASS implies verified client TLS. `psql` error text can echo the host: the `2>/dev/null` discards all of psql's stderr and stdout is captured, so only the single FAIL line prints. Do not remove that redirection.
 - Run it twice, first with the pooled host, expecting PASS. A direct (unpooled) host is not what the app uses and is not a substitute.
 - Optional least-privilege probe with the same environment (SELECT-only, harmless): `SELECT has_table_privilege('meal_planner.recipes','INSERT'), has_table_privilege('meal_planner.recipes','DELETE'), has_schema_privilege('meal_planner','CREATE');` expecting `t, f, f`. This repeats Q4/Q6 from the runtime role's own point of view and also confirms the login sees the schema.
-- Do **not** test DELETE/DDL by actually running them on Preview. The denied-statement behavior is covered against a disposable database in `hosted/recipe_store_integration_test.go`; live proof is Q4/Q6 plus the section 5 acceptance.
+- Do **not** test DELETE/DDL by actually running them on Preview. The denied-statement behavior is covered against a disposable database in `hosted/recipe_store_integration_test.go`; live proof is Q3b/Q3c/Q4/Q6 to Q6e plus the section 5 acceptance.
 - The pooled connection holds an unprivileged login only; it cannot show whether the password stored in Vercel later matches. That is proven by section 5 (end-to-end save) and by an exact-name-and-scope check (A3).
 
 ## 4. Approval packet
@@ -310,10 +381,10 @@ Notes:
 Nothing here is authorized. Each item needs Caroline's explicit approval at action time. Do the section 2 and 3 checks first; items A1x are conditional on their findings. Rollback and verification are per item.
 
 ### A0. Recheck immediately before setup (read-only; no approval beyond running section 2)
-- Re-run Q1 to Q10 the same day. The 2026-11-09 inventory is stale evidence.
+- Re-run Q1 to Q10 the same day, including every suffixed query (Q3b, Q3c, Q5b, Q6b to Q6e). The 2026-11-09 inventory is stale evidence.
 - Confirm the deployed Preview commit is `ef7e561` or newer; the 2026-11-09 inventory said it was `aaff49c`, 27 commits behind reviewed main. Automatic Preview deploys, under normal classification, only when a push to `develop` changes hosted code (`web/`, `api/`, `hosted/`, `vercel.json`, `contracts/`, `internal/core/`, or toolchain paths) and `PREVIEW_ENABLED=true`; under normal classification with an available diff base, a docs-only push does not deploy (hosted-deploy.md section 2; `.github/scripts/classify.sh`, `ci.yml` `hosted_preview` gate). CI's fail-safe can select Preview anyway through two independent mechanisms: `CLASSIFY_ALL=true` is set when the diff base is unavailable or the diff fails (`ci.yml:75-81`), and separately an unknown path sets `unknown=true`, which independently selects everything (`classify.sh:44` and `:50`) without `CLASSIFY_ALL`; it is not a deploy method and must not be relied on or provoked. Confirm the deployed commit; do not assume a push has refreshed it.
 
-### A1. Grant fixes (only if Q1 to Q9 deviate)
+### A1. Grant fixes (only if Q1 to Q9, including Q3b, Q3c, Q5b and Q6b to Q6e, deviate)
 
 **Who:** the migration owner / project admin, on a trusted machine, via a privately supplied admin connection (the pattern in recipes.md "Migration review and application"). Not an agent.
 
@@ -388,9 +459,9 @@ Verify: re-run Q4, Q5, Q6; the matrix must match exactly.
 
 **A1b. Remove over-privilege (Q1/Q2 show superuser-like attributes or memberships, e.g. `neon_superuser`).** **Caroline approves before anything is run.** `neon_superuser` also brings `REPLICATION`, `pg_read_all_data`/`pg_write_all_data` and `GRANT ALL ON public WITH GRANT OPTION`; all of these must be gone from the final role. Neon documents `neon roles create --access read_only|read_write` as a scoped role option; that such a role is not a `neon_superuser` member is implied, not stated (**UNVERIFIED**). Whether to use it is Caroline's decision, and it also means a new role and credential. Exact action depends on how the role was created: **UNVERIFIED** whether `REVOKE <role> FROM <runtime_role>` and `ALTER ROLE ... NOBYPASSRLS NOCREATEDB NOCREATEROLE` are permitted on Neon for a Console-created role. If not removable, the least-privilege role needs to be a SQL-created role, which means a new role and a new credential; the issue forbids that without a decision, so **stop and ask Caroline** (it also changes A2). Do not weaken the requirement in the runbook to fit the role.
 Rollback: record the memberships/attributes first. Tightened privileges stay tightened; restoring a removed membership or attribute is a separate action that needs Caroline's explicit approval, as in A1a.
-Verify: Q1, Q2, Q6 (second query).
+Verify: Q1, Q2, Q6 (both queries), Q6b, Q6c, Q6d, Q6e. A row in any of them is FAIL and stops for Caroline; the role cannot be marked PASS while one remains. Changing unrelated, public or auth objects to clear a row needs a separate approval.
 
-**A1c. Ownership transfer** (Q3/Q3b show the runtime role owning objects). **Caroline approves before anything is run.** `ALTER ... OWNER TO <migration_owner>` for each, or reassign. Record original owners first. Tightened privileges stay tightened: reversing the `ALTER` would hand ownership back to the runtime role, so it needs Caroline's separate explicit approval, as in A1a. Verify: Q3, Q3b.
+**A1c. Ownership transfer** (Q3/Q3b/Q3c show the runtime role owning objects, including functions). **Caroline approves before anything is run.** `ALTER ... OWNER TO <migration_owner>` for each, or reassign. Record original owners first. Tightened privileges stay tightened: reversing the `ALTER` would hand ownership back to the runtime role, so it needs Caroline's separate explicit approval, as in A1a. Verify: Q3, Q3b, Q3c (function ownership, `pg_proc`; each row reported by schema and `regprocedure` identity, with its disposition decided by Caroline here, not by blanket reassignment).
 
 ### A2. Credential issuance or rotation (only if section 3 fails, the password is unknown, or Q1 showed expiry)
 
@@ -437,7 +508,7 @@ Preconditions: A0 to A3 done; the new Preview deployment is READY; you have appr
 7. Stale revision: edit the same recipe in two windows; the second save conflicts (409) and neither person's form is silently overwritten.
 8. Failure states: offline, session expiry, repeated Save, cancel: honest messages, unsaved fields preserved, no success navigation before confirmation.
 9. Account switch: sign out and in as another approved identity: no recipes of the first account visible (cache isolation). Cross-account/cross-issuer ID access returns the same 404 (needs #53/#74 identities; synthetic tests can proceed first).
-10. Runtime privileges: after steps 3 to 7, re-run Q4 to Q7 from section 2 (nothing should have changed) and confirm the browser bundle and public build artifacts contain no DSN/`postgres://` string (search the deployed static assets for `postgres`).
+10. Runtime privileges: after steps 3 to 7, re-run Q3b, Q3c, Q4 to Q7 and Q6b to Q6e from section 2 (nothing should have changed) and confirm the browser bundle and public build artifacts contain no DSN/`postgres://` string (search the deployed static assets for `postgres`).
 11. Owner-side row check (Q10): row counts match the test actions; delete nothing under this approval.
 12. Record Preview acceptance in the private evidence log; record remaining Production requirements separately. No Production step is implied.
 
