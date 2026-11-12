@@ -18,7 +18,8 @@ confirms the Preview test (#25). Nothing here lifts that.
 - **Neon Auth does not document a device authorization grant** (section 2). It
   does document an OAuth 2.1-style provider (authorization code + PKCE, public
   clients, loopback redirects) with **fixed scopes, fixed token lifetimes**, JWT
-  access tokens that cannot be revoked, and a production checklist item that
+  access tokens that Better Auth upstream says cannot be revoked (Neon documents
+  no revoke endpoint), and a production checklist item that
   *disables* localhost. Neon's **Manage API and webhooks** document no session
   or token revoke endpoint and no session events. (The app's own same-origin
   auth proxy does forward `sign-out` and `revoke-other-sessions` to the
@@ -32,7 +33,8 @@ confirms the Preview test (#25). Nothing here lifts that.
   followed by an
   **app-issued, opaque, send-only, environment-bound, revocable credential**
   stored in the OS keychain. No Neon setting changes. No credential ever enters
-  the model's context. It copies the security properties of RFC 8628 and
+  the model's context by construction when the host has no shell tool; see T1
+  for the shell-host residual. It copies the security properties of RFC 8628 and
   RFC 7636 but is an application protocol, not a provider feature. It needs new
   persistent storage and routes, so it **requires separate approval**
   (section 9).
@@ -86,7 +88,7 @@ authority.
 | T7 | **Malicious local process** (same user; other user; port squatter; reads argv/env; ptrace) | Other-user: keychain and 0600 files. Port squatting: the recommended flow opens no listener. Argv/env: the credential is never in either; keychain library must not pass the secret on a command line (**implementation acceptance test**, section 6). Same-user code execution: **cannot be fully prevented**. LC1 limits the blast radius: send-only (cannot approve, edit, read recipes or other routes), expiry, instant server revoke, last-used metadata and visible grant list. | A same-user attacker can read what the user can read. Sender-constrained tokens (e.g. DPoP, RFC 9449) would shrink this and are **not** designed here (not researched). |
 | T8 | **Capability confusion** (send credential used for owner operations; Neon JWT used as a send credential; a provider-issued token treated as owner) | The credential is a different, *non-JWT* format. `hosted.RequireUser` (`hosted/bearer_auth.go`) requires a three-part JWT and rejects it structurally; owner routes need no change. A new `RequireLocalClient` accepts only the prefix and applies the capability matrix (section 8.2) **before** object lookup, matching #77's 403 rule. | A future change that makes a shared auth helper accept both types. Test: send credential on every owner route. |
 | T9 | **Removed or ineligible member keeps access; provider email change; removal then re-add** | Each request re-runs the #78 membership policy against the **email recorded at approval** (`email_at_approval`) plus the grant's expiry/revocation. No cache. Bound in section 7. **Guarantee, stated honestly:** a grant works while `email_at_approval` is in the current #78 allowlist (`AUTH_ALLOWED_EMAILS`, evaluated per request). The credential is opaque, so the server never sees the account's *current* provider email, and **a provider-side email change is not detected**: the grant keeps working under the old email until it expires or is revoked. Optional hardening (D11 option b): a per-request lookup of the account's current email by `(issuer, subject)`. That needs a data source the app does not read today (a Neon Auth user table or API); its existence and shape are **UNVERIFIED**. **Removal then re-add:** #78 membership is an environment setting with no removal hook, so nothing revokes an email's grants when it is removed. If the same email is re-added while a grant is unexpired, the grant is **silently revived**. Bounds: the absolute expiry (D3, 7 days recommended) and an operator step "revoke all grants for that account before removal" (D12 lists options, including a code-enforced one). | (1) Provider email change: the old-email grant keeps working; the new email has no grant until a new pairing. (2) Revival on re-add, until `expires_at`. A recycled or reassigned email address is the realistic form of both. Neither exceeds send-only. |
-| T10 | **Pairing spam and user-code brute force** (unauthenticated create route; guessing the owner's pending code from another member's session) | Unauthenticated create is limited per IP and by a pending-row cap (section 5.5). Codes: 8 characters from a 20-letter alphabet, 20⁸ ≈ 2.56×10¹⁰ values (≈34.5 bits). **A wrong code matches no pairing, so a per-pairing counter cannot count wrong guesses.** Guesses are counted against the *guesser*: per approving session, per account, per IP, plus a global cap, each with a window, a lockout and a typo rule (section 5.5, tests LC-P7a..j). Lookup is member-gated first (#78), so the attacker must hold a signed-in member session. Approval needs a separate opaque `ref` returned by lookup (the approver never learns `pairing_id`), a typed confirmation, and a POST with an owner bearer (T13). Recomputed attacker success: ≈3.9×10⁻¹⁰ per owner pairing for one attacker account, and ≤3.9×10⁻⁹ even at the global cap (section 5.5). A hit binds the owner's CLI to the **attacker's** account (RFC 8628 §5.1 makes the same point), so drafts the owner sends would land in the attacker's account. Residual mitigation: the CLI shows the bound account label and asks for confirmation before storing the credential (section 5.2 step 7). | Distributed abuse of the unauthenticated create route; shared-IP and global lockouts can inconvenience legitimate users (D9). |
+| T10 | **Pairing spam and user-code brute force** (unauthenticated create route; guessing the owner's pending code from another member's session) | Unauthenticated create is limited per IP (3 pending, 10 creates/h) and by the 10-pending-per-environment cap and the 5-active-grants-per-account cap (section 5.5 table). Codes: 8 characters from a 20-letter alphabet, 20⁸ ≈ 2.56×10¹⁰ values (≈34.5 bits). **A wrong code matches no pairing, so a per-pairing counter cannot count wrong guesses.** Guesses are counted against the *guesser*: per approving session, per account, per IP, plus a global cap, each with a window, a lockout and a typo rule (section 5.5, tests LC-P7a..n). Lookup is member-gated first (#78), so the attacker must hold a signed-in member session. Approval needs a separate opaque `ref` returned by lookup (the approver never learns `pairing_id`), a typed confirmation, and a POST with an owner bearer (T13). Recomputed attacker success: ≈3.9×10⁻¹⁰ per owner pairing for one attacker account, and ≤3.9×10⁻⁹ even at the global cap (section 5.5). A hit binds the owner's CLI to the **attacker's** account (RFC 8628 §5.1 makes the same point), so drafts the owner sends would land in the attacker's account. Residual mitigation: the CLI shows the bound account label and asks for confirmation before storing the credential (section 5.2 step 7). | Distributed abuse of the unauthenticated create route; shared-IP and global lockouts can inconvenience legitimate users (D9). |
 | T11 | **Credential in logs, telemetry, error text, crash reports, draft files** | Redacting transport; errors never include headers or bodies; hosted error messages already exclude secrets (#77 §3.1); canary tests with a synthetic token search every output (section 6). Drafts and the local store never contain tokens (the send path reads drafts but writes only a non-secret ledger). | Third-party host telemetry of MCP *arguments/results*: none contain secrets by construction. |
 | T12 | **Wrong destination** (profile edited, typosquat origin, redirect) | Profile pins exact HTTPS origins; the credential lookup key includes the origin, so an altered origin finds no credential. No redirects followed. Receipt/draft links must resolve to the profile web origin. | Same-user edit of config to a new origin forces a fresh pairing against it; the owner would see the unexpected origin at the pairing prompt. |
 | T13 | **Approval page web surface**: CSRF on approve/deny, clickjacking and framing of the approval page, forged `Origin`, a `verification_url` that pre-fills the code | **Owner authentication for `/api/local-client-v1/approvals/*` is the `Authorization: Bearer <Neon JWT>` header verified by `RequireUser`, as the SPA already does for `/api/recipes` (`web/src/recipes/api.ts`, `web/src/auth/service.ts`).** These routes **ignore cookies entirely** (never read `Cookie`, never set one). A cross-site form post or image request carries the session cookie but the server does not look at it, and a cross-origin page has no access to the SPA's token; a cross-origin `fetch` with an `Authorization` header needs a CORS preflight and no CORS is granted. That is the CSRF defense, and it **deliberately differs from the auth proxy's**: `hosted/auth_proxy.go` is cookie-authenticated (provider cookies rewritten to `SameSite=Lax`) and its `authProxyRequestOrigin` **accepts a request with no `Origin` header**, so its posture is Lax cookie plus a best-effort Origin check and must not be copied for approvals. Defense in depth on the approval POST: POST only (GET/HEAD return 405 and never change state; no state-changing GET anywhere); `Content-Type: application/json` required; a mismatched `Origin`, or `Sec-Fetch-Site: cross-site`, returns 403 (OWASP's Fetch Metadata guidance with an Origin fallback; a *missing* `Origin` is accepted only with `Sec-Fetch-Site: same-origin`). **Framing:** the approval page and every `/api/local-client-v1/*` response send `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY` (the second for browsers without `frame-ancestors`; where both are understood, `frame-ancestors` wins). The repository sets neither today (searched `hosted/`, `api/`, `web/`, `vercel.json`), so this is a new deploy-config requirement (section 9). **Typed/fresh confirmation:** approving is not one click on a pre-filled page. The owner must retype the user code in the approval box, and the request must carry a JWT issued within the last 5 minutes (`iat`); an older token gets `401 reauth_required` and the SPA fetches a fresh one. **`verification_url` never embeds `user_code`** (`https://<web_origin>/connect`, no query string). RFC 8628 defines an optional `verification_uri_complete` that includes the code and is "designed for non-textual transmission" (QR/NFC, §3.2, §3.3.1); it removes the typing step, and §5.4 says that makes it "particularly important" to confirm the device is in the user's possession. LC1 omits it, so no link can pre-fill or auto-submit a code. | Clickjacking protection depends on the browser honouring either header (current browsers do; not tested per browser here). An XSS in the SPA could call the approval API with the owner's token; XSS defeats CSRF defenses (OWASP) and is an existing app-wide risk outside this design. A signed-in owner who types a code supplied by a phisher is T3. |
@@ -229,7 +231,7 @@ shell-host path. This is local tool help, not an official web source.
 | New app persistence | Optional (grant ledger for fast revoke) | Pairing + grant tables | Pairing + grant tables |
 | Send-only scope | Scopes fixed; must be inferred from `client_id` + a server allowlist (**UNVERIFIED**) | Native | Native |
 | Credential visibility | Access/refresh tokens on loopback/back-channel; code in browser URL | Code appears in browser, clipboard, terminal scrollback, possibly model if the agent shares the terminal | **Only a user code is visible; the credential never leaves the HTTPS response to the CLI** |
-| Revocation | JWT unrevocable; ≤1 h access, 30 d refresh; revoke endpoint **UNVERIFIED** | Immediate (server lookup) | Immediate (server lookup) |
+| Revocation | Better Auth upstream says JWT access tokens cannot be revoked; Neon documents no revoke endpoint; ≤1 h access, 30 d refresh; revoke endpoint **UNVERIFIED** | Immediate (server lookup) | Immediate (server lookup) |
 | Production | Blocked by the "disable localhost" checklist item | Possible | Possible |
 | Local attack surface | Loopback listener (port squat, local process race) | None (no listener) | None (no listener) |
 | Standard coverage | RFC 8252, 7636, 9700 directly | RFC 7636 (+ manual transfer) | RFC 8628 properties + 7636 S256 for the polling secret |
@@ -271,9 +273,10 @@ separately approved change (D8).
 1. **Explicit account and environment selection.** `mealplanner connect --env preview`
    prints `Preview · <web origin>` and requires typing `preview` to continue. The
    approval page in the web app prints `Preview · <web origin>` and
-   `Account · <display label>`; the owner retypes the code and confirms there
-   (T13). After redeem, the CLI prints the bound account label and asks for
-   confirmation before storing the credential (section 5.2 step 7). Account switching
+   `Account · <display label>` (the verified normalized email only); the owner
+   retypes the code and confirms there (T13). After redeem, the CLI prints the
+   bound account label and requires typing that exact email (default "no")
+   before storing the credential (section 5.2 step 7). Account switching
    uses `mealplanner use --env preview --account <label>`.
 2. **Grant bound to Preview.** Section 5 stores `environment_id` in the grant,
    and the server rejects a mismatch. The token prefix is `mp_lc1_pv_`.
@@ -374,13 +377,15 @@ All under `/api/local-client-v1`, `Cache-Control: no-store`, `api_version:
    it is their account (a wrong-account approval, T10, is visible here).
    **Label source (matches #77 §8.1's "authenticated display label").** The
    server builds `<label>` from the verified, allowlist-gated, **normalized
-   email** recorded at approval (step 5), optionally followed by the JWT `name`
-   for readability. **`name` alone is never the label**: it is user-controlled,
-   so another #78 member could set theirs to the owner's name and make a
-   wrong-account approval look right. The approval page (step 4) shows the same
-   label. The prompt **defaults to "no"** (Enter or EOF means no) and proceeds
-   only if the user types the label's email or `yes`. On
-   "no" it calls `DELETE /grants/self` and exits. On "yes" it stores the
+   email** recorded at approval (step 5) and **nothing else**. The JWT `name` is
+   not used at all (HD default, see D13): it is user-controlled and unsanitized,
+   so it could carry control or ANSI characters or embed another email (for
+   example `attacker@y.com (owner@x.com)`) and make a wrong-account approval
+   look right. The approval page (step 4) shows the same label. The prompt
+   **defaults to "no"** (Enter or EOF means no) and proceeds only if the user
+   **types that exact email**; plain `yes` is not accepted, so a reflexive
+   confirmation cannot bind the wrong account. On
+   "no" or a mismatched entry it calls `DELETE /grants/self` and exits. On a matching email it stores the
    credential in the keychain (item key from section 4.1), writes non-secret
    profile metadata and zeroes the verifier. If the keychain write fails, the
    CLI calls `DELETE /grants/self` and exits; it never falls back to a file.
@@ -437,6 +442,8 @@ pairing to reset it.
 | C2 per account | `(issuer, subject)` | 10 | 60 min | until the window ends; after 3 lockouts in 24 h, 24 h, plus an operator alert (hashed identity only) |
 | C3 per IP | hash of the client IP (**UNVERIFIED** trusted source) | 20 lookups; separately 10 `POST /pairings` and 3 pending pairings | 60 min | 60 min |
 | C4 global (per environment) | environment | 100 | 60 min | until the window ends (an intentional availability trade-off) |
+| Pending cap per environment | environment | 10 pending pairings | pairing TTL (10 min) | new `POST /pairings` refused while full; alert when hit. Availability lever (D9). Option (iii): expire unredeemed rows after 2 minutes until first poll |
+| Active grants per account | `(issuer, subject)` | 5 active grants | until revoked or expired | approval of a 6th grant refused until one is revoked |
 
 - **Typos.** The page validates format before submitting. The alphabet
   (`BCDFGHJKLMNPQRSTVWXZ`) has no vowels or digits, so there are no `0/O`, `1/I`
@@ -486,16 +493,20 @@ and in-memory fakes. None needs a provider, account or credential.
 | LC-P4 | Redeem with a wrong or plain-method verifier | `invalid_grant`; counts toward the **per-pairing redeem limit** (5 wrong verifiers invalidate the pairing; this works because `pairing_id` matched); no state change otherwise |
 | LC-P5 | Poll faster than interval | `slow_down`, interval +5 s |
 | LC-P6 | Redeem after 10 min | `expired`; user code unusable |
-| LC-P7a | C1: 5 well-formed wrong codes from one session, then the 6th lookup with the **correct** code | 6th returns `429 locked` with `Retry-After`; the correct code is not evaluated and not consumed; after 15 min (fake clock) it works |
+| LC-P7a | Only if a session claim exists (C1 is expected absent). C1: 5 well-formed wrong codes from one session, then the 6th lookup with the **correct** code | 6th returns `429 locked` with `Retry-After`; the correct code is not evaluated and not consumed; after 15 min (fake clock) it works |
 | LC-P7b | C2: 11 wrong codes spread across 3 sessions of one account | Locked at the 11th; each session's own C1 was not the limiter |
 | LC-P7c | C3: 21 lookups from one IP using different accounts | Locked at the 21st; `POST /pairings` 11th in an hour refused; 4th pending pairing per IP refused |
 | LC-P7d | C4: 101 lookups in an hour from many accounts/IPs | Locked for everyone until the window ends |
 | LC-P7e | An attacker alternates lookups of their own **valid** pairing with wrong guesses | A successful lookup does **not** reset any counter; the limits still bite |
 | LC-P7f | Parallel burst of 50 guesses | At most the budget is evaluated (atomic pre-increment); no counter race |
-| LC-P7g | Typo handling: 4 well-formed typos, then the right code in one 10-min window | Succeeds; a 5th typo then a correct code is locked; a malformed code returns `400`, is not charged to C1/C2 |
+| LC-P7g | Only if a session claim exists (C1 is expected absent). Typo handling: 4 well-formed typos, then the right code in one 10-min window | Succeeds; a 5th typo then a correct code is locked; a malformed code returns `400`, is not charged to C1/C2 |
 | LC-P7h | Nonexistent / expired / consumed / denied / other-environment codes | Byte-identical `404 code_not_found`; lockouts byte-identical `429` |
 | LC-P7i | `ref` hygiene: no response, header, log line or error from `/approvals/*` contains `pairing_id`; `ref` used by another account, after 2 min, after 3 wrong confirmations, or on `/pairings/{id}/redeem` | All rejected with the same `404`/`401`; `redeem` is unaffected by any approval call |
 | LC-P7j | Non-member session calls `/approvals/lookup` | `403` before any counter or code evaluation (member gate first) |
+| LC-P7k | Per-environment pending cap: 10 pending pairings exist (different IPs), an 11th `POST /pairings` | Refused (cap response); an existing pairing still redeems; after one expires (fake clock) a new create succeeds; alert emitted |
+| LC-P7l | Active-grant cap: an account has 5 active grants, a 6th approval | Refused; revoking one grant lets the 6th approval succeed |
+| LC-P7m | C2-only typo budget (no session claim): 9 well-formed typos then the correct code, within one hour | Succeeds (the 10th lookup is evaluated) |
+| LC-P7n | C2-only: 10 well-formed typos then the correct code (the 11th lookup) | `429 locked`; the correct code is not evaluated or consumed; a new pairing or sign-in does not help |
 | LC-P8 | Approve with a send credential, no session, or a cookie-only request | 401/403; no approval |
 | LC-P9 | Concurrent approve/deny/redeem | Exactly one terminal state; at most one grant |
 | LC-S1 | Attacker pairing code typed by owner but CLI holds a different pairing | CLI never receives a credential for the other pairing |
@@ -535,7 +546,7 @@ and in-memory fakes. None needs a provider, account or credential.
 | LC-W3 | Approve with `Origin` of another site, or `Sec-Fetch-Site: cross-site`; `Origin` missing without `Sec-Fetch-Site: same-origin` | `403` |
 | LC-W4 | Response headers on the approval page and on every `/api/local-client-v1/*` response | `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY` present |
 | LC-W5 | `verification_url` in the pairing response; load `/connect?code=ABCD…` | URL has no query and no code; the page ignores a `code` query parameter and never pre-fills it |
-| LC-W6 | Approve with a JWT older than 5 minutes; with a wrong or missing retyped code | `401 reauth_required` / rejection; no approval |
+| LC-W6 | Approve with a JWT older than 5 minutes; with a JWT that has no `iat`; with a wrong or missing retyped code | `401 reauth_required` (old and missing `iat`) / rejection (retype); no approval |
 
 ## 7. Revocation, expiry and the access-removal bound
 
@@ -678,6 +689,7 @@ None of these is silently chosen. Recommendations are design input.
 | D10 | Same-user malicious-process and shell-capable-host stance | Accept; require signed binary and a keychain ACL; block real data until LC-K3 is run | Accept for Preview with synthetic data only; require LC-K3 evidence and signing before real data or Production |
 | D11 | Provider email change (T9) | (a) State the limitation: the grant works while `email_at_approval` stays in the #78 allowlist, a provider-side email change is not detected, re-pair to update; (b) per-request lookup of the account's current email by `(issuer, subject)` and deny on mismatch (**UNVERIFIED** data source); (c) key #78 membership to `(issuer, subject)` instead of email (a #78 change) | **(a)** now, stated in the UI and runbook; revisit (b) only once a Neon user data source is verified. User-facing: an owner who changes email keeps tools connected until expiry or revocation |
 | D12 | Removal then re-add of the same email | (a) State the risk plainly and require the operator runbook step "revoke that member's grants before or at removal"; (b) (a) plus an operator-only "revoke grants by email" procedure (the removed member can no longer sign in to revoke their own); (c) code-enforced: add a per-email added-at stamp to the #78 membership config and reject grants approved before it | **(a) + (b) for Preview**; consider (c) as a #78 follow-up before multi-member Production use. D3's 7-day cap bounds the revival window. User-facing: removing a member does not permanently end their tools if the email is re-added early |
+| D13 | Account label and CLI confirmation (F4) | (a) Label is only the verified, allowlist-gated, normalized email; the CLI requires typing that exact email, default "no" (HD default); (b) (a) plus a sanitized, length-capped `name` suffix (printable text only); (c) (a) with plain `yes` also accepted | **(a)**: no unsanitized provider text reaches the terminal, and a typed email cannot be confirmed by habit. User-facing tradeoff: a longer confirmation to type, and no friendly display name next to the email; (b) or (c) are available if the owner finds that too heavy |
 
 ## 11. Out of scope
 
