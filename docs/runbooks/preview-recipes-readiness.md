@@ -52,7 +52,7 @@ Derived from `001_recipes.sql` and every SQL string in `hosted/recipe_store.go`:
 | `meal_planner.recipe_updates` | `SELECT`, `INSERT` | update receipt lookup and write |
 | `meal_planner.schema_migrations` | **none** | the app never reads it |
 
-The foreign keys from the two receipt tables to `recipes` need no extra grant: PostgreSQL runs referential-integrity checks with the referenced table owner's rights. (If a deviation appears here at acceptance time, treat it as a finding, not a reason to broaden grants.) No sequences exist (UUID keys, no serials), so no sequence grants are needed. No functions or triggers are used.
+The foreign keys from the two receipt tables to `recipes` need no extra grant: PostgreSQL runs referential-integrity checks with the referenced table owner's rights. (If a deviation appears here at acceptance time, treat it as a finding, not a reason to broaden grants.) No sequences exist (UUID keys, no serials), so no sequence grants are needed. No user-defined functions or triggers are used. The built-in `pg_advisory_xact_lock(hashtextextended(...))` call (`recipe_store.go:149`) is executable by PUBLIC by default, so no grant is needed.
 
 ### 1.4 What the role must NOT have
 
@@ -62,7 +62,7 @@ The foreign keys from the two receipt tables to `recipes` need no extra grant: P
 - Superuser, `CREATEROLE`, `CREATEDB`, `REPLICATION`, `BYPASSRLS`; membership in any other role (in particular `neon_superuser`, `pg_read_all_data`, `pg_write_all_data`).
 - Any access to `neon_auth`/`auth` schemas or `public` tables. Default privileges or PUBLIC grants must not reach `meal_planner`.
 
-**Highest-risk suspicion.** Neon documents that roles created through the Console or API are made members of `neon_superuser` (which carries `CREATEDB`, `CREATEROLE`, `BYPASSRLS`), while roles created by SQL are not. Beyond `CREATEDB`, `CREATEROLE` and `BYPASSRLS`, `neon_superuser` also carries `REPLICATION`, membership in `pg_read_all_data`/`pg_write_all_data`, and `GRANT ALL ON public WITH GRANT OPTION` (all per the Neon roles page, section 1.5). If the existing runtime role was created via Console/API, it likely fails section 1.4 regardless of the migration's grants. Queries 1 and 2 test this directly. Whether membership can be removed (`REVOKE neon_superuser FROM ...`) on the owner's plan: **UNVERIFIED**; see approval item A1b.
+**Highest-risk suspicion.** Neon documents that roles created through the Console or API are made members of `neon_superuser` (which carries `CREATEDB`, `CREATEROLE`, `BYPASSRLS`), while roles created by SQL are not. Neon documents `--access read_only|read_write` roles as scoped; that they are not `neon_superuser` members is implied, not stated (**UNVERIFIED**). Beyond `CREATEDB`, `CREATEROLE` and `BYPASSRLS`, `neon_superuser` also carries `REPLICATION`, membership in `pg_read_all_data`/`pg_write_all_data`, and `GRANT ALL ON public WITH GRANT OPTION` (all per the Neon roles page, section 1.5). If the existing runtime role was created via Console/API, it likely fails section 1.4 regardless of the migration's grants. Queries 1 and 2 test this directly. Whether membership can be removed (`REVOKE neon_superuser FROM ...`) on the owner's plan: **UNVERIFIED**; see approval item A1b.
 
 ### 1.5 Provider references (accessed 2026-11-11)
 
@@ -81,7 +81,7 @@ The Neon, Vercel Secret, redeploy and CLI rows were checked live by independent 
 
 ## 2. Read-only verification SQL (owner-run, Preview)
 
-Connect as a privileged admin/owner login to the Preview branch **database**, using the *direct* (unpooled) host and libpq environment variables (see 3.1 for the safe pattern). Every statement is `SELECT`. Set the role name privately; do not paste it anywhere:
+Connect as a privileged admin/owner login to the Preview branch **database**, using the *direct* (unpooled) host and libpq environment variables (see 3.1 for the safe pattern). For this admin login, run `export PGSSLMODE=verify-full` first, then enter the direct (non-`-pooler`) host and the admin role at the same prompts in 3.1. The 3.1 blocks begin with `unset PGSSLMODE`, so run the export again after the prompts and before `psql`. Every statement is `SELECT`. Set the role name privately; do not paste it anywhere:
 
 Requires **psql 15 or newer** (for `\getenv`). Set the role name in your shell without putting it on a command line (zsh: `read "?runtime role: " RUNTIME_ROLE`; bash: `read -r -p 'runtime role: ' RUNTIME_ROLE`), then `export RUNTIME_ROLE`. Make the first line of your local `preview-readiness-checks.sql` (a copy of the queries below):
 
@@ -288,7 +288,7 @@ Shared block (valid in both shells):
 ```sh
 export PGSSLMODE=verify-full PGCONNECT_TIMEOUT=5 PGAPPNAME=meal-planner-readiness-check
 # add: export PGSSLROOTCERT=/path/to/system-or-isrg-root.pem   only if the OS store is not picked up
-if psql -X -w -At -c "SELECT 'PASS server=' || current_setting('server_version')" ; then :; else echo FAIL; fi 2>&1 | sed 's/^psql: error: .*/FAIL (connection or auth error; details withheld)/'
+if out=$(psql -X -w -At -c "SELECT 'PASS server=' || current_setting('server_version')" 2>/dev/null); then echo "$out"; else echo "FAIL (connection or auth error; details withheld)"; fi
 unset PGHOST PGDATABASE PGUSER PGPASSWORD PGSSLMODE PGSSLROOTCERT
 ```
 
@@ -296,7 +296,7 @@ No name, DSN or secret is on argv in any of these commands; the `-c` text is a f
 
 Notes:
 
-- There is deliberately no `pg_stat_ssl` check: through the pooler it would report the PgBouncer-to-Postgres leg, not the client's TLS. `sslmode=verify-full` makes libpq itself fail when the certificate chain or hostname is wrong, so a PASS implies verified client TLS. `psql` error text can echo the host: the `sed` line suppresses it. Do not remove it.
+- There is deliberately no `pg_stat_ssl` check: through the pooler it would report the PgBouncer-to-Postgres leg, not the client's TLS. `sslmode=verify-full` makes libpq itself fail when the certificate chain or hostname is wrong, so a PASS implies verified client TLS. `psql` error text can echo the host: the `2>/dev/null` discards all of psql's stderr and stdout is captured, so only the single FAIL line prints. Do not remove that redirection.
 - Run it twice, first with the pooled host, expecting PASS. A direct (unpooled) host is not what the app uses and is not a substitute.
 - Optional least-privilege probe with the same environment (SELECT-only, harmless): `SELECT has_table_privilege('meal_planner.recipes','INSERT'), has_table_privilege('meal_planner.recipes','DELETE'), has_schema_privilege('meal_planner','CREATE');` expecting `t, f, f`. This repeats Q4/Q6 from the runtime role's own point of view and also confirms the login sees the schema.
 - Do **not** test DELETE/DDL by actually running them on Preview. The denied-statement behavior is covered against a disposable database in `hosted/recipe_store_integration_test.go`; live proof is Q4/Q6 plus the section 5 acceptance.
@@ -333,7 +333,7 @@ Privileges the role holds through role membership (Q2) are not fixed by these st
 Rollback: the inverse `REVOKE` of exactly the statements applied (keep the pre-change Q4/Q5 output privately to know the starting state). Rolling back leaves the feature failing closed with 503, which is safe.
 Verify: re-run Q4, Q5, Q6; the matrix must match exactly.
 
-**A1b. Remove over-privilege (Q1/Q2 show superuser-like attributes or memberships, e.g. `neon_superuser`).** **Caroline approves before anything is run.** `neon_superuser` also brings `REPLICATION`, `pg_read_all_data`/`pg_write_all_data` and `GRANT ALL ON public WITH GRANT OPTION`; all of these must be gone from the final role. Neon documents `neon roles create --access read_only|read_write` as a non-superuser path (the role is not made a member of `neon_superuser`); whether to use it is Caroline's decision, and it also means a new role and credential. Exact action depends on how the role was created: **UNVERIFIED** whether `REVOKE <role> FROM <runtime_role>` and `ALTER ROLE ... NOBYPASSRLS NOCREATEDB NOCREATEROLE` are permitted on Neon for a Console-created role. If not removable, the least-privilege role needs to be a SQL-created role, which means a new role and a new credential; the issue forbids that without a decision, so **stop and ask Caroline** (it also changes A2). Do not weaken the requirement in the runbook to fit the role.
+**A1b. Remove over-privilege (Q1/Q2 show superuser-like attributes or memberships, e.g. `neon_superuser`).** **Caroline approves before anything is run.** `neon_superuser` also brings `REPLICATION`, `pg_read_all_data`/`pg_write_all_data` and `GRANT ALL ON public WITH GRANT OPTION`; all of these must be gone from the final role. Neon documents `neon roles create --access read_only|read_write` as a scoped role option; that such a role is not a `neon_superuser` member is implied, not stated (**UNVERIFIED**). Whether to use it is Caroline's decision, and it also means a new role and credential. Exact action depends on how the role was created: **UNVERIFIED** whether `REVOKE <role> FROM <runtime_role>` and `ALTER ROLE ... NOBYPASSRLS NOCREATEDB NOCREATEROLE` are permitted on Neon for a Console-created role. If not removable, the least-privilege role needs to be a SQL-created role, which means a new role and a new credential; the issue forbids that without a decision, so **stop and ask Caroline** (it also changes A2). Do not weaken the requirement in the runbook to fit the role.
 Rollback: re-grant the membership/attributes removed (record them first).
 Verify: Q1, Q2, Q6 (second query).
 
