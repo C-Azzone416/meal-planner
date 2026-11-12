@@ -70,7 +70,7 @@ The foreign keys from the two receipt tables to `recipes` need no extra grant: P
 |---|---|
 | `-pooler` host, PgBouncer transaction mode, `SET`/`RESET` unsupported | https://neon.com/docs/connect/connection-pooling |
 | Pooler rejects non-allowlisted startup parameters | https://neon.com/docs/connect/connection-errors (Unsupported startup parameter) |
-| Console/API roles (and `neon roles create` without `--access`) join `neon_superuser`; SQL-created roles do not; `neon_superuser` attributes (CREATEDB, CREATEROLE, BYPASSRLS, REPLICATION, `pg_read_all_data`/`pg_write_all_data`, `GRANT ALL ON public WITH GRANT OPTION`); `neon roles create --access read_only\|read_write` is a non-superuser option; docs give no SQL for listing role attributes | https://neon.com/docs/manage/roles |
+| Console/API roles (and `neon roles create` without `--access`) join `neon_superuser`; SQL-created roles do not; `neon_superuser` attributes (CREATEDB, CREATEROLE, BYPASSRLS, REPLICATION, `pg_read_all_data`/`pg_write_all_data`, `GRANT ALL ON public WITH GRANT OPTION`); `neon roles create --access read_only\|read_write` documented as scoped; non-membership in `neon_superuser` implied, not stated (**UNVERIFIED**); docs give no SQL for listing role attributes | https://neon.com/docs/manage/roles |
 | Password reset (Console, `neon roles reset-password`, API) takes effect immediately; the old password fails on the next connection; behavior for already-open sessions is not stated | https://neon.com/docs/manage/roles |
 | Environment variable changes "only apply to new deployments" (**VERIFIED**: a redeploy is needed) | https://vercel.com/docs/environment-variables |
 | `vercel env add NAME --environment preview --sensitive` (or `--type secret`); value via prompt or stdin | https://vercel.com/docs/cli/env |
@@ -288,11 +288,14 @@ Shared block (valid in both shells):
 ```sh
 export PGSSLMODE=verify-full PGCONNECT_TIMEOUT=5 PGAPPNAME=meal-planner-readiness-check
 # add: export PGSSLROOTCERT=/path/to/system-or-isrg-root.pem   only if the OS store is not picked up
-if out=$(psql -X -w -At -c "SELECT 'PASS server=' || current_setting('server_version')" 2>/dev/null); then echo "$out"; else echo "FAIL (connection or auth error; details withheld)"; fi
+if out=$(psql -X -w -At -c "SELECT 'PASS server=' || current_setting('server_version')" 2>/dev/null); then echo "$out"; rc=0; else echo "FAIL (connection or auth error; details withheld)"; rc=1; fi
 unset PGHOST PGDATABASE PGUSER PGPASSWORD PGSSLMODE PGSSLROOTCERT
+exit "$rc"
 ```
 
 No name, DSN or secret is on argv in any of these commands; the `-c` text is a fixed query. An exported `PGPASSWORD` is visible to `ps -E` for the same user while the script runs.
+
+The shared block ends with `exit "$rc"` (0 on PASS, 1 on FAIL), so run it as a script (`zsh file` or `bash file`) or inside a subshell, `( ... )`. Pasted directly into your login shell, that `exit` closes the terminal. A subshell's `unset` does not reach your login shell, so if you ran the check in a subshell, run the `unset` line again in your shell afterwards.
 
 Notes:
 
