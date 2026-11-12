@@ -718,7 +718,7 @@ type Profile struct {
     AccountLabel string; AccountHash string
 }
 // BindingID(p) = 32-hex-char first 128 bits of SHA-256 over the pinned framing of section 4.1
-// (uint32 big-endian byte lengths, UTF-8) of (Name, APIOrigin, WebOrigin, AccountHash);
+// (uint32 big-endian byte lengths, UTF-8) of ("mealplanner.local-client.v1/binding", Name, APIOrigin, WebOrigin, AccountHash);
 // the only way a store derives a key. Must match the section 4.1 vectors (LC-O2).
 type CredentialStore interface { // keychain implementation + in-memory fake
     // Key = (service, "preview/"+BindingID(p)). No lookup by environment/account alone, no listing, no fallback key.
