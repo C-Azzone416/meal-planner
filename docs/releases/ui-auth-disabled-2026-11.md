@@ -19,6 +19,12 @@ The work remains in development history, including pre-split commit `ad556e95859
 
 The paused MCP-to-hosted draft bridge #55 remains excluded independently. The hosted manual recipe API remains included; it is not a local MCP endpoint.
 
+### Separate #23 restore candidate
+
+The candidate restores the retained CLI, local store, MCP adapter and pinned SDK dependencies for review into `develop`. The scope above describes what PR #56 shipped. The candidate's stdio gate rejects ambiguous tool-call parameters and IDs reused within a session before dispatch, while giving previously accepted work its normal shutdown grace.
+
+Candidate acceptance requires independent review and renewed #25 host verification on the reviewed source. Caroline's personal Preview test is required before Production shipment. Only Caroline or Bagel can authorize cutting a release branch from reviewed `develop`. Promotion to `main` then requires a reviewed, CI-passing PR. [Local draft workflow](../local-workflow.md)
+
 ## Dependency and publication boundary
 
 The release keeps the PostgreSQL driver `github.com/lib/pq v1.10.9`, YAML contract-test dependency `gopkg.in/yaml.v3 v3.0.1`, and only their required module checksums. Review the resulting `go.mod`/`go.sum` rather than assuming every prior dependency remains.

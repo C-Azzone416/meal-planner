@@ -44,6 +44,9 @@ func (s *Store) Create(ctx context.Context, d draft.Draft) error {
 	if err := canceled(ctx); err != nil {
 		return err
 	}
+	if !draft.Validate(d.Content).StructurallyValid {
+		return &draft.Error{Category: draft.CategoryInternal, Code: draft.CodeInternal, Message: "the draft has invalid content"}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.drafts[d.ID]; ok {
@@ -80,6 +83,9 @@ func (s *Store) Replace(ctx context.Context, id string, expectedRevision int64, 
 	if err := canceled(ctx); err != nil {
 		return err
 	}
+	if !draft.Validate(next.Content).StructurallyValid {
+		return &draft.Error{Category: draft.CategoryInternal, Code: draft.CodeInternal, Message: "the draft has invalid content"}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if e, ok := s.damaged[id]; ok {
@@ -97,6 +103,9 @@ func (s *Store) Replace(ctx context.Context, id string, expectedRevision int64, 
 			Message:         "the stored revision differs from the expected revision",
 			CurrentRevision: cur.Revision,
 		}
+	}
+	if expectedRevision >= draft.MaxRevision {
+		return &draft.Error{Category: draft.CategoryLimitExceeded, Code: draft.CodeRevisionLimit, Message: "the draft is at the maximum revision and cannot be updated"}
 	}
 	if next.ID != id || next.Revision != expectedRevision+1 || !next.CreatedAt.Equal(cur.CreatedAt) {
 		return &draft.Error{Category: draft.CategoryInternal, Code: draft.CodeInternal, Message: "the replacement draft is inconsistent with the stored draft"}

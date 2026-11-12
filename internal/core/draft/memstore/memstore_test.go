@@ -176,3 +176,47 @@ func TestConcurrentUse(t *testing.T) {
 		t.Fatalf("info = %+v", info)
 	}
 }
+
+func TestReplaceRefusesToExceedMaxRevision(t *testing.T) {
+	s := memstore.New()
+	d := storetest.Minimal(storetest.ID(1))
+	d.Revision = draft.MaxRevision
+	if err := s.Create(bg, d); err != nil {
+		t.Fatal(err)
+	}
+	next := d
+	next.Revision = draft.MaxRevision + 1
+	err := s.Replace(bg, d.ID, draft.MaxRevision, next)
+	var de *draft.Error
+	if !errors.As(err, &de) || de.Category != draft.CategoryLimitExceeded || de.Code != draft.CodeRevisionLimit {
+		t.Fatalf("Replace = %v, want limit_exceeded/revision_limit", err)
+	}
+	if got, err := s.Get(bg, d.ID); err != nil || got.Revision != draft.MaxRevision {
+		t.Fatalf("Get = %+v, %v", got, err)
+	}
+}
+
+func TestStoreRefusesInvalidContentOnWrite(t *testing.T) {
+	s := memstore.New()
+	bad := storetest.Minimal(storetest.ID(2))
+	bad.Title = " "
+	if err := s.Create(bg, bad); err == nil {
+		t.Fatal("Create accepted invalid content")
+	}
+	if _, err := s.Get(bg, bad.ID); err == nil {
+		t.Fatal("invalid Create stored a draft")
+	}
+	good := storetest.Minimal(storetest.ID(1))
+	if err := s.Create(bg, good); err != nil {
+		t.Fatal(err)
+	}
+	next := good
+	next.Revision = 2
+	next.Title = " "
+	if err := s.Replace(bg, good.ID, 1, next); err == nil {
+		t.Fatal("Replace accepted invalid content")
+	}
+	if got, err := s.Get(bg, good.ID); err != nil || got.Revision != 1 || got.Title != good.Title {
+		t.Fatalf("Get = %+v, %v", got, err)
+	}
+}

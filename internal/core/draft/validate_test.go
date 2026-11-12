@@ -66,6 +66,8 @@ func TestValidateTable(t *testing.T) {
 		{"title newline", func(c *draft.Content) { c.Title = "a\nb" }, []string{"invalid_characters /title"}, nil},
 		{"title NUL", func(c *draft.Content) { c.Title = "a\x00b" }, []string{"invalid_characters /title"}, nil},
 		{"title DEL and C1", func(c *draft.Content) { c.Title = "a\u007fb\u0085" }, []string{"invalid_characters /title"}, nil},
+		{"title bidi override", func(c *draft.Content) { c.Title = "a\u202eb" }, []string{"invalid_characters /title"}, nil},
+		{"title ordinary RTL and joiner", func(c *draft.Content) { c.Title = "قهوة 👩‍🍳" }, nil, nil},
 		{"title keeps surrounding spaces", func(c *draft.Content) { c.Title = "  padded  " }, nil, nil},
 		{"title invalid UTF-8", func(c *draft.Content) { c.Title = "a\xffb" }, []string{"invalid_characters /title"}, nil},
 		{"title too long and control char both reported", func(c *draft.Content) { c.Title = runes(201, "a") + "\x01" },
@@ -76,6 +78,7 @@ func TestValidateTable(t *testing.T) {
 		{"yield newline", func(c *draft.Content) { c.Yield = "4\n6" }, []string{"invalid_characters /yield"}, nil},
 		{"notes multiline ok", func(c *draft.Content) { c.Notes = "a\nb\r\nc\td" }, nil, nil},
 		{"notes control char", func(c *draft.Content) { c.Notes = "a\x07" }, []string{"invalid_characters /notes"}, nil},
+		{"notes bidi isolate", func(c *draft.Content) { c.Notes = "a\u2066b" }, []string{"invalid_characters /notes"}, nil},
 		{"notes NUL even though multiline", func(c *draft.Content) { c.Notes = "a\x00" }, []string{"invalid_characters /notes"}, nil},
 		{"notes too long", func(c *draft.Content) { c.Notes = runes(4001, "n") }, []string{"too_long /notes"}, nil},
 		{"notes whitespace only is fine (optional)", func(c *draft.Content) { c.Notes = "   " }, nil, nil},
@@ -146,6 +149,7 @@ func TestValidateTable(t *testing.T) {
 		{"url with empty userinfo", func(c *draft.Content) { c.Sources[0].URL = "https://@example.com/x" }, []string{"invalid_value /sources/0/url"}, nil},
 		{"url with space", func(c *draft.Content) { c.Sources[0].URL = "https://example.com/a b" }, []string{"invalid_value /sources/0/url"}, nil},
 		{"url with control char", func(c *draft.Content) { c.Sources[0].URL = "https://example.com/a\x01" }, []string{"invalid_characters /sources/0/url"}, nil},
+		{"url with directional mark", func(c *draft.Content) { c.Sources[0].URL = "https://example.com/a\u200f" }, nil, nil},
 		{"url http ok", func(c *draft.Content) { c.Sources[0].URL = "http://example.com:8080/x?q=1#f" }, nil, nil},
 		{"url uppercase scheme ok", func(c *draft.Content) { c.Sources[0].URL = "HTTPS://EXAMPLE.com/x" }, nil, nil},
 		{"url too long", func(c *draft.Content) { c.Sources[0].URL = "https://example.com/" + runes(2040, "a") }, []string{"too_long /sources/0/url"}, nil},
@@ -333,8 +337,8 @@ func TestValidateUnicodeRunes(t *testing.T) {
 		{"combining marks over the limit", runes(101, "é"), false},
 		{"right-to-left text", "שלום עולם مرحبا", true},
 		{"zero width joiner sequence", "👩‍👩‍👧", true},
-		{"bidi override is not a control character", "a‮b", true},
-		{"line separator U+2028 is not a control character", "a b", true},
+		{"bidi override is rejected", "a\u202eb", false},
+		{"line separator U+2028", "a\u2028b", false},
 		{"non-BMP letters", "𝒜𝒷𝒸", true},
 	}
 	for _, tc := range tests {
