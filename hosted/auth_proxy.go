@@ -61,17 +61,20 @@ type AuthProxyConfig struct {
 	BaseURL          string
 	ExpectedEndpoint string
 	AllowedEmail     string
-	Client           HTTPDoer
-	MaxBodyBytes     int64
-	MaxResponseBytes int64
+	// AllowedEmailsJSON is a private JSON array; nil selects legacy AllowedEmail.
+	AllowedEmailsJSON *string
+	Client            HTTPDoer
+	MaxBodyBytes      int64
+	MaxResponseBytes  int64
 }
 
 // AuthProxyFromEnvironment serves the browser auth proxy with private config.
 func AuthProxyFromEnvironment(w http.ResponseWriter, r *http.Request) {
 	AuthProxy(AuthProxyConfig{
-		BaseURL:          os.Getenv("NEON_AUTH_BASE_URL"),
-		ExpectedEndpoint: os.Getenv("NEON_AUTH_ENDPOINT_ID"),
-		AllowedEmail:     os.Getenv("AUTH_ALLOWED_EMAIL"),
+		BaseURL:           os.Getenv("NEON_AUTH_BASE_URL"),
+		ExpectedEndpoint:  os.Getenv("NEON_AUTH_ENDPOINT_ID"),
+		AllowedEmail:      os.Getenv("AUTH_ALLOWED_EMAIL"),
+		AllowedEmailsJSON: authAllowedEmailsFromEnvironment(),
 	}).ServeHTTP(w, r)
 }
 
@@ -87,7 +90,7 @@ func AuthProxy(config AuthProxyConfig) http.Handler {
 func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConfig) {
 	w.Header().Set("Cache-Control", "no-store")
 
-	baseURL, err := normalizeAuthPolicy(config.BaseURL, config.ExpectedEndpoint, config.AllowedEmail)
+	baseURL, members, err := normalizeAuthMembership(config.BaseURL, config.ExpectedEndpoint, config.AllowedEmail, config.AllowedEmailsJSON)
 	if err != nil {
 		http.Error(w, "authentication proxy is not configured", http.StatusServiceUnavailable)
 		return
@@ -131,11 +134,7 @@ func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConf
 		return
 	}
 	if authProxyEmailRoutes[path] {
-		if strings.TrimSpace(config.AllowedEmail) == "" {
-			http.Error(w, "authentication proxy is not configured", http.StatusServiceUnavailable)
-			return
-		}
-		validatedBody, allowed := authProxyEmailPayload(body, config.AllowedEmail)
+		validatedBody, allowed := authProxyMembershipPayload(body, members)
 		if !allowed {
 			if authProxySilentEmailRoutes[path] {
 				w.Header().Set("Content-Type", "application/json")
@@ -235,10 +234,7 @@ func serveAuthProxy(w http.ResponseWriter, r *http.Request, config AuthProxyConf
 	_, _ = w.Write(responseBody)
 }
 
-// authProxyEmailPayload requires one unambiguous lowercase email field and
-// forwards the identity actually checked by the allowlist. A struct unmarshal
-// would accept case-insensitive keys, unlike the upstream JavaScript parser.
-func authProxyEmailPayload(body []byte, allowedEmail string) ([]byte, bool) {
+func authProxyMembershipPayload(body []byte, members authMembership) ([]byte, bool) {
 	payload := make(map[string]json.RawMessage)
 	if err := decodeAuthJSON(body, authEmailFields, &payload); err != nil {
 		return nil, false
@@ -247,12 +243,13 @@ func authProxyEmailPayload(body []byte, allowedEmail string) ([]byte, bool) {
 	if err := json.Unmarshal(payload["email"], &email); err != nil {
 		return nil, false
 	}
-	if !authEmailMatches(email, allowedEmail) {
+	canonicalEmail, allowed := members.email(email)
+	if !allowed {
 		return nil, false
 	}
 	// Preserve other SDK fields without numeric conversion, while giving the
 	// provider the configured identity rather than differently normalized input.
-	payload["email"], _ = json.Marshal(allowedEmail)
+	payload["email"], _ = json.Marshal(canonicalEmail)
 	canonical, err := json.Marshal(payload)
 	return canonical, err == nil
 }

@@ -31,13 +31,14 @@ func AuthConfig(w http.ResponseWriter, r *http.Request) {
 
 	configured := strings.TrimSpace(os.Getenv("NEON_AUTH_BASE_URL"))
 	allowedEmail := os.Getenv("AUTH_ALLOWED_EMAIL")
+	allowedEmails := authAllowedEmailsFromEnvironment()
 	endpointID := strings.TrimSpace(os.Getenv("NEON_AUTH_ENDPOINT_ID"))
-	if configured == "" || strings.TrimSpace(allowedEmail) == "" || endpointID == "" {
+	if configured == "" || (allowedEmails == nil && strings.TrimSpace(allowedEmail) == "") || endpointID == "" {
 		_ = json.NewEncoder(w).Encode(AuthConfigResponse{Enabled: false})
 		return
 	}
 
-	_, err := normalizeAuthPolicy(configured, endpointID, allowedEmail)
+	_, _, err := normalizeAuthMembership(configured, endpointID, allowedEmail, allowedEmails)
 	if err != nil {
 		http.Error(w, "authentication is not configured correctly", http.StatusInternalServerError)
 		return
@@ -50,7 +51,7 @@ func AuthConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 var (
-	// Keep this conservative single-user policy aligned with allowed_email_re
+	// Keep this conservative configured-email policy aligned with allowed_email_re
 	// and the byte limits in tools/deploy/check-pulled-env.sh. Runtime must
 	// validate the actual Secret value, never the pull-only [SENSITIVE] marker.
 	allowedAuthEmailPattern    = regexp.MustCompile(`^[a-z0-9_%+-]+(\.[a-z0-9_%+-]+)*@[a-z0-9]+(-[a-z0-9]+)*(\.[a-z0-9]+(-[a-z0-9]+)*)*\.[a-z]{2,63}$`)
@@ -116,27 +117,3 @@ func (e authConfigError) Error() string { return string(e) }
 
 const errInvalidAuthBaseURL = authConfigError("invalid auth base URL")
 const errInvalidManagedAuthBaseURL = authConfigError("invalid managed auth base URL")
-
-// normalizeAuthPolicy is shared by browser configuration, proxying, and bearer
-// verification so incomplete or malformed identity policy never enables auth.
-func normalizeAuthPolicy(baseURL, endpoint, allowedEmail string) (string, error) {
-	local, _, _ := strings.Cut(allowedEmail, "@")
-	if len(allowedEmail) > 254 || len(local) > 64 || !allowedAuthEmailPattern.MatchString(allowedEmail) {
-		return "", ErrAuthConfiguration
-	}
-	return normalizeManagedAuthBaseURL(baseURL, endpoint)
-}
-
-// The configured allowlist is ASCII. Unicode SimpleFold aliases such as the
-// Kelvin sign and long s must not identify the same account as ASCII k and s.
-// Check the original bytes before trimming so Unicode whitespace cannot become
-// an alias either. Only SP, HT, CR and LF are accepted as outer padding.
-func authEmailMatches(email, allowed string) bool {
-	for i := range len(email) {
-		if email[i] >= 0x80 {
-			return false
-		}
-	}
-	email = strings.Trim(email, " \t\r\n")
-	return email != "" && strings.EqualFold(email, allowed)
-}

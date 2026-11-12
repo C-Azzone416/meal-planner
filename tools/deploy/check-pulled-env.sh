@@ -23,13 +23,15 @@
 # https://vercel.com/docs/environment-variables/system-environment-variables
 #   VERCEL  "An indicator to show that system environment variables have been exposed to your project's Deployments."
 #   CI      "An indicator that the code is running in a Continuous Integration environment."
-# Three application runtime settings are intentionally configured in Vercel Preview and are therefore returned by
+# Application runtime settings are intentionally configured in Vercel Preview and are therefore returned by
 # `vercel pull`, even though the workflow deletes the pulled env file and never gives them to the build job:
 #   NEON_AUTH_BASE_URL     HTTPS URL for the Neon branch auth service; restricted to a Neon Auth hostname and the
 #                          exact `/neondb/auth` path. The endpoint ID in the hostname is not logged.
 #   NEON_AUTH_ENDPOINT_ID  Neon endpoint ID (`ep-` plus lowercase letters, digits and hyphens).
-#   AUTH_ALLOWED_EMAIL     One email address, at most 254 bytes, using the deliberately conservative ASCII shape
-#                          accepted by this application's current single-user allowlist.
+#   AUTH_ALLOWED_EMAIL     Legacy single-member format, at most 254 bytes, conservative lowercase ASCII.
+#   AUTH_ALLOWED_EMAILS    Private JSON membership array, stored only as a Vercel Secret. The guard accepts
+#                          only the write-only marker; runtime validates the actual JSON. Mutually exclusive
+#                          with AUTH_ALLOWED_EMAIL. This storage choice is specified in authentication.md (#53).
 # Their purpose and private per-environment handling are documented in docs/runbooks/authentication.md.
 # Vercel Secret values outside Development are write-only and unavailable to pulls. vercel@65.9.0's
 # `envPullCommandLogic` writes the exact non-secret placeholder `[SENSITIVE]` for each such value (official product
@@ -67,7 +69,7 @@
 set -euo pipefail
 export LC_ALL=C # byte semantics, so ${#var} counts bytes for the NUL check
 
-allowed_exact=" VERCEL CI NX_DAEMON TURBO_CACHE TURBO_DOWNLOAD_LOCAL_ENABLED TURBO_REMOTE_ONLY TURBO_RUN_SUMMARY NEON_AUTH_BASE_URL NEON_AUTH_ENDPOINT_ID AUTH_ALLOWED_EMAIL FRAMEBRIAR_ENABLED FRAMEBRIAR_ENVIRONMENT FRAMEBRIAR_ALLOWED_ORIGIN FRAMEBRIAR_APP_ID FRAMEBRIAR_BUILD_SHA FRAMEBRIAR_SCREENSHOTS FRAMEBRIAR_DATABASE_URL FRAMEBRIAR_CREDENTIAL_KEYS MEAL_RECIPES_DATABASE_URL "
+allowed_exact=" VERCEL CI NX_DAEMON TURBO_CACHE TURBO_DOWNLOAD_LOCAL_ENABLED TURBO_REMOTE_ONLY TURBO_RUN_SUMMARY NEON_AUTH_BASE_URL NEON_AUTH_ENDPOINT_ID AUTH_ALLOWED_EMAIL AUTH_ALLOWED_EMAILS FRAMEBRIAR_ENABLED FRAMEBRIAR_ENVIRONMENT FRAMEBRIAR_ALLOWED_ORIGIN FRAMEBRIAR_APP_ID FRAMEBRIAR_BUILD_SHA FRAMEBRIAR_SCREENSHOTS FRAMEBRIAR_DATABASE_URL FRAMEBRIAR_CREDENTIAL_KEYS MEAL_RECIPES_DATABASE_URL "
 turbo_cache_re='^(local|remote):(rw|r|w)?(,(local|remote):(rw|r|w)?)*$'
 neon_auth_base_re='^https://(ep-[a-z0-9]+(-[a-z0-9]+)*)\.neonauth\.c-[0-9]+\.[a-z0-9]+(-[a-z0-9]+)*\.aws\.neon\.tech/neondb/auth$'
 neon_endpoint_re='^ep-[a-z0-9]+(-[a-z0-9]+)*$'
@@ -113,7 +115,7 @@ check_file() {
       FRAMEBRIAR_DATABASE_URL|FRAMEBRIAR_CREDENTIAL_KEYS) [[ $2 == "$secret_placeholder" ]] ;;
       NEON_AUTH_BASE_URL) [[ $2 == "$secret_placeholder" || (${#2} -le 255 && $2 =~ $neon_auth_base_re) ]] ;;
       NEON_AUTH_ENDPOINT_ID) [[ $2 == "$secret_placeholder" || (${#2} -le 63 && $2 =~ $neon_endpoint_re) ]] ;;
-      MEAL_RECIPES_DATABASE_URL) [[ $2 == "$secret_placeholder" ]] ;;
+      MEAL_RECIPES_DATABASE_URL|AUTH_ALLOWED_EMAILS) [[ $2 == "$secret_placeholder" ]] ;;
       AUTH_ALLOWED_EMAIL)
         email_local=${2%@*}
         [[ $2 == "$secret_placeholder" || (${#2} -le 254 && ${#email_local} -le 64 && $2 =~ $allowed_email_re) ]]
@@ -145,7 +147,7 @@ check_file() {
             auth_endpoint_count=$((auth_endpoint_count + 1))
             [[ $3 == "$secret_placeholder" ]] || auth_endpoint=$3
             ;;
-          AUTH_ALLOWED_EMAIL) auth_email_count=$((auth_email_count + 1)) ;;
+          AUTH_ALLOWED_EMAIL|AUTH_ALLOWED_EMAILS) auth_email_count=$((auth_email_count + 1)) ;;
         esac
       fi
       [[ ", $extra, " == *", $1, "* ]] || extra="${extra:+$extra, }$1"
@@ -210,7 +212,7 @@ check_file() {
   local auth_total=$((auth_base_count + auth_endpoint_count + auth_email_count))
   if ((auth_total > 0)); then
     if ((auth_base_count != 1 || auth_endpoint_count != 1 || auth_email_count != 1)); then
-      echo "::error::check-pulled-env: $f: NEON_AUTH_BASE_URL, NEON_AUTH_ENDPOINT_ID and AUTH_ALLOWED_EMAIL must appear exactly once as a complete set"
+      echo "::error::check-pulled-env: $f: NEON_AUTH_BASE_URL, NEON_AUTH_ENDPOINT_ID and exactly one of AUTH_ALLOWED_EMAIL or AUTH_ALLOWED_EMAILS must appear exactly once as a complete set"
       bad=1
     elif [[ -n $auth_base_endpoint && -n $auth_endpoint && $auth_base_endpoint != "$auth_endpoint" ]]; then
       echo "::error::check-pulled-env: $f: NEON_AUTH_BASE_URL and NEON_AUTH_ENDPOINT_ID identify different endpoints"

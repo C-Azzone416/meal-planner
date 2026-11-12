@@ -34,8 +34,10 @@ type BearerAuthConfig struct {
 	ExpectedEndpoint string
 	JWKSURL          string
 	AllowedEmail     string
-	Client           HTTPDoer
-	Now              func() time.Time
+	// AllowedEmailsJSON is a private JSON array; nil selects legacy AllowedEmail.
+	AllowedEmailsJSON *string
+	Client            HTTPDoer
+	Now               func() time.Time
 }
 
 // UserIdentity is the verified caller identity placed on protected requests.
@@ -73,9 +75,10 @@ type bearerClaims struct {
 // protected API handlers.
 func BearerAuthConfigFromEnvironment() BearerAuthConfig {
 	return BearerAuthConfig{
-		BaseURL:          os.Getenv("NEON_AUTH_BASE_URL"),
-		ExpectedEndpoint: os.Getenv("NEON_AUTH_ENDPOINT_ID"),
-		AllowedEmail:     os.Getenv("AUTH_ALLOWED_EMAIL"),
+		BaseURL:           os.Getenv("NEON_AUTH_BASE_URL"),
+		ExpectedEndpoint:  os.Getenv("NEON_AUTH_ENDPOINT_ID"),
+		AllowedEmail:      os.Getenv("AUTH_ALLOWED_EMAIL"),
+		AllowedEmailsJSON: authAllowedEmailsFromEnvironment(),
 	}
 }
 
@@ -83,7 +86,10 @@ func BearerAuthConfigFromEnvironment() BearerAuthConfig {
 // Neon identity policy. Product APIs should use this wrapper rather than
 // performing ad-hoc token checks.
 func RequireUser(next http.Handler) http.Handler {
-	return RequireUserWithConfig(BearerAuthConfigFromEnvironment(), next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Read membership at request time even when the wrapper is long-lived.
+		RequireUserWithConfig(BearerAuthConfigFromEnvironment(), next).ServeHTTP(w, r)
+	})
 }
 
 // RequireUserWithConfig is the injectable form of RequireUser.
@@ -114,7 +120,7 @@ func UserFromContext(ctx context.Context) (UserIdentity, bool) {
 // VerifyBearer validates a Neon Ed25519 JWT and the app's environment-specific
 // identity restrictions.
 func VerifyBearer(ctx context.Context, authorization string, config BearerAuthConfig) (UserIdentity, error) {
-	baseURL, err := normalizeAuthPolicy(config.BaseURL, config.ExpectedEndpoint, config.AllowedEmail)
+	baseURL, members, err := normalizeAuthMembership(config.BaseURL, config.ExpectedEndpoint, config.AllowedEmail, config.AllowedEmailsJSON)
 	if err != nil {
 		return UserIdentity{}, ErrAuthConfiguration
 	}
@@ -204,7 +210,8 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 			emailVerified = *claims.EmailVerifiedSnake
 		}
 	}
-	if claims.Subject == "" || !emailVerified || !authEmailMatches(email, config.AllowedEmail) {
+	_, allowed := members.email(email)
+	if claims.Subject == "" || !emailVerified || !allowed {
 		return UserIdentity{}, ErrInvalidBearer
 	}
 	return UserIdentity{Issuer: claims.Issuer, Subject: claims.Subject, Email: strings.Trim(email, " \t\r\n")}, nil
