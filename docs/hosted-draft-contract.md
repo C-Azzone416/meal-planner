@@ -41,7 +41,9 @@ capable credential, another owner's well-formed ID returns the same 404 as an
 absent ID. Never return their revision,
 title, receipt or existence. Signed out returns 401. Responses use `no-store`.
 
-The send credential may submit and read its own drafts/receipts, but PUT edits,
+The send credential may submit and read its own drafts, receipts and review state
+(draft GET, receipt GET and review GET, owner-scoped; other owners and absent IDs
+return 404), but PUT edits,
 review, approve, discard and archive require the signed-in app-owner capability.
 A send credential receives 403 `operation_not_allowed` on each of those operations
 for own, foreign and absent IDs, before lookup. It cannot write manual recipes.
@@ -83,17 +85,18 @@ The exact single-fault shape/type outcomes are:
 | --- | --- |
 | Empty body or malformed JSON | 400 `invalid_request` |
 | Root `null`, array (including `[]`), string, number or boolean | 400 `invalid_request` |
+| Truncated JSON, or a UTF-8 BOM prefix (U+FEFF bytes `EF BB BF`; never stripped or repaired) | 400 `invalid_request` |
 | Missing `content_schema_version` | 400 `invalid_request` |
 | Version `null`, string, boolean, array, object, decimal or exponent token | 400 `invalid_type` |
-| Integer-token version other than `1` | 422 `unsupported_content_schema` |
+| Integer-token version other than `1`, including `0`, `-1` and `-0` | 422 `unsupported_content_schema` |
 | Missing `content` | 400 `invalid_request` |
 | `content:null`, `content:[]`, `content:"x"`, or any other non-object content | 400 `invalid_type` |
 | `content.title:5` or another non-string non-null title | 400 `invalid_type` |
 | `content.ingredients:"a"` or another non-array non-null ingredients value | 400 `invalid_type` |
-| Any other nested content value of the wrong schema type, including non-object/null list elements | 400 `invalid_type` |
+| Any other nested content value of the wrong schema type, including non-object/null list elements such as `ingredients:[null]` or `ingredients:[1]` | 400 `invalid_type` |
 
 Canonical content's optional null/absence rules still follow the local contract;
-allowed nulls are not wrong-type errors. Unknown fields are errors even if null.
+allowed nulls are not wrong-type errors. Unknown fields are errors even if null (400 `unknown_field`).
 
 Caller-supplied `owner`, `owner_issuer`, `owner_subject`, `approval`, `approved`,
 `status`, `origin`, `id`, `receipt_id`, `recipe_id`, `revision`, `created_at`,
@@ -133,7 +136,10 @@ success uses the proposed P1 label "Saved to Preview as an unreviewed draft"
 (**HD1 default (proposed), pending P1**). Success must communicate unreviewed
 acceptance; exact copy awaits P1 and must never claim approval.
 
-GET `/api/draft-v1/drafts/{id}` returns 200 with the current envelope and validation,
+GET `/api/draft-v1/drafts/{id}` returns 200 with the current envelope and validation
+(if the persisted content schema version is unsupported, 200 with the envelope
+metadata and stored content verbatim, no `validation` object and no interpretation
+or migration of content),
 or 200 with the owner-scoped terminal summary after content purge while its
 identifier/tombstone remains. If P4 removes that identifier after namespace
 retirement/account deletion, GET returns 404; it never returns 410 for a read.
@@ -233,7 +239,7 @@ Review audit/confirmations are stored separately, not charged against that cap.
 | Approve POST | 1024 | Only the two revision tokens; no resubmission of content/candidate/confirmations. |
 | Discard/archive POST | 1024 | Only the two revision tokens. |
 
-There is **no total required-review-item cap**: the former 512-item cap is removed.
+There is **no total required-review-item cap**.
 A valid maximum-size draft cannot become unapprovable because of its claim count.
 GET `/api/draft-v1/drafts/{id}/review?limit=100&after=…` enumerates all required items
 and stored confirmations with owner/draft/review/policy-bound cursors, limit 1–256
@@ -267,7 +273,7 @@ are core JSON pointers relative to content; root issues use request pointers.
 | 409 `review_incomplete`, `policy_unresolved`, `already_terminal` | Approval gate unmet / product policy absent / forbidden lifecycle transition; no write. |
 | 410 `submission_retired` | Key belongs to purged/discarded work whose content response is no longer retained; terminal receipt summary only, no new draft. |
 | 413 `input_too_large` / 415 `unsupported_media_type` | Limit exceeded / not JSON; no write. |
-| 422 `unsupported_content_schema` | Any integer-token version other than 1, including overflowing values; no write. Future negotiation cannot treat this as a successful send. |
+| 422 `unsupported_content_schema` | Submission: any integer-token version other than 1, including overflowing values. Also PUT edit, review POST, approve and review GET when the persisted `draft.content_schema_version` is unsupported by this server. No write, revision increment or coercion. Future negotiation cannot treat this as a successful send. |
 | 429 `rate_limited` | Retry-After, same key/payload; no acceptance claimed. |
 | 503 `unavailable` | Commit outcome may be unknown; retry exact key and captured content, never allocate a new key automatically. |
 
@@ -332,7 +338,7 @@ from a client build, receipt, local envelope or inferred content shape. Their
 bodies carry no version selector; a supplied `content_schema_version` is 400
 `unknown_field`. PUT decodes its replacement content with that stored schema;
 review and approve interpret current content with the same schema. If this server
-cannot support that stored version, PUT (edit), review and approve return 422
+cannot support that stored version, PUT (edit), review (POST and review GET) and approve return 422
 `unsupported_content_schema`, without a write, revision increment or coercion.
 Discard (and archive, if enabled) uses the stored version for retained metadata
 but does not decode or migrate content; an unsupported content version does not
@@ -390,7 +396,7 @@ must settle retention/privacy and namespace expiry before deletion ships.
 | Layer | States / meaning |
 | --- | --- |
 | Persisted hosted draft | `draft` initially. **HD1 default (proposed), pending P4:** then exactly one terminal `approved`, `discarded`, or `archived`, no restore. Undo-window alternative adds pending states and restore as described in section 4. Draft persistence is not recipe approval. |
-| Review progress | `not_started`, `in_progress`, `ready`, `completed`; server-derived. `ready` requires all applicable claims and completeness gates for the configured policy, never just all visible boxes. Terminal discard/archive freezes progress without marking completed. |
+| Review progress | HD1 default (proposed), pending P1: `not_started`, `in_progress`, `ready`, `completed`; server-derived. `ready` requires all applicable claims and completeness gates for the configured policy, never just all visible boxes. HD1 default (proposed), pending P4: terminal discard/archive freezes progress without marking completed. |
 | Approved recipe | `approved` / `agent`, created atomically with completed review. Only this projection may enter Recipes/planner/shopping/prep. Drafts and receipt snapshots never do. |
 
 Persist editable canonical content, candidate projection, review progress and
@@ -597,7 +603,7 @@ owner run, record exact resolved values in a private execution report:
 | Preview-5 Duplicate send and revised snapshot | Retry exact captured key/body before and after web edit and after approval: 200 same receipt/current work, no reset, no extra draft/recipe. Same key with changed content: 409. HD1 default (proposed), pending P5: local edit + explicit new send with new key creates a distinct unreviewed draft/receipt, original snapshot unchanged; exercise explicit replacement instead if P5 chooses it. Double-click/concurrent identical sends create exactly one. |
 | Preview-6 Concurrent review | Two app tabs read same revisions. One edits, the other confirms/edits/approves: 409, preserve unsaved input; reload shows first writer and, under the HD1 default (proposed), pending P1, invalidated confirmations; adapt invalidation evidence to the chosen P1 policy. Approve twice/race discard: one terminal winner and no orphan or duplicate recipe. |
 | Preview-7 Discard and late retry | Discard an unapproved draft, reload and follow receipt. HD1 default (proposed), pending P4: active queue excludes it, terminal status remains, no restore. If P4 selects undo, observe pending status/deadline, restore before expiry and test expiry/restore race; no purge during the undo window. Retry old captured send: same discarded receipt or 410 retired summary, never recreated. Repeat after any P4 retention purge/expiry test clock; archive if enabled. Explicit new key creates new work only after a new send decision. |
-| Preview-8 Cross-user and environment isolation | Sign out, links/API yield 401. Sign in as independently provisioned owner B with app-owner capability; A's draft/receipt/recipe IDs yield 404 across get/review/edit/discard/approve and archive if enabled. A send-only credential gets 403 on PUT edit, review, approve, discard and archive (if enabled) for own, foreign and absent IDs, before lookup; B's list is empty of A. Same operation key under B creates only B-owned work, with no A content. Switch back A: A data unchanged, no B cache bleed. Test equal subject/different trusted issuer in isolated auth tests; Preview token/receipt is unusable in Production. |
+| Preview-8 Cross-user and environment isolation | Sign out, links/API yield 401. Sign in as independently provisioned owner B with app-owner capability; A's draft/receipt/recipe IDs yield 404 across get/review/edit/discard/approve and archive if enabled. A send-only credential gets 403 on PUT edit, review POST, approve, discard and archive (if enabled) for own, foreign and absent IDs, before lookup, but may call review GET for its own draft (200; foreign or absent ID 404, same body as an app-owner lookup); B's list is empty of A. Same operation key under B creates only B-owned work, with no A content. Switch back A: A data unchanged, no B cache bleed. Test equal subject/different trusted issuer in isolated auth tests; Preview token/receipt is unusable in Production. |
 | Preview-9 Rejected inputs and failure | Run each rejected fixture and the header/query rejection cases listed above through their later integration boundaries; match sections 2–3 errors, no write/receipt. Simulate timeout/503 after possible commit; UI says outcome unknown, retries same captured key/body and converges on one receipt. Unsupported version cannot say saved. |
 
 #25 records expected/actual, private exact labels/links, owner-operated steps,
