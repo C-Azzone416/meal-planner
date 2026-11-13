@@ -13,7 +13,7 @@ security-setting change is authorized by this document.
 
 Recommended design to evaluate: an owner-approved exact-source build in a disposable,
 network-disabled sandbox, followed by a clean reporter, using a separately approved
-private output store. Keep public GitHub artifacts limited to intentionally public,
+private handoff (sealed local scratch or a private output store). Keep public GitHub artifacts limited to intentionally public,
 bounded evidence. Do not upload raw output there, even temporarily.
 
 Before implementation/activation, owner and service-owner decisions must identify:
@@ -27,8 +27,10 @@ Before implementation/activation, owner and service-owner decisions must identif
    risk from approved target code transforming or embedding package source. Shape,
    inventory and byte scans cannot prove non-disclosure. Offline execution stops some
    exfiltration routes, not malicious content in the eventual published app.
-3. **Transfer boundary:** exact private store, tenant/project, reader/writer identities,
-   object scope, retention/deletion policy and audit trail. No public repository artifact
+3. **Transfer boundary:** choose sealed local scratch on a disposable trusted VM or
+   an approved remote private store. Specify controller/reader/writer identities,
+   storage scope, retention/deletion policy and audit trail; for a remote store also
+   identify its tenant/project. No public repository artifact
    is an acceptable raw handoff. Any access/security change needs its own approval.
 4. **Receipt authority:** authenticated reporter-output mechanism and separate receipt
    envelope identity, including issuer/audience, workflow/job/run/attempt attribution
@@ -48,7 +50,8 @@ path/SHA/ID, approved actor and rerun actor, run/attempt, Preview project ID and
 HTTPS origin, app `meal-planner-preview`, enabled/screenshots flags, CLI/Go/builders,
 route/schema policy hashes and readiness/migration identities. The origin candidate is
 `https://athome-meals-dev.vercel.app`; live ownership/registration must be verified,
-not inferred from this text. No token, key or user identity value belongs in the plan.
+not inferred from this text. Public approved actor identity (including numeric ID) belongs in the plan. Private
+account/email/contact details, tokens and keys do not.
 
 Use the existing receipt contract in
 [`preview-receipt.md`](../../tools/framebriar-ci/preview-receipt.md).
@@ -67,12 +70,13 @@ Each phase fails closed; no `continue-on-error`, branch fallback or cache fallba
 | 1. Prefetch | Pinned trusted fetcher; no target scripts | Least-privilege package reader only during fetch | Verify reviewed manifests/lock/integrity; fetch exact dependencies/toolchain; lifecycle scripts disabled; no target checkout executed |
 | 2. Build | Exact reviewed target in fresh sandbox | Explicit public build configuration; immutable dependency inputs; no credentials or network | Bounded build/tests produce output into private scratch; no public log/output upload |
 | 3. Seal | Trusted host/controller after sandbox termination | Scratch output only; no target processes | Terminate all target descendants, detach scratch, create bounded independent copies and immutable handoff identity |
-| 4. Inspect/report | Fresh trusted reporter, no target execution | Read-only sealed output; approved private-store writer | Independently validate full inventory, schemas, ELF architecture, public configuration and bounds; reject unknowns; upload only to approved private store |
+| 4. Inspect/report | Fresh trusted reporter, no target execution | Read-only sealed output; approved output publisher only after inspection | Independently validate full inventory, schemas, ELF architecture, public configuration and bounds; reject unknowns; publish only accepted output to its approved destination |
 | 5. Receipt | Trusted reporter/issuer | Authenticated output ID/digest and immutable readiness | Issue separate authenticated receipt after output creation; complete successful run; publish only explicitly approved evidence |
 | 6. Consume | Pinned trusted consumer | Read-only private object access; authenticated GitHub/issuer metadata | Verify envelope, current plan/refs/latest run/attempt/readiness, downloaded digest and archive/layout; no target scripts executed |
 | 7. Deploy | Separate protected Preview job | Deployment credential introduced only after all gates | Deploy validated prebuilt tree without package install/build hooks, verify exact deployed identity and smoke checks; never production |
 
-A private-store output locator will need a reviewed contract extension: current receipt
+If the selected design uses a remote private store, its output locator will need a
+reviewed contract extension: current receipt
 artifact fields describe GitHub-style artifact identity/digest. Do not force a private
 object URI into those fields or claim the existing module authenticates another store.
 The output and receipt are separate objects. Output creation precedes receipt issuance;
@@ -97,6 +101,15 @@ unset. Read-only package inputs still expose SDK bytes to target code. Build log
 failure output can contain those bytes: suppress public raw stdout/stderr, keep bounded
 logs inside the approved private boundary, and emit only trusted allowlisted summaries.
 Do not persist shared caches, npm configuration, traces or build diagnostics publicly.
+
+A new remote store is not mandatory: a disposable trusted VM may terminate the
+credential-free target sandbox, seal local private scratch, and inspect it from a
+clean controller before publishing only accepted artifacts to an explicitly approved
+destination. This still requires demonstrated process/credential/log isolation,
+accepted VM/container threat model and private-source publication policy. Schema
+acceptance alone does not authorize public publication. This local-handoff alternative
+is proposed, not verified safe. If a remote store is chosen, raw output remains private
+through transfer and inspection. Neither alternative permits a public raw upload.
 
 Terminating the target precedes trusted inspection. Do not run a privileged uploader
 beside live target processes or let target-created links escape scratch. The staging
