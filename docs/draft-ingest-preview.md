@@ -64,8 +64,10 @@ It must be separately reviewed and applied by the migration owner, never startup
 A new dedicated runtime role and server-only `MEAL_DRAFTS_DATABASE_URL` are needed;
 **do not broaden or reuse the existing recipe runtime role**. URL requires
 `sslmode=verify-full`; the existing strict parser rejects channel_binding and
-other overrides. Pool max 2, request timeout 8s, statement timeout 8s and lock
-wait 3s. No migration/admin/recipe/auth-table rights are required.
+other overrides. Pool max 2, database/context budget 8s, statement timeout 8s and lock
+wait 3s. The context budget does not interrupt a slow body reader; verify the
+platform's body-read/connection deadline before activation. The byte cap alone
+does not bound slow upload duration. No migration/admin/recipe/auth-table rights are required.
 
 Minimum table rights are SELECT on grants and UPDATE(last_used_at) only (needed
 by PostgreSQL FOR SHARE locking), SELECT/INSERT on submissions, schema USAGE but
@@ -87,7 +89,7 @@ records MUST be added to the same accounting before introduction (#72). Quota
 never silently deletes user work. All retained snapshots count, not just active
 ones. Auth grant provisioning is not exposed, and must add its own caps.
 
-Before exposure, also assess platform-level request/connection abuse controls;
+Before exposure, verify platform body-read deadlines and request/connection abuse controls;
 a per-owner new-submission cap is not a global unauthenticated request limiter.
 The existing Preview env-pull allowlist deliberately does not authorize the new
 configuration or secret yet. No existing deployment pipeline guard is weakened.
