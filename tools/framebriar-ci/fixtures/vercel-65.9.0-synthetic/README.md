@@ -50,8 +50,9 @@ transforms and extra semantic fields are rejected even if supplied as a golden.
 Known request-route capture substitutions are permitted only through exact
 fixture equality; this is not general substitution support.
 
-Materialized Go metadata accepts exactly the observed six fields and values,
-including empty environment and ARM64. This validates metadata shape only and
+The current publish schema accepts exactly six fields with empty environment
+and explicit x86_64 architecture. The original default-ARM64 metadata is retained
+as a rejected historical fixture, not an accepted publish configuration. This validates metadata shape only and
 pairs with an ELF64 little-endian header check that rejects a mismatched machine. This necessary compatibility check does not establish full binary validity, safety or runtime behavior. It remains
 unwired. The expected golden must not come from the target checkout or builder.
 
@@ -75,7 +76,7 @@ with the actual Linux release build and explicitly selected architecture.
 
 The ELF helper checks only the bounded ELF64 little-endian version/type/header
 size and machine binding. It does not validate all program sections or prove that
-a binary is runnable or safe. Its passing ARM64-header fixture is synthetic.
+a binary is runnable or safe. Passing header-only tests are synthetic; the current positive fixture uses x86_64.
 
 ## Supported source configuration follow-up
 
