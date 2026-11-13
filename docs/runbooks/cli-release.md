@@ -184,3 +184,7 @@ executable until restarted.
 - Running the full candidate CI matrix (protocol conformance, supported-API
   compatibility, clean-machine install checks) as a release gate beyond
   `CI / required`.
+
+## Compatibility notice for the next local release
+
+A draft reported as `invalid_content` must be recreated from a trusted, reviewed source. Do not bypass validation or blindly copy hidden text from the rejected file. Existing files are preserved, not silently rewritten. For the distinct clock-skew message, first correct the machine clock and retry; do not destroy the original file. Unicode tag characters U+E0000–U+E007F are now rejected in all content fields. These checks reduce hidden-text risk but cannot make arbitrary recipe text safe instructions for an agent with unrelated privileges.

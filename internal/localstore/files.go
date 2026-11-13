@@ -146,6 +146,9 @@ func decode(raw []byte, id string) (draft.Draft, error) {
 	if d.Status != draft.StatusDraft {
 		return draft.Draft{}, corrupt(draft.CodeInvalidContent, "the draft file has an invalid status", nil)
 	}
+	if futureEnvelope(d, time.Now()) {
+		return draft.Draft{}, corrupt(draft.CodeInvalidContent, "timestamp is ahead of this machine’s clock", nil)
+	}
 	if !validStoredEnvelope(raw, d) {
 		return draft.Draft{}, corrupt(draft.CodeInvalidContent, "the draft file has an invalid revision or timestamp", nil)
 	}

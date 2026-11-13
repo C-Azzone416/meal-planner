@@ -14,6 +14,8 @@ import (
 )
 
 var errUnsupportedID = errors.New("unsupported request id: use a valid Unicode string or a canonical integer between -9007199254740991 and 9007199254740991")
+var errQueueFull = errors.New("protocol input queue exceeds the 8 MiB limit")
+
 var errFrameTooLarge = errors.New("protocol frame exceeds the 4 MiB limit")
 var errAmbiguousEnvelope = errors.New("invalid protocol envelope: malformed JSON or duplicate/noncanonical member name")
 var errAmbiguousToolParams = errors.New("invalid tools/call params: malformed JSON or duplicate/noncanonical member name")
@@ -85,6 +87,13 @@ func (g *frameGate) deliver(line []byte) bool {
 	// Without an LF at EOF or shutdown, a buffered CR is frame data.
 	if len(line) > maxTrackedLine {
 		g.rejectInput(errFrameTooLarge)
+		return false
+	}
+	// Fail closed before request registration. The bounded queue deliberately
+	// rejects overload rather than blocking while holding the gate mutex, which
+	// would prevent responses, cancellation and shutdown from making progress.
+	if g.queue.Len()+len(bytes.Trim(line, " \t\r\n"))+1 > maxQueuedBytes {
+		g.rejectInput(errQueueFull)
 		return false
 	}
 	// Each line is one complete JSON value. Reject malformed/concatenated
