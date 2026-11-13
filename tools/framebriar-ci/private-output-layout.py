@@ -77,22 +77,23 @@ def _inspect_layout(root, trusted_config_raw, expected, root_fd, held, source_li
     files={};locations={};directories=set();total=0
     def walk(directory,prefix=""):
         nonlocal total
-        for entry in os.scandir(directory):
-            relative=prefix+entry.name
-            if len(files)+len(directories)>=MAX_ENTRIES or not schema._boundary.path_ok(relative):raise ValueError('entry boundary')
-            info=entry.stat(follow_symlinks=False)
-            if stat.S_ISDIR(info.st_mode):
-                if stat.S_IMODE(info.st_mode)!=0o755:raise ValueError('directory mode')
-                child=os.open(entry.name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=directory)
-                held.append(child)
-                opened=os.fstat(child)
-                if (opened.st_dev,opened.st_ino,opened.st_mode)!=(info.st_dev,info.st_ino,info.st_mode):raise ValueError('directory changed during walk')
-                directories.add(relative);walk(child,relative+'/')
-            elif _regular(info,source_links and relative.startswith("static/")):
-                total+=info.st_size
-                if total>MAX_TOTAL:raise ValueError('tree byte limit')
-                files[relative]=info;locations[relative]=(directory,entry.name)
-            else:raise ValueError('unsupported file type or mode')
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                relative=prefix+entry.name
+                if len(files)+len(directories)>=MAX_ENTRIES or not schema._boundary.path_ok(relative):raise ValueError('entry boundary')
+                info=entry.stat(follow_symlinks=False)
+                if stat.S_ISDIR(info.st_mode):
+                    if stat.S_IMODE(info.st_mode)!=0o755:raise ValueError('directory mode')
+                    child=os.open(entry.name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=directory)
+                    held.append(child)
+                    opened=os.fstat(child)
+                    if (opened.st_dev,opened.st_ino,opened.st_mode)!=(info.st_dev,info.st_ino,info.st_mode):raise ValueError('directory changed during walk')
+                    directories.add(relative);walk(child,relative+'/')
+                elif _regular(info,source_links and relative.startswith("static/")):
+                    total+=info.st_size
+                    if total>MAX_TOTAL:raise ValueError('tree byte limit')
+                    files[relative]=info;locations[relative]=(directory,entry.name)
+                else:raise ValueError('unsupported file type or mode')
     walk(root_fd)
     js=[name for name in files if ASSET.fullmatch(name) and name.endswith('.js')]
     css=[name for name in files if ASSET.fullmatch(name) and name.endswith('.css')]
