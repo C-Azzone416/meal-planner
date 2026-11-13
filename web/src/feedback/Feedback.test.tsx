@@ -291,3 +291,22 @@ test.each([false, true])(
     ).toBeNull()
   },
 )
+
+test('text-only send after removing a screenshot uses the current timestamp', async () => {
+  vi.stubGlobal('URL', Object.assign(URL, {
+    createObjectURL: vi.fn(() => 'blob:synthetic'),
+    revokeObjectURL: vi.fn(),
+  }))
+  const time = vi.spyOn(Date.prototype, 'toISOString').mockReturnValue('2026-11-13T10:00:00.000Z')
+  fixture.capture.mockResolvedValue(new Blob(['synthetic'], { type: 'image/png' }))
+  const notes = await open()
+  fireEvent.change(notes, { target: { value: 'Text after removing capture' } })
+  fireEvent.click(screen.getByRole('checkbox'))
+  await screen.findByRole('img')
+  fireEvent.click(screen.getByRole('checkbox'))
+  await waitFor(() => expect(screen.queryByRole('img')).toBeNull())
+  time.mockReturnValue('2026-11-13T10:10:00.000Z')
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledOnce())
+  expect(fixture.enqueue.mock.calls[0][0].report.capturedAt).toBe('2026-11-13T10:10:00.000Z')
+})

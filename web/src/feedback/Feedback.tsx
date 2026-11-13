@@ -276,7 +276,7 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
             scene: media
               ? captureScene.current
               : (screens[location.pathname] ?? 'other'),
-            capturedAt: captureTime.current ?? new Date().toISOString(),
+            capturedAt: (media ? captureTime.current : null) ?? new Date().toISOString(),
             sessionId: crypto.randomUUID(),
             seed: null,
             platform: innerWidth < 640 ? 'mobile' : 'desktop',
