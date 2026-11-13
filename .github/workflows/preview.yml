@@ -463,7 +463,8 @@ jobs:
             exit 1
           fi
 
-          id=$(api "https://api.vercel.com/v13/deployments/${URL#https://}?${team}" | jq -r '.id // empty') || id=""
+          deployment=$(api "https://api.vercel.com/v13/deployments/${URL#https://}?${team}") || { echo "::error::could not read candidate deployment"; exit 1; }
+          id=$(jq -r '.id // empty' <<< "$deployment") || id=""
           [[ "$id" =~ ^dpl_[A-Za-z0-9]+$ ]] || { echo "::error::could not look up the Vercel deployment ID for $URL"; exit 1; }
 
           # Move forward only. 404 = alias does not exist yet: move. Any other error: fail closed.
@@ -477,19 +478,36 @@ jobs:
             curid=$(jq -r '.deploymentId // empty' alias.json)
             cur=""
             if [[ "$curid" =~ ^dpl_[A-Za-z0-9]+$ ]]; then
-              cur=$(api "https://api.vercel.com/v13/deployments/${curid}?${team}" | jq -r '.meta.sourceSha // empty') || { echo "::error::could not read deployment $curid"; exit 1; }
+              current=$(api "https://api.vercel.com/v13/deployments/${curid}?${team}") || { echo "::error::could not read deployment $curid"; exit 1; }
+              cur=$(jq -r '.meta.sourceSha // empty' <<< "$current") || { echo "::error::invalid current deployment metadata"; exit 1; }
             fi
             if [[ ! "$cur" =~ ^[0-9a-f]{40}$ ]]; then
               echo "::notice::the deployment currently behind $alias has no recorded source SHA; moving the alias"
             elif [[ "$cur" == "$SHA" ]]; then
-              echo "::notice::$alias already points at a deployment of $SHA ($curid); leaving it"
-              {
-                echo "## Preview alias"
-                echo
-                echo "- Alias: \`$alias\`"
-                echo "- Already on this commit (\`$SHA\`), existing deployment \`$curid\`; not moved"
-              } >> "$GITHUB_STEP_SUMMARY"
-              exit 0
+              # BEGIN SAME_SHA_ALIAS_POLICY (exercised verbatim by synthetic tests)
+              # A fresh build of identical source can carry refreshed Preview runtime configuration.
+              # Provider metadata, not workflow start time or a caller flag, orders deployments.
+              if ! jq -en --argjson candidate "$deployment" --argjson current "$current" \
+                --arg project "$VERCEL_PROJECT_ID" --arg sha "$SHA" --arg id "$id" --arg curid "$curid" '
+                def valid($id):
+                  .id == $id and .projectId == $project and .meta.sourceSha == $sha and
+                  has("target") and (.target == null or .target == "preview") and .readyState == "READY" and
+                  (.createdAt | type == "number" and . > 0 and . <= 9007199254740991 and floor == .);
+                ($candidate | valid($id)) and ($current | valid($curid))' > /dev/null; then
+                echo "::error::same-SHA alias comparison requires valid ready Preview deployment metadata"
+                exit 1
+              fi
+              if [[ "$curid" == "$id" ]]; then
+                echo "::notice::stable Preview alias already points at this deployment; leaving it"
+                exit 0
+              fi
+              if ! jq -en --argjson candidate "$deployment" --argjson current "$current" \
+                '$candidate.createdAt > $current.createdAt' > /dev/null; then
+                echo "::notice::stable Preview alias has an equal-age or newer deployment of this SHA; leaving it"
+                exit 0
+              fi
+              echo "::notice::moving stable Preview alias to a strictly newer deployment of the same SHA"
+              # END SAME_SHA_ALIAS_POLICY
             else
               gd=$(mktemp -d "$RUNNER_TEMP/ancestry.XXXXXX")
               git -C "$gd" init -q

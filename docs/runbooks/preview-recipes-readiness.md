@@ -477,6 +477,7 @@ Verify: Q1, Q2, Q6 (both queries), Q6b, Q6c, Q6d, Q6e. A row in any of them is F
 - Name exactly `MEAL_RECIPES_DATABASE_URL`.
 - Type **Secret** (the write-only type; Vercel documents Secrets as unreadable after save).
 - Environment: **Preview only**. Not Production, not Development.
+- Neon connection templates may default to `sslmode=require&channel_binding=require`; do not paste that query unchanged. The runtime requires certificate/hostname verification and rejects unsupported query options. Keep the value private, use `sslmode=verify-full`, omit `channel_binding`, and redeploy Preview after the approved Secret update. TLS validation must not be relaxed to make a template work.
 - Value: the pooled DSN of section 1.2 with `?sslmode=verify-full` (plus `sslrootcert` only if section 3 needed it). No `channel_binding`. Do not apply the Preview scope to a single branch unless Caroline decides to (UNVERIFIED how the repo's Preview deployments are branched; default is all Preview).
 - Never `VITE_`-prefixed.
 **Then (Secret-change deployment sequence; applies to every Secret change: A2 rotation and reset-again, A3 set, replace and delete, and the A3 rollback):** a Secret edit alone changes nothing that is running. **VERIFIED** (Vercel docs): environment variable changes "only apply to new deployments". In order:
