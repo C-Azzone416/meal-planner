@@ -5,8 +5,10 @@ package hosted
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -93,6 +95,10 @@ func TestFeedbackBrowserServer(t *testing.T) {
 	tokenTwo := auth.token(t, claims)
 	var mu sync.Mutex
 	failReports := false
+	failMedia := false
+	invalidMediaReceipt := false
+	mediaAttempts := []map[string]any{}
+	accepted := map[string]bool{}
 	reports := []json.RawMessage{}
 	mediaCount := 0
 	familyExpiry := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
@@ -133,6 +139,18 @@ func TestFeedbackBrowserServer(t *testing.T) {
 			if strings.HasPrefix(path, "/v1/reports/") && strings.HasSuffix(path, "/media") && r.Method == "PUT" {
 				id := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/reports/"), "/media")
 				mediaCount++
+				media, err := io.ReadAll(r.Body)
+				if err != nil {
+					return nil, err
+				}
+				mediaAttempts = append(mediaAttempts, map[string]any{"id": id, "sha256": fmt.Sprintf("%x", sha256.Sum256(media)), "bytes": len(media), "failed": failMedia || invalidMediaReceipt})
+				if failMedia {
+					return &http.Response{StatusCode: 502, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("synthetic media unavailable"))}, nil
+				}
+				if invalidMediaReceipt {
+					return respond(map[string]string{"id": "wrong-report", "gameId": service.config.App, "status": "ready"})
+				}
+				accepted[id] = true
 				return respond(map[string]string{"id": id, "gameId": service.config.App, "status": "ready"})
 			}
 			return nil, errors.New("fixture unsupported operation")
@@ -181,6 +199,10 @@ func TestFeedbackBrowserServer(t *testing.T) {
 		}
 		mu.Lock()
 		failReports = false
+		failMedia = false
+		invalidMediaReceipt = false
+		mediaAttempts = []map[string]any{}
+		accepted = map[string]bool{}
 		reports = []json.RawMessage{}
 		mediaCount = 0
 		mu.Unlock()
@@ -198,7 +220,9 @@ func TestFeedbackBrowserServer(t *testing.T) {
 			return
 		}
 		var input struct {
-			FailReports bool `json:"failReports"`
+			FailReports         bool `json:"failReports"`
+			FailMedia           bool `json:"failMedia"`
+			InvalidMediaReceipt bool `json:"invalidMediaReceipt"`
 		}
 		if json.NewDecoder(r.Body).Decode(&input) != nil {
 			w.WriteHeader(400)
@@ -206,13 +230,15 @@ func TestFeedbackBrowserServer(t *testing.T) {
 		}
 		mu.Lock()
 		failReports = input.FailReports
+		failMedia = input.FailMedia
+		invalidMediaReceipt = input.InvalidMediaReceipt
 		mu.Unlock()
 		feedbackJSON(w, 200, map[string]bool{"ok": true})
 	})
 	mux.HandleFunc("/__fixture/evidence", func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
-		feedbackJSON(w, 200, map[string]any{"reports": reports, "mediaCount": mediaCount})
+		feedbackJSON(w, 200, map[string]any{"reports": reports, "mediaCount": mediaCount, "mediaAttempts": mediaAttempts, "accepted": accepted})
 	})
 	mux.HandleFunc("/__fixture/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {

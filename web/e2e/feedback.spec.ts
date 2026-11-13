@@ -1,4 +1,18 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Page, devices } from '@playwright/test'
+
+import { rm } from 'node:fs/promises'
+
+// Ephemeral WebKit rejects IndexedDB Blob writes even without this app/SDK.
+// Use a disposable persistent profile to exercise real screenshot persistence.
+const durableTest = test.extend({
+  page: async ({ page, browserName, playwright }, providePage, testInfo) => {
+    if (browserName !== 'webkit') { await providePage(page); return }
+    const profile = testInfo.outputPath('synthetic-webkit-profile')
+    const context = await playwright.webkit.launchPersistentContext(profile, { ...devices['iPhone 13'], baseURL: 'http://localhost:4181' })
+    try { await providePage(await context.newPage()) }
+    finally { await context.close(); await rm(profile, { recursive: true, force: true }) }
+  },
+})
 
 test.beforeEach(async ({ page }) => {
   // Browser fixtures never contact external fonts, auth or Framebriar.
@@ -144,4 +158,48 @@ test('two devices share enrollment; a second account does not inherit enrollment
   await expect(page.getByRole('status').filter({ hasText: /^not-connected/ })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Delete unsent reports (0)', exact: true })).toBeVisible()
   await expect(page.getByText('SYNTHETIC ACCOUNT ONE UNSENT')).toHaveCount(0)
+})
+
+// Synthetic upstream contract only, not proof of live Framebriar idempotency.
+for (const failure of ['502', 'invalid receipt'] as const) durableTest(`screenshot media ${failure} survives close and reload until final receipt`, async ({ page }) => {
+  await fakeAPI(page)
+  const failures = async (failMedia: boolean) => {
+    expect((await page.request.post('/__fixture/failure', { data: { failMedia: failMedia && failure === '502', invalidMediaReceipt: failMedia && failure === 'invalid receipt' } })).ok()).toBeTruthy()
+  }
+  const evidence = async () => (await page.request.get('/__fixture/evidence')).json() as Promise<{
+    reports: Array<{ id: string; media: { sha256: string } }>
+    mediaAttempts: Array<{ id: string; sha256: string; bytes: number; failed: boolean }>
+    accepted: Record<string, boolean>
+  }>
+  await failures(true)
+  await page.getByRole('button', { name: 'Feedback', exact: true }).click()
+  await page.getByLabel('Notes', { exact: true }).fill('Synthetic screenshot retry')
+  await page.getByRole('checkbox').click()
+  await expect(page.getByAltText('Review the sanitized visible screen screenshot')).toBeVisible()
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+  await expect.poll(async () => (await evidence()).mediaAttempts.length).toBeGreaterThan(0)
+  const first = (await evidence()).mediaAttempts[0]
+  expect(first.failed).toBe(true)
+  expect(first.bytes).toBeGreaterThan(0)
+  expect((await evidence()).reports.length).toBeGreaterThan(0)
+  await expect(page.getByText('Received by Framebriar.', { exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Feedback', exact: true }).click()
+  await expect(page.getByText('1 unsent report(s) on this device.', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await page.goto('/e2e/feedback.html')
+  await page.getByRole('button', { name: 'Feedback', exact: true }).click()
+  await expect(page.getByText('1 unsent report(s) on this device.', { exact: true })).toBeVisible()
+  await expect(page.getByText('Received by Framebriar.', { exact: true })).toHaveCount(0)
+  expect(Object.keys((await evidence()).accepted)).toHaveLength(0)
+  await failures(false)
+  // New instance restores the actual IndexedDB outbox and starts delivery.
+  await page.goto('/e2e/feedback.html')
+  await expect(page.getByText('Received by Framebriar.', { exact: true })).toBeVisible({ timeout: 30000 })
+  await page.getByRole('button', { name: 'Feedback', exact: true }).click()
+  await expect(page.getByText('0 unsent report(s) on this device.', { exact: true })).toBeVisible()
+  const final = await evidence()
+  expect(Object.keys(final.accepted)).toEqual([first.id])
+  expect(final.mediaAttempts.some(a => !a.failed)).toBe(true)
+  for (const a of final.mediaAttempts) { expect(a.id).toBe(first.id); expect(a.sha256).toBe(first.sha256) }
+  for (const r of final.reports) { expect(r.id).toBe(first.id); expect(r.media.sha256).toBe(first.sha256) }
 })
