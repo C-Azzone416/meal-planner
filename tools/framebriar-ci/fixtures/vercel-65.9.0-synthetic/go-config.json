@@ -1,0 +1,8 @@
+{
+  "handler": "bootstrap",
+  "runtime": "provided.al2023",
+  "runtimeLanguage": "go",
+  "architecture": "arm64",
+  "environment": {},
+  "supportsWrapper": true
+}
