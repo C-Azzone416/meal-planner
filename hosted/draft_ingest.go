@@ -78,7 +78,7 @@ func newDraftResponse(owner RecipeOwner, s DraftSubmission, now time.Time) (Draf
 	}
 	d := HostedDraft{SchemaVersion: 1, ContentSchemaVersion: 1, ID: id, Revision: 1, Status: "draft", Origin: "agent", CreatedAt: now.UTC(), UpdatedAt: now.UTC(), Content: s.Content, Review: DraftReview{Revision: 1, State: "not_started", DraftRevision: 1, Confirmations: []any{}}}
 	d.Owner.Issuer, d.Owner.Subject = owner.Issuer, owner.Subject
-	return DraftResponse{APIVersion: "draft-v1", Draft: d, Receipt: DraftReceipt{ID: receiptID, DraftID: id, SubmittedAt: now.UTC(), AcceptedRevision: 1, ContentSchemaVersion: 1, SubmissionContent: s.Content}, Validation: draft.Validate(s.Content)}, nil
+	return DraftResponse{APIVersion: "draft-ingest-preview-v1", Draft: d, Receipt: DraftReceipt{ID: receiptID, DraftID: id, SubmittedAt: now.UTC(), AcceptedRevision: 1, ContentSchemaVersion: 1, SubmissionContent: s.Content}, Validation: draft.Validate(s.Content)}, nil
 }
 
 // DraftAccess is internal server policy, never decoded from request JSON. The

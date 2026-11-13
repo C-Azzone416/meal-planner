@@ -22,6 +22,7 @@ It never creates an approved recipe or planner item. HTTP 201 is a new snapshot;
 is 409. Keep the same key and body after ambiguous failure. A new key creates a
 new snapshot, not an update. Response has no UI links because read/review UI does
 not exist yet; this is a **partial HD1 implementation**, not the complete #77 API.
+The response therefore advertises `draft-ingest-preview-v1`, not HD1 `draft-v1`.
 
 ## Authority
 
@@ -33,7 +34,9 @@ no token-accepting CLI argument or environment-variable fallback.
 
 Every request checks the grant's exact issuer, Preview environment, owner,
 `draft:create` scope, expiry, revocation and approved-email membership. Membership
-is loaded anew per request. Submit repeats authentication inside its transaction,
+is loaded anew from the serving deployment's environment per request. Allowlist
+changes require a deployment rollout; older deployment URLs with stale
+configuration must be retired. This is not provider-global revocation. Submit repeats authentication inside its transaction,
 locks the grant until commit (serialized against administrative revocation),
 and rechecks expiry after owner-lock wait. A replay also requires a currently
 valid grant. Different grants for the same owner share quota and operation-key namespaces,
@@ -87,7 +90,8 @@ also counts with a conservative per-grant reserve. This is not physical disk acc
 independent review/audit/retirement records or purge jobs in this slice; future
 records MUST be added to the same accounting before introduction (#72). Quota
 never silently deletes user work. All retained snapshots count, not just active
-ones. Auth grant provisioning is not exposed, and must add its own caps.
+ones. Auth grant provisioning is not exposed, and must add its own caps and use the
+same owner transaction lock so grant metadata cannot race the retained-byte cap.
 
 Before exposure, verify platform body-read deadlines and request/connection abuse controls;
 a per-owner new-submission cap is not a global unauthenticated request limiter.

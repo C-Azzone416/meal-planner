@@ -70,6 +70,9 @@ func TestDraftIngestPreservesUnreviewedIncompleteContent(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 				t.Fatal(err)
 			}
+			if response.APIVersion != "draft-ingest-preview-v1" {
+				t.Fatal("partial endpoint incorrectly claims full HD1 API compatibility")
+			}
 			if response.Draft.Status != "draft" || response.Draft.Origin != "agent" || response.Draft.ApprovedRecipeID != nil || response.Draft.Review.State != "not_started" || response.Draft.Review.Candidate != nil {
 				t.Fatal("not unreviewed")
 			}
