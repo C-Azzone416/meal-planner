@@ -157,21 +157,6 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 		return UserIdentity{}, ErrInvalidBearer
 	}
 
-	jwksURL := strings.TrimSpace(config.JWKSURL)
-	if jwksURL == "" {
-		jwksURL = baseURL + "/.well-known/jwks.json"
-	}
-	publicKey, err := fetchEd25519PublicKey(ctx, config.Client, jwksURL, header.KeyID)
-	if err != nil {
-		if errors.Is(err, errSigningKeyNotFound) {
-			return UserIdentity{}, ErrInvalidBearer
-		}
-		return UserIdentity{}, fmt.Errorf("%w: signing keys unavailable", ErrAuthConfiguration)
-	}
-	if !ed25519.Verify(publicKey, []byte(parts[0]+"."+parts[1]), signature) {
-		return UserIdentity{}, ErrInvalidBearer
-	}
-
 	claimsBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return UserIdentity{}, ErrInvalidBearer
@@ -188,25 +173,33 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 	if config.Now != nil {
 		now = config.Now
 	}
-	instant := now()
-	nowUnix := new(big.Rat).SetInt64(instant.Unix())
-	nowUnix.Add(nowUnix, new(big.Rat).SetFrac64(int64(instant.Nanosecond()), 1_000_000_000))
-	expiration, err := numericDate(claims.Expiration)
-	if err != nil || expiration.Cmp(nowUnix) <= 0 {
+	if !bearerClaimsTimeValid(claims, now()) {
 		return UserIdentity{}, ErrInvalidBearer
 	}
-	if len(claims.NotBefore) != 0 {
-		notBefore, err := numericDate(claims.NotBefore)
-		if err != nil || notBefore.Cmp(nowUnix) > 0 {
-			return UserIdentity{}, ErrInvalidBearer
-		}
+
+	// Claims checked above are untrusted rejection filters, never authorization.
+	// Keep private membership checks below cryptographic verification so failed
+	// signatures cannot probe the allowlist through provider-call timing.
+
+	jwksURL := strings.TrimSpace(config.JWKSURL)
+	if jwksURL == "" {
+		jwksURL = baseURL + "/.well-known/jwks.json"
 	}
-	// iat is optional and is not an activation time, but when present it must
-	// retain the registered NumericDate type rather than being ignored.
-	if len(claims.IssuedAt) != 0 {
-		if _, err := numericDate(claims.IssuedAt); err != nil {
+	publicKey, err := fetchEd25519PublicKey(ctx, config.Client, jwksURL, header.KeyID)
+	if err != nil {
+		if errors.Is(err, errSigningKeyNotFound) {
 			return UserIdentity{}, ErrInvalidBearer
 		}
+		return UserIdentity{}, fmt.Errorf("%w: signing keys unavailable", ErrAuthConfiguration)
+	}
+	if !ed25519.Verify(publicKey, []byte(parts[0]+"."+parts[1]), signature) {
+		return UserIdentity{}, ErrInvalidBearer
+	}
+
+	// Fetching keys can take time. Recheck temporal validity immediately before
+	// authorization, not just against the earlier preflight instant.
+	if !bearerClaimsTimeValid(claims, now()) {
+		return UserIdentity{}, ErrInvalidBearer
 	}
 
 	email := claims.Email
@@ -223,6 +216,30 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 		return UserIdentity{}, ErrInvalidBearer
 	}
 	return UserIdentity{Issuer: claims.Issuer, Subject: claims.Subject, Email: strings.Trim(email, " \t\r\n")}, nil
+}
+
+func bearerClaimsTimeValid(claims bearerClaims, instant time.Time) bool {
+	nowUnix := new(big.Rat).SetInt64(instant.Unix())
+	nowUnix.Add(nowUnix, new(big.Rat).SetFrac64(int64(instant.Nanosecond()), 1_000_000_000))
+	expiration, err := numericDate(claims.Expiration)
+	if err != nil || expiration.Cmp(nowUnix) <= 0 {
+		return false
+	}
+	if len(claims.NotBefore) != 0 {
+		notBefore, err := numericDate(claims.NotBefore)
+		if err != nil || notBefore.Cmp(nowUnix) > 0 {
+			return false
+		}
+	}
+	// iat is optional and is not an activation time, but when present it must
+	// retain the registered NumericDate type rather than being ignored.
+	if len(claims.IssuedAt) != 0 {
+		if _, err := numericDate(claims.IssuedAt); err != nil {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (header bearerHeader) supported() bool {
