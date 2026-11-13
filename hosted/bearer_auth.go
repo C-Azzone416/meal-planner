@@ -148,6 +148,15 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 		return UserIdentity{}, ErrInvalidBearer
 	}
 
+	// Reject malformed signatures before any provider I/O. A structurally
+	// invalid token cannot authenticate, even when the signing service is down.
+	// This avoids amplifying trivial invalid requests into remote JWKS fetches;
+	// it is not a substitute for deployment-level rate limiting.
+	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return UserIdentity{}, ErrInvalidBearer
+	}
+
 	jwksURL := strings.TrimSpace(config.JWKSURL)
 	if jwksURL == "" {
 		jwksURL = baseURL + "/.well-known/jwks.json"
@@ -159,8 +168,7 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 		}
 		return UserIdentity{}, fmt.Errorf("%w: signing keys unavailable", ErrAuthConfiguration)
 	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil || len(signature) != ed25519.SignatureSize || !ed25519.Verify(publicKey, []byte(parts[0]+"."+parts[1]), signature) {
+	if !ed25519.Verify(publicKey, []byte(parts[0]+"."+parts[1]), signature) {
 		return UserIdentity{}, ErrInvalidBearer
 	}
 
