@@ -45,11 +45,11 @@ func (s *PostgresDraftStore) Close() error                 { return s.db.Close()
 type draftGrant struct {
 	Owner                     RecipeOwner
 	Email, Scope, Environment string
-	ExpiresAt                 time.Time
+	CreatedAt, ExpiresAt      time.Time
 	RevokedAt                 sql.NullTime
 }
 
-const draftGrantColumns = `owner_issuer,owner_subject,email_at_approval,scope,environment,expires_at,revoked_at`
+const draftGrantColumns = `owner_issuer,owner_subject,email_at_approval,scope,environment,created_at,expires_at,revoked_at`
 
 func validDraftAccess(a DraftAccess) bool {
 	if a.Environment != "preview" || a.Issuer == "" || len(a.Issuer) > 2048 || len(a.AllowedEmails) == 0 || len(a.AllowedEmails) > 100 || a.TokenHash == [32]byte{} {
@@ -64,7 +64,7 @@ func validDraftAccess(a DraftAccess) bool {
 }
 func readDraftGrant(row recipeScanner) (draftGrant, error) {
 	var g draftGrant
-	err := row.Scan(&g.Owner.Issuer, &g.Owner.Subject, &g.Email, &g.Scope, &g.Environment, &g.ExpiresAt, &g.RevokedAt)
+	err := row.Scan(&g.Owner.Issuer, &g.Owner.Subject, &g.Email, &g.Scope, &g.Environment, &g.CreatedAt, &g.ExpiresAt, &g.RevokedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return g, ErrDraftUnauthorized
 	}
@@ -74,7 +74,7 @@ func readDraftGrant(row recipeScanner) (draftGrant, error) {
 	return g, nil
 }
 func draftGrantAllowed(g draftGrant, a DraftAccess, now time.Time) bool {
-	if g.Environment != a.Environment || g.Owner.Issuer != a.Issuer || !validRecipeOwner(g.Owner) || g.Scope != "draft:create" || g.RevokedAt.Valid || !g.ExpiresAt.After(now) {
+	if g.Environment != a.Environment || g.Owner.Issuer != a.Issuer || !validRecipeOwner(g.Owner) || g.Scope != "draft:create" || g.RevokedAt.Valid || g.CreatedAt.After(now) || !g.ExpiresAt.After(g.CreatedAt) || g.ExpiresAt.Sub(g.CreatedAt) > 7*24*time.Hour || !g.ExpiresAt.After(now) {
 		return false
 	}
 	for _, email := range a.AllowedEmails {

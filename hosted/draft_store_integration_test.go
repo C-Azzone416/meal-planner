@@ -8,7 +8,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/lib/pq"
 	"net/url"
 	"os"
 	"reflect"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/C-Azzone416/meal-planner/internal/core/draft"
+	"github.com/lib/pq"
 )
 
 func draftTestStore(t *testing.T) (*PostgresDraftStore, DraftAccess) {
@@ -239,8 +239,114 @@ func TestDraftPostgresRestrictedRuntimeRole(t *testing.T) {
 		t.Fatal("minimal runtime submit failed", err)
 	}
 	for _, statement := range []string{`DELETE FROM public.draft_ingest_submissions`, `UPDATE public.draft_ingest_submissions SET operation_key='wrong'`, `UPDATE public.draft_ingest_grants SET revoked_at=NULL`, `DELETE FROM public.draft_ingest_grants`, `SELECT * FROM meal_planner.recipes`, `CREATE TABLE public.forbidden_runtime_test (id int)`} {
-		if _, err = db.Exec(statement); err == nil {
-			t.Fatalf("restricted runtime allowed %s", statement)
+		_, err = db.Exec(statement)
+		var denied *pq.Error
+		if !errors.As(err, &denied) || denied.Code != "42501" {
+			t.Fatalf("expected insufficient_privilege for %s, got %T: %v", statement, err, err)
 		}
+	}
+}
+
+// Observe the submit blocked on the revoker transaction, rather than relying on
+// scheduling or a sleep to claim that revocation won.
+func TestDraftPostgresRevocationTransactionWins(t *testing.T) {
+	s, a := draftTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	revoke, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer revoke.Rollback()
+	var revokerPID int
+	if err = revoke.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&revokerPID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = revoke.ExecContext(ctx, `UPDATE public.draft_ingest_grants SET revoked_at=clock_timestamp() WHERE token_hash=$1`, a.TokenHash[:]); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, _, e := s.Submit(ctx, a, "revocation-race-operation", syntheticDraftSubmission())
+		result <- e
+	}()
+	observed := false
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case e := <-result:
+			t.Fatalf("submit completed before revoker released row: %v", e)
+		default:
+		}
+		var blocked bool
+		err = s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)))`, revokerPID).Scan(&blocked)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			observed = true
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !observed {
+		t.Fatal("did not observe submit blocked by revocation transaction")
+	}
+	if err = revoke.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-result:
+		if !errors.Is(err, ErrDraftUnauthorized) {
+			t.Fatal("committed revocation not enforced", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("submit failed to unblock after revocation commit")
+	}
+	var rows int
+	if err = s.db.QueryRowContext(ctx, `SELECT count(*) FROM public.draft_ingest_submissions`).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("revoked submit wrote rows=%d err=%v", rows, err)
+	}
+}
+func TestDraftPostgresConcurrentHourlyBoundary(t *testing.T) {
+	s, a := draftTestStore(t)
+	ctx := context.Background()
+	in := syntheticDraftSubmission()
+	for i := 0; i < draftMaxHourlyCount-1; i++ {
+		if _, _, err := s.Submit(ctx, a, fmt.Sprintf("rate-seed-%08d", i), in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := make(chan struct{})
+	results := make(chan error, 12)
+	var wg sync.WaitGroup
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, _, err := s.Submit(ctx, a, fmt.Sprintf("rate-race-%08d", i), in)
+			results <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	accepted, limited := 0, 0
+	for err := range results {
+		if err == nil {
+			accepted++
+		} else if errors.Is(err, ErrDraftQuota) {
+			limited++
+		} else {
+			t.Fatal("unexpected concurrent error", err)
+		}
+	}
+	if accepted != 1 || limited != 11 {
+		t.Fatalf("hourly boundary accepted=%d limited=%d", accepted, limited)
+	}
+	var rows int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM public.draft_ingest_submissions`).Scan(&rows); err != nil || rows != draftMaxHourlyCount {
+		t.Fatalf("quota rows=%d err=%v", rows, err)
 	}
 }
