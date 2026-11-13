@@ -34,9 +34,11 @@ function inspect(root,source=false){
  return {archiveSha256:hash(archive),inventorySha256:hash(inventory),fileCount:files.length,byteCount:files.reduce((n,f)=>n+f.bytes.length,0)}
 }
 async function terminateGroup(child,closed){
+ if(!Number.isSafeInteger(child.pid)||child.pid<=0)throw Error('producer did not obtain a process group')
  try{process.kill(-child.pid,'SIGTERM');await wait(25)}catch(e){if(e.code!=='ESRCH')throw e}
  try{process.kill(-child.pid,'SIGKILL')}catch(e){if(e.code!=='ESRCH')throw e}
- await closed
+ let closeTimer
+ try{await Promise.race([closed,new Promise((_,reject)=>{closeTimer=setTimeout(()=>reject(Error('producer close timeout')),2000)})])}finally{clearTimeout(closeTimer)}
  // Group must be gone before any trusted read/copy. Failure is not a fallback.
  for(let i=0;i<200;i++){
   try{process.kill(-child.pid,0)}catch(e){if(e.code==='ESRCH')return;throw e}
@@ -44,7 +46,7 @@ async function terminateGroup(child,closed){
  }
  throw Error('producer group not confirmed gone')
 }
-async function produceAndSeal(root,mode){
+async function produceAndSeal(root,mode,onStopped=()=>{}){
  const scratch=path.join(root,'scratch'),sealed=path.join(root,'sealed')
  fs.mkdirSync(scratch,{mode:0o700})
  const child=fork(producer,[scratch,mode],{detached:true,env:{},execArgv:[],stdio:['ignore','ignore','ignore','ipc']})
@@ -57,7 +59,7 @@ async function produceAndSeal(root,mode){
    child.once('message',m=>m&&Object.keys(m).length===1&&m.ready===true?resolve():reject(Error('unexpected readiness message')))
    child.once('exit',()=>reject(Error('producer exited before sealing')))
   })
- }finally{clearTimeout(timer);await terminateGroup(child,closed)}
+ }finally{clearTimeout(timer);await terminateGroup(child,closed);onStopped(child.pid)}
  fs.mkdirSync(sealed,{mode:0o700})
  for(const f of scan(scratch,true))fs.writeFileSync(path.join(sealed,f.name),f.bytes,{flag:'wx',mode:0o600})
  assert.deepEqual(inspect(sealed),inspect(scratch,true))
@@ -82,7 +84,18 @@ test('synthetic producer group terminates before seal, receipt and consumer agre
  assert.equal(consume(sealed,f).artifactId,6,'sealed copy independent of original')
  assert.equal(fs.statSync(path.join(sealed,'fake-sdk.txt')).nlink,1)
 }))
-for(const mode of ['symlink','hardlink','fifo','extra','oversize','missing','background','timeout'])test(`synthetic handoff rejects ${mode}`,()=>fixture(async root=>{await assert.rejects(produceAndSeal(root,mode));assert.equal(fs.existsSync(path.join(root,'sealed','fake-sdk.txt')),false)}))
+for(const [mode,expected] of [
+ ['symlink',/bounded regular independent file/],['hardlink',/bounded regular independent file/],
+ ['fifo',/bounded regular independent file/],['extra',/closed synthetic inventory/],
+ ['oversize',/bounded regular independent file/],['missing',/closed synthetic inventory/],
+ ['background',/closed synthetic inventory/],['timeout',/producer readiness timeout/],
+])test(`synthetic handoff rejects ${mode}`,()=>fixture(async root=>{
+ let stoppedPid
+ await assert.rejects(produceAndSeal(root,mode,pid=>{stoppedPid=pid}),expected)
+ assert.ok(Number.isSafeInteger(stoppedPid),'cleanup confirmed independently of rejection')
+ assert.throws(()=>process.kill(-stoppedPid,0),e=>e.code==='ESRCH','producer group must no longer exist')
+ assert.equal(fs.existsSync(path.join(root,'sealed','fake-sdk.txt')),false)
+}))
 test('consumer rejects receipt tampering and sealed output tampering',()=>fixture(async root=>{
  const {sealed}=await produceAndSeal(root,'good'),f=authorityFixture(inspect(sealed))
  assert.throws(()=>consume(sealed,f,JSON.stringify({...f.receipt,sourceSha:'c'.repeat(40)})))
@@ -90,8 +103,8 @@ test('consumer rejects receipt tampering and sealed output tampering',()=>fixtur
  fs.writeFileSync(path.join(sealed,'fake-sdk.txt'),'tampered')
  assert.throws(()=>consume(sealed,f))
 }))
-test('selected OS sandbox restrictions remain UNVERIFIED',t=>{
- t.skip('Capability unavailable in default tool context: sandbox_apply: Operation not permitted. Separate restricted canary probe failed; no network/filesystem isolation verified, no fallback.')
+test('OS isolation NOT validated: prior canary probe FAILED; network untested',t=>{
+ t.skip('NOT a passing isolation check. Historical canary read-denial FAILED; network probe never reached. Default-context initialization separately denied. No retry/fallback.')
 })
 test('known synthetic diagnostics remain outside sealed output',()=>fixture(async root=>{
  const {scratch,sealed}=await produceAndSeal(root,'diagnostics')

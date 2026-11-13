@@ -33,17 +33,22 @@ The encoded fake-source test intentionally passes shape/digest checks while reta
 a recoverable fake private-source canary. This demonstrates why those checks cannot
 prove secrecy. Nothing sensitive is used. No target output is printed or uploaded.
 
-## OS capability limitation: visible skipped test
+## OS isolation NOT validated: failed canary probe (visible skipped reminder)
 
 Read-only inventory found Darwin sandbox-exec and a Docker executable. Docker was not
 started; no service or security settings changed. The parent's default-context sandbox
 probe failed before execution: `sandbox_apply: Operation not permitted`. An initial
 scoped per-process canary probe in this test author's execution context ran but did not
-block the synthetic canary read (exit 2); its network probe was not reached. No isolation
+block the synthetic canary read (exit 2): this isolation probe **FAILED**; its network
+probe was not reached. The exact profile was `(version 1)(allow default)(deny network*)
+(deny file-read* (literal "<synthetic-temp>/outside-canary"))`, passed via
+`sandbox-exec -p PROFILE NODE -e PROBE CANARY`. The probe attempted only the synthetic
+file before its unreached loopback socket check. No isolation
 success is inferred from either result, and no bypass or further sandbox retry followed.
 
-The suite records one explicit skipped capability test rather than passing off these
-probes as protection. The ordinary lifecycle demo is intentionally unrestricted and
+The suite records one explicit skipped historical-failure reminder, NOT a successful
+isolation test or a relabeling of the failed probe as benign unavailability. These
+probes establish no protection. The ordinary lifecycle demo is intentionally unrestricted and
 never advertised as sandbox mode. It attempts no network traffic. Real filesystem and
 network denial, host-credential isolation, kernel/VM trust, safe logging and hostile
 process containment still need a separately reviewed implementation and evidence.
