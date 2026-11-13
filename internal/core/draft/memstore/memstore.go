@@ -83,6 +83,9 @@ func (s *Store) Replace(ctx context.Context, id string, expectedRevision int64, 
 	if err := canceled(ctx); err != nil {
 		return err
 	}
+	if expectedRevision >= draft.MaxRevision {
+		return &draft.Error{Category: draft.CategoryLimitExceeded, Code: draft.CodeRevisionLimit, Message: "the draft is at the maximum revision and cannot be updated"}
+	}
 	if !draft.Validate(next.Content).StructurallyValid {
 		return &draft.Error{Category: draft.CategoryInternal, Code: draft.CodeInternal, Message: "the draft has invalid content"}
 	}
@@ -103,9 +106,6 @@ func (s *Store) Replace(ctx context.Context, id string, expectedRevision int64, 
 			Message:         "the stored revision differs from the expected revision",
 			CurrentRevision: cur.Revision,
 		}
-	}
-	if expectedRevision >= draft.MaxRevision {
-		return &draft.Error{Category: draft.CategoryLimitExceeded, Code: draft.CodeRevisionLimit, Message: "the draft is at the maximum revision and cannot be updated"}
 	}
 	if next.ID != id || next.Revision != expectedRevision+1 || !next.CreatedAt.Equal(cur.CreatedAt) {
 		return &draft.Error{Category: draft.CategoryInternal, Code: draft.CodeInternal, Message: "the replacement draft is inconsistent with the stored draft"}

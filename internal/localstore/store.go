@@ -209,6 +209,9 @@ func checkEnvelope(d draft.Draft) error {
 	if d.SchemaVersion != draft.SchemaVersion || d.Status != draft.StatusDraft {
 		return internal("draft has an invalid schema version or status", nil)
 	}
+	if futureEnvelope(d, time.Now()) {
+		return internal("timestamp is ahead of this machine’s clock", nil)
+	}
 	if !validEnvelope(d, time.Now()) {
 		return internal("draft has an invalid revision or timestamp", nil)
 	}

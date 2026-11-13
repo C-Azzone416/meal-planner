@@ -61,11 +61,15 @@ func TestShowAndListStoredEnvelope(t *testing.T) {
 					args = append(args, "--json")
 				}
 				show := invoke(t, "", nil, args...)
+				wantMessage := "the draft file has an invalid revision or timestamp"
+				if tc.name == "created_at far future" {
+					wantMessage = "timestamp is ahead of this machine’s clock"
+				}
 				if tc.valid {
 					if show.code != 0 || show.stdout == "" {
 						t.Fatalf("show = %+v", show)
 					}
-				} else if show.code != 3 || show.stdout != "" || !strings.Contains(show.err, "the draft file has an invalid revision or timestamp") {
+				} else if show.code != 3 || show.stdout != "" || !strings.Contains(show.err, wantMessage) {
 					t.Fatalf("show = %+v, want exit 3", show)
 				}
 			}

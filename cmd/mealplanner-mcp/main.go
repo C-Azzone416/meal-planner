@@ -140,7 +140,7 @@ func reportInputError(gate *frameGate, logger *slog.Logger) bool {
 	switch err {
 	case nil:
 		return false
-	case errUnsupportedID, errFrameTooLarge, errAmbiguousEnvelope, errAmbiguousToolParams, errDuplicateID, errIDBudget:
+	case errQueueFull, errUnsupportedID, errFrameTooLarge, errAmbiguousEnvelope, errAmbiguousToolParams, errDuplicateID, errIDBudget:
 		logger.Error(err.Error()) // fixed text, independent of the frame
 	default:
 		logger.Error("could not read protocol input")
