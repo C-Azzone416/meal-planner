@@ -175,7 +175,7 @@ func TestFeedbackBrowserServer(t *testing.T) {
 			w.WriteHeader(400)
 			return
 		}
-		if _, err := sqlStore.db.Exec("TRUNCATE framebriar_enrollments"); err != nil {
+		if _, err := sqlStore.db.Exec("TRUNCATE public.framebriar_enrollments"); err != nil {
 			feedbackWriteError(w, err)
 			return
 		}

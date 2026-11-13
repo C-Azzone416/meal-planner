@@ -118,7 +118,7 @@ func (s *feedbackSQLStore) WithRecord(ctx context.Context, owner string, fn func
 	if err != nil {
 		return errFeedbackStorage
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO framebriar_enrollments (owner, generation)
+	_, err = tx.ExecContext(ctx, `INSERT INTO public.framebriar_enrollments (owner, generation)
  VALUES ($1, $2) ON CONFLICT (owner) DO NOTHING`, owner, generation)
 	if err != nil {
 		return errFeedbackStorage
@@ -127,7 +127,7 @@ func (s *feedbackSQLStore) WithRecord(ctx context.Context, owner string, fn func
 	var expires, attemptAt, cooldown, rateWindow sql.NullTime
 	err = tx.QueryRowContext(ctx, `SELECT generation::text, state, key_id, sealed,
  expires_at, attempt, attempt_at, cooldown_until, rate_window, rate_count, attempt_digest
- FROM framebriar_enrollments WHERE owner = $1 FOR UPDATE`, owner).Scan(
+ FROM public.framebriar_enrollments WHERE owner = $1 FOR UPDATE`, owner).Scan(
 		&r.Generation, &r.State, &r.KeyID, &r.Sealed, &expires, &r.Attempt,
 		&attemptAt, &cooldown, &rateWindow, &r.RateCount, &r.AttemptDigest)
 	if err != nil {
@@ -136,7 +136,7 @@ func (s *feedbackSQLStore) WithRecord(ctx context.Context, owner string, fn func
 	r.Expires, r.AttemptAt, r.Cooldown, r.RateWindow = expires.Time, attemptAt.Time, cooldown.Time, rateWindow.Time
 	callbackErr := fn(&r)
 	// Owner cannot be changed by a callback: the verified caller selected the row.
-	_, err = tx.ExecContext(ctx, `UPDATE framebriar_enrollments SET generation=$2,
+	_, err = tx.ExecContext(ctx, `UPDATE public.framebriar_enrollments SET generation=$2,
  state=$3, key_id=$4, sealed=$5, expires_at=$6, attempt=$7, attempt_at=$8,
  cooldown_until=$9, rate_window=$10, rate_count=$11, attempt_digest=$12, updated_at=now() WHERE owner=$1`,
 		owner, r.Generation, r.State, r.KeyID, r.Sealed, feedbackNullableTime(r.Expires),

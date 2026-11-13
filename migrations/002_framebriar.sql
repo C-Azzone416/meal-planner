@@ -4,7 +4,7 @@
 -- credentials. The application never runs migrations or provisions storage.
 -- No invitations, raw account identifiers, or feedback payloads belong here.
 BEGIN;
-CREATE TABLE framebriar_enrollments (
+CREATE TABLE public.framebriar_enrollments (
     owner text PRIMARY KEY CHECK (length(owner) BETWEEN 1 AND 256),
     generation uuid NOT NULL,
     state text NOT NULL DEFAULT '' CHECK (length(state) <= 32),
@@ -19,7 +19,7 @@ CREATE TABLE framebriar_enrollments (
     rate_count integer NOT NULL DEFAULT 0 CHECK (rate_count >= 0),
     updated_at timestamptz NOT NULL DEFAULT now()
 );
-COMMENT ON TABLE framebriar_enrollments IS
+COMMENT ON TABLE public.framebriar_enrollments IS
  'Server-only encrypted Framebriar enrollment, redemption coordination and durable rate limits. Account erasure must revoke first and rotate generation.';
 -- Grant only SELECT, INSERT, UPDATE to the runtime role. Do not expose this table
 -- through browser/public data APIs. Use a separate owner role for migration.

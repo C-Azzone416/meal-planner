@@ -5,11 +5,8 @@ package hosted
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
-	"net/url"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,41 +23,16 @@ func (u feedbackObservedGrant) Grant(ctx context.Context, action string, payload
 	return u.feedbackUpstream.Grant(ctx, action, payload)
 }
 
-// This suite only runs with -tags=integration and explicit opt-in. It creates a
-// unique schema in a disposable local database, never uses FRAMEBRIAR_DATABASE_URL,
-// and removes only that schema. Do not point it at shared or hosted storage.
+// This suite owns a fresh Unix-socket-only PostgreSQL cluster. No supplied DSN,
+// shared database or schema is modified; only its temporary cluster is removed.
 func TestFeedbackPostgres(t *testing.T) {
-	raw := os.Getenv("FEEDBACK_TEST_DATABASE_URL")
-	if raw == "" {
-		t.Skip("set FEEDBACK_TEST_DATABASE_URL to a disposable local PostgreSQL database")
+	if os.Getenv("FEEDBACK_POSTGRES_FIXTURE") != "1" {
+		t.Skip("set FEEDBACK_POSTGRES_FIXTURE=1 for a disposable PostgreSQL cluster")
 	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "postgres" || (u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" && u.Hostname() != "") {
-		t.Fatal("integration database must be a local postgres URL")
-	}
-	if u.Hostname() == "" && !strings.HasPrefix(u.Query().Get("host"), "/") {
-		t.Fatal("local Unix socket directory required")
-	}
-	admin, err := sql.Open("postgres", raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
+	dsn := feedbackDisposablePostgres(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	schema := "feedback_test_" + strings.ReplaceAll(feedbackRandom(), "-", "")
-	if _, err = admin.ExecContext(ctx, "CREATE SCHEMA "+schema); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if _, err := admin.Exec("DROP SCHEMA " + schema + " CASCADE"); err != nil {
-			t.Errorf("schema cleanup: %v", err)
-		}
-	}()
-	q := u.Query()
-	q.Set("search_path", schema)
-	u.RawQuery = q.Encode()
-	dsn := u.String()
+
 	open := func() *feedbackSQLStore {
 		t.Helper()
 		store, err := feedbackTestSQLStore(dsn)
@@ -72,12 +44,27 @@ func TestFeedbackPostgres(t *testing.T) {
 		return s
 	}
 	first, second := open(), open()
+	first.db.SetMaxOpenConns(1)
+	if _, err := first.db.ExecContext(ctx, "CREATE SCHEMA shadow; SET search_path = shadow"); err != nil {
+		t.Fatal(err)
+	}
 	migration, err := os.ReadFile("../migrations/002_framebriar.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = first.db.ExecContext(ctx, string(migration)); err != nil {
 		t.Fatalf("migration: %v", err)
+	}
+	// Deliberately shadow the table on each connection. Qualified application SQL
+	// must still use public, including when a temporary relation would win lookup.
+	for _, store := range []*feedbackSQLStore{first, second} {
+		store.db.SetMaxOpenConns(1)
+		if _, err := store.db.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS shadow;
+CREATE TABLE IF NOT EXISTS shadow.framebriar_enrollments (trap text);
+SET search_path = shadow;
+CREATE TEMP TABLE framebriar_enrollments (trap text);`); err != nil {
+			t.Fatal(err)
+		}
 	}
 	read := func(store *feedbackSQLStore, owner string) feedbackRecord {
 		t.Helper()
@@ -87,6 +74,21 @@ func TestFeedbackPostgres(t *testing.T) {
 		}
 		return out
 	}
+	t.Run("qualified storage ignores schema and temporary shadows", func(t *testing.T) {
+		const owner = "synthetic-qualified-storage"
+		if err := first.WithRecord(ctx, owner, func(r *feedbackRecord) error { r.State = "qualified"; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if got := read(second, owner); got.State != "qualified" {
+			t.Fatalf("wrong persisted state: %q", got.State)
+		}
+		for _, store := range []*feedbackSQLStore{first, second} {
+			var count int
+			if err := store.db.QueryRowContext(ctx, "SELECT count(*) FROM pg_temp.framebriar_enrollments").Scan(&count); err != nil || count != 0 {
+				t.Fatalf("temporary shadow touched: count=%d err=%v", count, err)
+			}
+		}
+	})
 	t.Run("pending committed before upstream and survives new pool", func(t *testing.T) {
 		service, _, upstream := feedbackFixture()
 		service.store = first
@@ -96,7 +98,7 @@ func TestFeedbackPostgres(t *testing.T) {
 			// Plain SELECT from another pool must see the committed attempt even
 			// while the caller holds its second transaction's row lock.
 			var attempt string
-			if err := second.db.QueryRowContext(ctx, "SELECT attempt FROM framebriar_enrollments WHERE owner=$1", owner).Scan(&attempt); err != nil || attempt == "" {
+			if err := second.db.QueryRowContext(ctx, "SELECT attempt FROM public.framebriar_enrollments WHERE owner=$1", owner).Scan(&attempt); err != nil || attempt == "" {
 				t.Fatalf("upstream contacted before durable attempt: %v", err)
 			}
 		}}

@@ -39,6 +39,21 @@ Expired/revoked/disconnected scopes are still inspected and can be cleared, but 
 
 `npm run --prefix web test:browser` starts the test-only Go fixture and Vite server. PostgreSQL command-line tools and pinned Playwright Chromium/WebKit browsers must already be installed. The fixture uses a new private temporary PostgreSQL cluster, real JWT verification, real handlers/store/protocol client and synthetic-only provider/Framebriar transports. No production binary imports it. Shutdown is explicit/graceful and stops the temporary database.
 
-The matrix covers desktop Chromium, phone Chromium and iPhone/WebKit: connect/cancel/reopen/Send/receipt/disconnect; failed delivery and discard confirmation; PNG positive/negative privacy controls including clipped content; shared account enrollment across devices and confirmed account switching. Browser HTTPS traffic is blocked during these tests. Unit tests cover additional storage, queue, expiry, malformed receipt, rate-limit, auth-outage, save/clear and scope races. Real SQL integration is opt-in with `FEEDBACK_TEST_DATABASE_URL` and `go test -tags=integration -race -run '^TestFeedbackPostgres$' ./hosted` against a disposable database only.
+The matrix covers desktop Chromium, phone Chromium and iPhone/WebKit: connect/cancel/reopen/Send/receipt/disconnect; failed delivery and discard confirmation; PNG positive/negative privacy controls including clipped content; shared account enrollment across devices and confirmed account switching. Browser HTTPS traffic is blocked during these tests. Unit tests cover additional storage, queue, expiry, malformed receipt, rate-limit, auth-outage, save/clear and scope races. Real SQL integration is opt-in with `FEEDBACK_POSTGRES_FIXTURE=1` and `go test -tags=integration -race -run '^TestFeedbackPostgres$' ./hosted` against a newly created Unix-socket-only temporary cluster; no supplied database URL is accepted.
 
 Passing synthetic tests does not establish private-registry access, real Vercel packaging, service registration, live provider setup or delivery receipt. Those remain explicit release gates.
+
+### Enrollment storage namespace and migration history
+
+Migration 002 and runtime queries explicitly use `public.framebriar_enrollments`.
+The runtime role needs CONNECT, schema USAGE, and SELECT/INSERT/UPDATE only on that
+specific table, not ownership, CREATE, or inherited elevated rights. Verify no
+PUBLIC or unrelated/browser-facing role has table access and no browser data API
+exposes it. Do not enable DSN search_path/options overrides. Inspect effective
+schema privileges, including other untrusted roles, before enabling Preview.
+
+This source revision does not apply a migration. Before applying 002 in any
+environment, inspect existing table location and previously recorded checksum.
+If an earlier unqualified revision was applied, do not rerun or silently replace
+migration history: reconcile its location and grants through a reviewed migration.
+Production requires its own inspection, authorization and readiness evidence.
