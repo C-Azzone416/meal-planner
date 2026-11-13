@@ -56,3 +56,7 @@ Only generic product and engineering plans belong in this public repository. Do 
 ## Status
 
 Planning baseline: **ready for review**. Any item labeled **Proposed** or **Unresolved** requires a decision or validation before it can become an implementation requirement.
+
+## Framebriar integration candidate
+
+The feedback UI, authenticated proxy and isolated enrollment store are present in this candidate. Feedback remains disabled. Private Preview deployment, target-specific migration readiness and runtime setup require independent review and approval. No live receipt has been verified. See [feedback runbook](docs/runbooks/framebriar.md) and the [current secure CI boundary](docs/runbooks/framebriar-ci-wiring.md).
