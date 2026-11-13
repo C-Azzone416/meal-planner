@@ -28,7 +28,7 @@ node - "$repo/vercel.json" "$root/project/vercel.json" <<'JS'
 const fs = require('node:fs');
 const input = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 if (!Array.isArray(input.rewrites)) throw Error('Expected reviewed public route rules');
-fs.writeFileSync(process.argv[3], JSON.stringify({installCommand:'echo synthetic-no-dependencies',buildCommand:'node build.mjs',outputDirectory:'web/dist',rewrites:input.rewrites},null,2));
+fs.writeFileSync(process.argv[3], JSON.stringify({installCommand:'echo synthetic-no-dependencies',buildCommand:'node build.mjs',outputDirectory:'web/dist',rewrites:input.rewrites,functions:{"api/**/*.go":{architecture:"x86_64"}}},null,2));
 JS
 cat > "$root/project/.vercel/project.json" <<'JSON'
 {"projectId":"prj_syntheticFixtureOnly","orgId":"team_syntheticFixtureOnly","settings":{"framework":null,"devCommand":null,"installCommand":"echo synthetic-no-dependencies","buildCommand":"node build.mjs","outputDirectory":"web/dist","rootDirectory":null,"nodeVersion":"24.x"}}

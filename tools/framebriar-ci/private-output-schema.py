@@ -50,10 +50,11 @@ def validate_config(raw, trusted_golden_raw):
 
 def validate_materialized_go_config(raw):
     actual = strict_json(raw)
-    # ARM64 is the only observed actual pinned-CLI fixture so far. Do not claim
-    # x86_64 compatibility until its real build fixture has been verified.
+    # The source-level x86_64 override is supported by the pinned CLI and
+    # matches the observed legacy Go builder binary. The default ARM64 fixture
+    # remains a negative regression; do not silently repair emitted metadata.
     expected = dict(handler='bootstrap', runtime='provided.al2023', runtimeLanguage='go',
-                    architecture='arm64', environment={}, supportsWrapper=True)
+                    architecture='x86_64', environment={}, supportsWrapper=True)
     if actual != expected or any(type(actual.get(k)) is not type(v) for k,v in expected.items()):
         raise ValueError('unsupported materialized Go config')
     return actual
@@ -74,7 +75,7 @@ def validate_function_binary(config_raw, binary):
     if int.from_bytes(binary[16:18], 'little') != 2 or int.from_bytes(binary[20:24], 'little') != 1 or int.from_bytes(binary[52:54], 'little') != 64:
         raise ValueError('unsupported ELF header')
     machine = int.from_bytes(binary[18:20], 'little')
-    expected_machine = {'arm64': 183}[config['architecture']]
+    expected_machine = {'x86_64': 62}[config['architecture']]
     if machine != expected_machine:
         raise ValueError('ELF architecture differs from function metadata')
     return config

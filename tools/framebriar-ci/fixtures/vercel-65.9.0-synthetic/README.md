@@ -76,3 +76,16 @@ with the actual Linux release build and explicitly selected architecture.
 The ELF helper checks only the bounded ELF64 little-endian version/type/header
 size and machine binding. It does not validate all program sections or prove that
 a binary is runnable or safe. Its passing ARM64-header fixture is synthetic.
+
+## Supported source configuration follow-up
+
+A separate credential-free synthetic build with `functions: {"api/**/*.go":
+{"architecture":"x86_64"}}` in **source** vercel.json was accepted by CLI65.9.0.
+Its untouched generated metadata is `go-config-x86_64.json`; the materialized
+bootstrap is ELF x86-64, SHA256
+`00bb49fa94b1b874ce80b05e5b08469b9cf9faa631b16a182fa5769e1d529412`.
+Routes were byte-identical to config.json. The publish schema now permits only
+this matching x86_64 metadata shape. The original go-config.json is retained as
+a rejected regression, not silently rewritten. The saved generator emits the
+explicit source override. This resolves the observed synthetic host-default
+mismatch, not the independent Linux full-application/live verification gates.
