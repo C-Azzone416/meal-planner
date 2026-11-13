@@ -34,6 +34,7 @@ func Run(t *testing.T, newStore func(t *testing.T) draft.Store) {
 		{"ReplaceUpdates", testReplace},
 		{"ReplaceStaleRevision", testReplaceStale},
 		{"ReplaceMissing", testReplaceMissing},
+		{"RevisionCapPrecedesLookup", testRevisionCapPrecedesLookup},
 		{"ReplaceInconsistentNext", testReplaceInconsistent},
 		{"ReplaceAfterRevisionMovedOn", testReplaceMovedOn},
 		{"ConcurrentReplaceOneWinner", testConcurrentReplace},
@@ -534,5 +535,27 @@ func testConcurrentCreate(t *testing.T, s draft.Store) {
 	res, err := s.List(bg)
 	if err != nil || len(res.Drafts) != 1 {
 		t.Fatalf("List: %v, %d drafts; want exactly one", err, len(res.Drafts))
+	}
+}
+
+func testRevisionCapPrecedesLookup(t *testing.T, s draft.Store) {
+	d := Minimal(ID(1))
+	if err := s.Create(bg, d); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{d.ID, ID(2)} {
+		for _, rev := range []int64{draft.MaxRevision, draft.MaxRevision + 1} {
+			next := Minimal(id)
+			next.Revision = rev + 1
+			err := s.Replace(bg, id, rev, next)
+			var e *draft.Error
+			if !errors.As(err, &e) || e.Code != draft.CodeRevisionLimit {
+				t.Fatalf("cap must precede stale/missing lookup: %v", err)
+			}
+		}
+	}
+	got, err := s.Get(bg, d.ID)
+	if err != nil || got.Revision != 1 {
+		t.Fatal("cap failure changed draft")
 	}
 }

@@ -46,3 +46,10 @@ func validEnvelope(d draft.Draft, now time.Time) bool {
 	}
 	return !d.UpdatedAt.Before(d.CreatedAt)
 }
+
+// futureEnvelope distinguishes clock skew from malformed envelope data without
+// exposing any stored timestamps or filesystem details.
+func futureEnvelope(d draft.Draft, now time.Time) bool {
+	limit := now.Add(draft.MaxFutureSkew)
+	return d.CreatedAt.After(limit) || d.UpdatedAt.After(limit)
+}

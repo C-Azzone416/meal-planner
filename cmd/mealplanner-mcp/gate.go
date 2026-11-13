@@ -14,6 +14,8 @@ import (
 // or CRLF terminator is excluded, and all other padding counts.
 const maxTrackedLine = 4 << 20
 
+const maxQueuedBytes = 8 << 20
+
 // The byte limit bounds retained decoded strings without shrinking the existing
 // per-frame limit. The count limit also bounds the map cost of short, empty and
 // numeric IDs. Both leave room for thousands of ordinary host calls.
@@ -78,10 +80,9 @@ func newFrameGate(grace time.Duration) *frameGate {
 	return g
 }
 
-// start reads src in the background. Call once. The pump has no backpressure: it queues everything
-// it reads, however slowly the SDK consumes it. That is acceptable for a local stdio server whose
-// client is trusted to be the user's own agent host (the same trust model as the rest of this
-// slice); a hostile peer on stdin could already run anything the user can.
+// start reads src in the background. Call once. Queued protocol bytes are
+// bounded by maxQueuedBytes; a peer that outruns the SDK is rejected before
+// the overflowing frame is registered, with the usual bounded shutdown grace.
 func (g *frameGate) start(src io.Reader) {
 	go func() {
 		buf := make([]byte, 32<<10)

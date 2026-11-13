@@ -104,9 +104,9 @@ func (v *validator) text(path, s string, r textRule) {
 	multiline := multilineText(path)
 	if !validChars(s, multiline) {
 		if multiline {
-			v.err(IssueInvalidChars, path, "contains characters that are not allowed (bidirectional embedding, override or isolate controls, control characters other than newline, carriage return and tab, or invalid UTF-8)")
+			v.err(IssueInvalidChars, path, "contains characters that are not allowed (Unicode tag characters, bidirectional embedding, override or isolate controls, control characters other than newline, carriage return and tab, or invalid UTF-8)")
 		} else {
-			v.err(IssueInvalidChars, path, "contains characters that are not allowed (control characters, line or paragraph separators, BOM, bidirectional embedding, override or isolate controls, or invalid UTF-8)")
+			v.err(IssueInvalidChars, path, "contains characters that are not allowed (Unicode tag characters, control characters, line or paragraph separators, BOM, bidirectional embedding, override or isolate controls, or invalid UTF-8)")
 		}
 	}
 	if utf8.RuneCountInString(s) > r.maxRunes {
@@ -122,7 +122,7 @@ func validChars(s string, multiline bool) bool {
 		if multiline && (r == '\n' || r == '\r' || r == '\t') {
 			continue
 		}
-		if unicode.IsControl(r) || (unicode.Is(unicode.Bidi_Control, r) && r != '\u200e' && r != '\u200f' && r != '\u061c') {
+		if (r >= 0xe0000 && r <= 0xe007f) || unicode.IsControl(r) || (unicode.Is(unicode.Bidi_Control, r) && r != '\u200e' && r != '\u200f' && r != '\u061c') {
 			return false
 		}
 		if !multiline && (r == '\u2028' || r == '\u2029' || r == '\ufeff') {
