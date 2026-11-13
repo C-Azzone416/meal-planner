@@ -503,3 +503,68 @@ func TestVerifyBearerRejectsMalformedSignatureWithoutProviderIO(t *testing.T) {
 		t.Fatalf("err=%v provider calls=%d", err, calls)
 	}
 }
+
+func TestVerifyBearerRejectsHopelessClaimsBeforeProviderIO(t *testing.T) {
+	f := newBearerFixture(t)
+	cases := map[string]map[string]any{}
+	for _, name := range []string{"expired", "future", "wrong issuer", "wrong audience", "invalid exp", "invalid iat"} {
+		claims := f.claims()
+		switch name {
+		case "expired":
+			claims["exp"] = f.now.Unix()
+		case "future":
+			claims["nbf"] = f.now.Add(time.Hour).Unix()
+		case "wrong issuer":
+			claims["iss"] = "https://other.example.test"
+		case "wrong audience":
+			claims["aud"] = "https://other.example.test"
+		case "invalid exp":
+			claims["exp"] = "tomorrow"
+		case "invalid iat":
+			claims["iat"] = "yesterday"
+		}
+		cases[name] = claims
+	}
+	for name, claims := range cases {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			config := f.config()
+			config.Client = httpDoerFunc(func(*http.Request) (*http.Response, error) { calls++; return nil, errors.New("synthetic outage") })
+			_, err := VerifyBearer(t.Context(), "Bearer "+f.token(t, claims), config)
+			if !errors.Is(err, ErrInvalidBearer) || calls != 0 {
+				t.Fatalf("err=%v provider calls=%d", err, calls)
+			}
+		})
+	}
+}
+
+func TestVerifyBearerPrivateMembershipRemainsAfterSignature(t *testing.T) {
+	f := newBearerFixture(t)
+	for _, email := range []string{testAllowedEmail, "not-a-member@example.test"} {
+		calls := 0
+		config := f.config()
+		config.Client = httpDoerFunc(func(*http.Request) (*http.Response, error) { calls++; return nil, errors.New("synthetic outage") })
+		claims := f.claims()
+		claims["email"] = email
+		_, err := VerifyBearer(t.Context(), "Bearer "+f.token(t, claims), config)
+		if !errors.Is(err, ErrAuthConfiguration) || calls != 1 {
+			t.Fatalf("private membership changed pre-verification behavior: %v calls=%d", err, calls)
+		}
+	}
+}
+
+func TestVerifyBearerRechecksExpiryAfterKeyRetrieval(t *testing.T) {
+	f := newBearerFixture(t)
+	claims := f.claims()
+	claims["exp"] = f.now.Add(time.Second).Unix()
+	config := f.config()
+	original := config.Client
+	config.Client = httpDoerFunc(func(r *http.Request) (*http.Response, error) {
+		response, err := original.Do(r)
+		f.now = f.now.Add(2 * time.Second)
+		return response, err
+	})
+	if _, err := VerifyBearer(t.Context(), "Bearer "+f.token(t, claims), config); !errors.Is(err, ErrInvalidBearer) {
+		t.Fatalf("expired during retrieval: %v", err)
+	}
+}
