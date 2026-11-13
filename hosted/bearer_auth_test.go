@@ -471,3 +471,35 @@ func TestNumericDateRepresentationBounds(t *testing.T) {
 		}
 	}
 }
+
+// Invalid signature encodings previously triggered a provider request before
+// rejection (and became a 503 during an outage). They must be rejected locally.
+func TestVerifyBearerRejectsMalformedSignatureWithoutProviderIO(t *testing.T) {
+	f := newBearerFixture(t)
+	token := strings.Split(f.token(t, f.claims()), ".")
+	for _, signature := range []string{"!", "AA", base64.RawURLEncoding.EncodeToString(make([]byte, 63)), base64.RawURLEncoding.EncodeToString(make([]byte, 65)), strings.Repeat("A", 86) + "="} {
+		t.Run(signature, func(t *testing.T) {
+			calls := 0
+			config := f.config()
+			config.Client = httpDoerFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				return nil, errors.New("synthetic provider outage")
+			})
+			_, err := VerifyBearer(t.Context(), "Bearer "+token[0]+"."+token[1]+"."+signature, config)
+			if !errors.Is(err, ErrInvalidBearer) || calls != 0 {
+				t.Fatalf("err=%v provider calls=%d", err, calls)
+			}
+		})
+	}
+	// Well-formed signatures still require provider verification and fail closed.
+	calls := 0
+	config := f.config()
+	config.Client = httpDoerFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, errors.New("synthetic provider outage")
+	})
+	_, err := VerifyBearer(t.Context(), "Bearer "+strings.Join(token, "."), config)
+	if !errors.Is(err, ErrAuthConfiguration) || calls != 1 {
+		t.Fatalf("err=%v provider calls=%d", err, calls)
+	}
+}

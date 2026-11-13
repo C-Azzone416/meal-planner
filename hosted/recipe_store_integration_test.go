@@ -526,3 +526,51 @@ func TestRecipePostgresByteBoundedListPagesContinueWithoutLossOrDuplicates(t *te
 		t.Fatalf("expected the oversized list to span several pages, got %v", counts)
 	}
 }
+
+// Exercise subject isolation independently of issuer isolation, including SQL
+// metacharacters. Every user-controlled value must remain a bound parameter.
+func TestRecipePostgresOwnerMatrixAndInjection(t *testing.T) {
+	s, _ := recipeTestDatabase(t)
+	ctx := t.Context()
+	owners := []RecipeOwner{
+		{"https://issuer-a.example.test", "alice"},
+		{"https://issuer-a.example.test", "bob"},
+		{"https://issuer-b.example.test", "alice"},
+		{"https://issuer-a.example.test", "alice' OR '1'='1"},
+		{"issuer' OR '1'='1", "alice"},
+	}
+	saved := make([]RecipeEnvelope, len(owners))
+	content := syntheticRecipeContent()
+	content.Title = "Synthetic '); DROP TABLE meal_planner.recipes; --"
+	for i, owner := range owners {
+		var err error
+		var replay bool
+		saved[i], replay, err = s.Create(ctx, owner, "same-key' OR '1'='1", content)
+		if err != nil || replay {
+			t.Fatalf("create %d: replay=%v error=%v", i, replay, err)
+		}
+	}
+	for i, owner := range owners {
+		rows, next, err := s.List(ctx, owner, "", 100)
+		if err != nil || len(rows) != 1 || next != "" || rows[0].ID != saved[i].ID || rows[0].Content.Title != content.Title {
+			t.Fatalf("list %d: count=%d error=%v", i, len(rows), err)
+		}
+		for j, recipe := range saved {
+			if i == j {
+				continue
+			}
+			got, err := s.Get(ctx, owner, recipe.ID)
+			if !errors.Is(err, ErrRecipeNotFound) || got.ID != "" {
+				t.Fatalf("foreign get %d/%d: %v", i, j, err)
+			}
+			got, err = s.Update(ctx, owner, recipe.ID, recipe.Revision, content)
+			if !errors.Is(err, ErrRecipeNotFound) || got.ID != "" {
+				t.Fatalf("foreign update %d/%d: %v", i, j, err)
+			}
+		}
+		replayed, replay, err := s.Create(ctx, owner, "same-key' OR '1'='1", content)
+		if err != nil || !replay || replayed.ID != saved[i].ID {
+			t.Fatalf("receipt isolation %d: %v", i, err)
+		}
+	}
+}
