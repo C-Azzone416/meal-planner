@@ -34,11 +34,11 @@ test('workflow keeps reader in fixed install before target checkout and clean re
  assert.match(reader,/env -i PATH=/);assert.match(reader,/npm ci --ignore-scripts/);assert.match(reader,/--logs-max=0/)
  assert.doesNotMatch(reader,/npm run|node .*target|bash .*target/)
  assert.equal((w.match(/secrets.FRAMEBRIAR_PACKAGE_READ_TOKEN/g)||[]).length,1)
- const report=w.split('\n  evidence:\n')[1]
+ const report=w.split('\n  evidence:\n')[1].split('\n  pull:\n')[0]
  assert.doesNotMatch(report,/path: target|secrets\.|checks: write|statuses: write/)
  assert.match(report,/overwrite: false/)
  assert.doesNotMatch(w,/pull_request_target|cache: npm/)
- assert.equal((w.match(/uses: actions\/upload-artifact/g)||[]).length,1)
+ assert.equal((report.match(/uses: actions\/upload-artifact/g)||[]).length,1)
 })
 
 test('artifact collision cannot pass if clean reporter upload fails', () => {
@@ -103,7 +103,8 @@ test('public Preview retains original migration and deployment guards',()=>{
  const build=workflow.split('\n  build:\n')[1].split('\n  deploy:\n')[0]
  const deploy=workflow.split('\n  deploy:\n')[1]
  assert.match(build,/ref: \$\{\{ inputs.sha \}\}/)
- assert.match(build,/hashFiles\('db\/migrations\/\*\*'\)/)
+ assert.match(build,/Reject unsupported db\/migrations runner input \(Preview\)/)
+ assert.match(build,/hashFiles\('db\/migrations/)
  assert.match(build,/name: Vercel build \(preview\)/)
  assert.match(build,/materialize-output.sh \./)
  assert.match(build,/id: pack/)
@@ -113,10 +114,12 @@ test('public Preview retains original migration and deployment guards',()=>{
  assert.match(deploy,/EXPECTED_OUTPUT_SHA256/)
  assert.match(deploy,/deploy --prebuilt --target=preview/)
 })
-test('reusable Preview caller and source selector need only contents read',()=>{
+test('Preview selector remains contents-only; caller permits read-only evidence',()=>{
  const caller=fs.readFileSync('.github/workflows/ci.yml','utf8').split('\n  preview:\n')[1].split('\n  required:\n')[0]
- const selector=fs.readFileSync('.github/workflows/preview.yml','utf8').split('\n  select-source:\n')[1].split('\n  pull:\n')[0]
- for(const text of [caller,selector]) {
+ const selector=fs.readFileSync('.github/workflows/preview.yml','utf8').split('\n  select-source:\n')[1].split('\n  private-proof:\n')[0]
+ assert.match(caller,/actions: read/);assert.match(caller,/pull-requests: read/)
+ assert.doesNotMatch(caller,/permissions: write-all|: write\b/)
+ for(const text of [selector]) {
   assert.match(text,/contents: read/)
   assert.doesNotMatch(text,/actions: read|pull-requests: read|permissions: write-all|: write\b/)
  }

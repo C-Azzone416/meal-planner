@@ -1,0 +1,243 @@
+{
+  "synthetic_only": true,
+  "source_commit_route_inventory": "5efdc121f40a88eb34ed2b7bb505fe52dec6d730",
+  "vercel_cli": "65.9.0",
+  "node": "26.9.0",
+  "go_minimum": "1.26.11",
+  "builders": [
+    {
+      "name": "@vercel/go",
+      "version": "27.0.1",
+      "package_json_sha256": "9e21c945debf3ff0c734e32f9bcdfade9a61242412674fa8f25e892d8e620785"
+    },
+    {
+      "name": "@vercel/static-build",
+      "version": "26.0.1",
+      "package_json_sha256": "377b83ba4b3d9c390db92363046ddaf572ec0a0a9f9dc7fc8e1f311f5252aedb"
+    }
+  ],
+  "functions": [
+    {
+      "path": "functions/api/auth/authorize/index.func/bootstrap",
+      "file": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=xlKuCAz4ug_5VeF6TaO4/RZg5aHBTJALQbSFHEjw1/kEDnJRXspDSUEh2o-nov/R61r6ggbdK1cd0WYlKuL, BuildID[sha1]=06edc505f71ff2dfd092d9c8aea733dd0c67b333, stripped",
+      "go_build_info": [
+        "functions/api/auth/authorize/index.func/bootstrap: go1.26.11",
+        "\tpath\tcommand-line-arguments",
+        "\tdep\tgithub.com/aws/aws-lambda-go\tv1.54.0\th1:EGYpdyRGF88xszqlGcBewz811mJeRS+maNlLZXFheII=",
+        "\tdep\tgithub.com/vercel/go-bridge\tv0.0.0-20260827232521-cfc76d26d554\th1:Fq47WonoFderM7XOyWZrzj8EZqyfzc/rnga8/g3YsnM=",
+        "\tdep\thandler\t(devel)\t",
+        "\tbuild\t-buildmode=exe",
+        "\tbuild\t-compiler=gc",
+        "\tbuild\t-ldflags=\"-s -w\"",
+        "\tbuild\tCGO_ENABLED=0",
+        "\tbuild\tGOARCH=amd64",
+        "\tbuild\tGOOS=linux",
+        "\tbuild\tGOAMD64=v1"
+      ]
+    },
+    {
+      "path": "functions/api/auth/before-create/index.func/bootstrap",
+      "file": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=xcqhECUax-628t7EwF0H/NfQmrekCZjqcuxnu4StE/AyZxwpfpqzjrzJ2QUvNq/7R9hGxh_VlaKtpiJ0aq-, BuildID[sha1]=7b1b94828f3f86405309570b6422e0d3d6d66e0c, stripped",
+      "go_build_info": [
+        "functions/api/auth/before-create/index.func/bootstrap: go1.26.11",
+        "\tpath\tcommand-line-arguments",
+        "\tdep\tgithub.com/aws/aws-lambda-go\tv1.54.0\th1:EGYpdyRGF88xszqlGcBewz811mJeRS+maNlLZXFheII=",
+        "\tdep\tgithub.com/vercel/go-bridge\tv0.0.0-20260827232521-cfc76d26d554\th1:Fq47WonoFderM7XOyWZrzj8EZqyfzc/rnga8/g3YsnM=",
+        "\tdep\thandler\t(devel)\t",
+        "\tbuild\t-buildmode=exe",
+        "\tbuild\t-compiler=gc",
+        "\tbuild\t-ldflags=\"-s -w\"",
+        "\tbuild\tCGO_ENABLED=0",
+        "\tbuild\tGOARCH=amd64",
+        "\tbuild\tGOOS=linux",
+        "\tbuild\tGOAMD64=v1"
+      ]
+    },
+    {
+      "path": "functions/api/auth-config/index.func/bootstrap",
+      "file": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=qEaLRbX5j_wA5vOu6yRU/zFpeskp3KbYV3BIsVFT0/NtKatTHcvFGqQX2DmsPT/ZcxZkq6Z_OIabDjjIazR, BuildID[sha1]=8ec8f39881a790bec99663e529d1a09a7a86e9b1, stripped",
+      "go_build_info": [
+        "functions/api/auth-config/index.func/bootstrap: go1.26.11",
+        "\tpath\tcommand-line-arguments",
+        "\tdep\tgithub.com/aws/aws-lambda-go\tv1.54.0\th1:EGYpdyRGF88xszqlGcBewz811mJeRS+maNlLZXFheII=",
+        "\tdep\tgithub.com/vercel/go-bridge\tv0.0.0-20260827232521-cfc76d26d554\th1:Fq47WonoFderM7XOyWZrzj8EZqyfzc/rnga8/g3YsnM=",
+        "\tdep\thandler\t(devel)\t",
+        "\tbuild\t-buildmode=exe",
+        "\tbuild\t-compiler=gc",
+        "\tbuild\t-ldflags=\"-s -w\"",
+        "\tbuild\tCGO_ENABLED=0",
+        "\tbuild\tGOARCH=amd64",
+        "\tbuild\tGOOS=linux",
+        "\tbuild\tGOAMD64=v1"
+      ]
+    },
+    {
+      "path": "functions/api/auth-proxy/index.func/bootstrap",
+      "file": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=epaSxdXo5DRb15jXCjRV/vMOxrpKBhtZBVKhi0jTx/ANqY0ghfY-kySO0mzerK/ozV0b8_ka9HArlJz9c91, BuildID[sha1]=2d6c8756db4e49e11aa9c7160d786fa8a756ab5c, stripped",
+      "go_build_info": [
+        "functions/api/auth-proxy/index.func/bootstrap: go1.26.11",
+        "\tpath\tcommand-line-arguments",
+        "\tdep\tgithub.com/aws/aws-lambda-go\tv1.54.0\th1:EGYpdyRGF88xszqlGcBewz811mJeRS+maNlLZXFheII=",
+        "\tdep\tgithub.com/vercel/go-bridge\tv0.0.0-20260827232521-cfc76d26d554\th1:Fq47WonoFderM7XOyWZrzj8EZqyfzc/rnga8/g3YsnM=",
+        "\tdep\thandler\t(devel)\t",
+        "\tbuild\t-buildmode=exe",
+        "\tbuild\t-compiler=gc",
+        "\tbuild\t-ldflags=\"-s -w\"",
+        "\tbuild\tCGO_ENABLED=0",
+        "\tbuild\tGOARCH=amd64",
+        "\tbuild\tGOOS=linux",
+        "\tbuild\tGOAMD64=v1"
+      ]
+    },
+    {
+      "path": "functions/api/draft-submissions/index.func/bootstrap",
+      "file": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=BvwnTRvvPwJPvjRwK06H/r7pUOMiEQsZvyhnm0wyO/sI_pYA1_9RNCc75134y7/xG6vnmrSmy5LI8EDVxMB, BuildID[sha1]=d928753aa2e43e045152ceefa865bf78e6547a5e, stripped",
+      "go_build_info": [
+        "functions/api/draft-submissions/index.func/bootstrap: go1.26.11",
+        "\tpath\tcommand-line-arguments",
+        "\tdep\tgithub.com/aws/aws-lambda-go\tv1.54.0\th1:EGYpdyRGF88xszqlGcBewz811mJeRS+maNlLZXFheII=",
+        "\tdep\tgithub.com/vercel/go-bridge\tv0.0.0-20260827232521-cfc76d26d554\th1:Fq47WonoFderM7XOyWZrzj8EZqyfzc/rnga8/g3YsnM=",
+        "\tdep\thandler\t(devel)\t",
+        "\tbuild\t-buildmode=exe",
+        "\tbuild\t-compiler=gc",
+        "\tbuild\t-ldflags=\"-s -w\"",
+        "\tbuild\tCGO_ENABLED=0",
+        "\tbuild\tGOARCH=amd64",
+        "\tbuild\tGOOS=linux",
+        "\tbuild\tGOAMD64=v1"
+      ]
+    },
+    {
+      "path": "functions/api/feedback/connect/index.func/bootstrap",
+      "file": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=a-OtfgV0i0r7zLprPZ6_/eYxMW_GJCEQEook7XK80/EygBD1QRNPHuKJL16I9S/tbLyBs8Zd5pV62IWytUu, BuildID[sha1]=ae4f17d3c0c750dd85f44737e03a3bf11e841300, stripped",
+      "go_build_info": [
+        "functions/api/feedback/connect/index.func/bootstrap: go1.26.11",
+        "\tpath\tcommand-line-arguments",
+        "\tdep\tgithub.com/aws/aws-lambda-go\tv1.54.0\th1:EGYpdyRGF88xszqlGcBewz811mJeRS+maNlLZXFheII=",
+        "\tdep\tgithub.com/vercel/go-bridge\tv0.0.0-20260827232521-cfc76d26d554\th1:Fq47WonoFderM7XOyWZrzj8EZqyfzc/rnga8/g3YsnM=",
+        "\tdep\thandler\t(devel)\t",
+        "\tbuild\t-buildmode=exe",
+        "\tbuild\t-compiler=gc",
+        "\tbuild\t-ldflags=\"-s -w\"",
+        "\tbuild\tCGO_ENABLED=0",
+        "\tbuild\tGOARCH=amd64",
+        "\tbuild\tGOOS=linux",
+        "\tbuild\tGOAMD64=v1"
+      ]
+    },
+    {
+      "path": "functions/api/feedback/disconnect/index.func/bootstrap",
+      "file": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=3H_O__fGHDNA_h2R_4EC/0qIfsxkrbJLhP9-40wIa/QpZzxr1JGFMgFH1P0U4U/LlQs4EWgXXeSvsN8pR86, BuildID[sha1]=edc9f9a643bc3b32c4ad321d3132d35d28d4526b, stripped",
+      "go_build_info": [
+        "functions/api/feedback/disconnect/index.func/bootstrap: go1.26.11",
+        "\tpath\tcommand-line-arguments",
+        "\tdep\tgithub.com/aws/aws-lambda-go\tv1.54.0\th1:EGYpdyRGF88xszqlGcBewz811mJeRS+maNlLZXFheII=",
+        "\tdep\tgithub.com/vercel/go-bridge\tv0.0.0-20260827232521-cfc76d26d554\th1:Fq47WonoFderM7XOyWZrzj8EZqyfzc/rnga8/g3YsnM=",
+        "\tdep\thandler\t(devel)\t",
+        "\tbuild\t-buildmode=exe",
+        "\tbuild\t-compiler=gc",
+        "\tbuild\t-ldflags=\"-s -w\"",
+        "\tbuild\tCGO_ENABLED=0",
+        "\tbuild\tGOARCH=amd64",
+        "\tbuild\tGOOS=linux",
+        "\tbuild\tGOAMD64=v1"
+      ]
+    },
+    {
+      "path": "functions/api/feedback/reports/index.func/bootstrap",
+      "file": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=hRhwpSDp42TB0zX4m6hd/jgv-wnqyKSvXvfPwS-cI/e7hzvck68G05-ZF0GRDR/l-B7c8o49qqyA0gl2hsk, BuildID[sha1]=e9e5c156ad738ddc09bd0e176ad77dbae910732d, stripped",
+      "go_build_info": [
+        "functions/api/feedback/reports/index.func/bootstrap: go1.26.11",
+        "\tpath\tcommand-line-arguments",
+        "\tdep\tgithub.com/aws/aws-lambda-go\tv1.54.0\th1:EGYpdyRGF88xszqlGcBewz811mJeRS+maNlLZXFheII=",
+        "\tdep\tgithub.com/vercel/go-bridge\tv0.0.0-20260827232521-cfc76d26d554\th1:Fq47WonoFderM7XOyWZrzj8EZqyfzc/rnga8/g3YsnM=",
+        "\tdep\thandler\t(devel)\t",
+        "\tbuild\t-buildmode=exe",
+        "\tbuild\t-compiler=gc",
+        "\tbuild\t-ldflags=\"-s -w\"",
+        "\tbuild\tCGO_ENABLED=0",
+        "\tbuild\tGOARCH=amd64",
+        "\tbuild\tGOOS=linux",
+        "\tbuild\tGOAMD64=v1"
+      ]
+    },
+    {
+      "path": "functions/api/feedback/status/index.func/bootstrap",
+      "file": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=9HTdYRxfvX9128A5iihD/dNnLaiKBaiLc0uydVhzM/NSUoT0S59sar_k_uLaxw/FvtpQIcALIWPa87MDKCn, BuildID[sha1]=c6a122f94ec9709706cdff56aa6b428d26910621, stripped",
+      "go_build_info": [
+        "functions/api/feedback/status/index.func/bootstrap: go1.26.11",
+        "\tpath\tcommand-line-arguments",
+        "\tdep\tgithub.com/aws/aws-lambda-go\tv1.54.0\th1:EGYpdyRGF88xszqlGcBewz811mJeRS+maNlLZXFheII=",
+        "\tdep\tgithub.com/vercel/go-bridge\tv0.0.0-20260827232521-cfc76d26d554\th1:Fq47WonoFderM7XOyWZrzj8EZqyfzc/rnga8/g3YsnM=",
+        "\tdep\thandler\t(devel)\t",
+        "\tbuild\t-buildmode=exe",
+        "\tbuild\t-compiler=gc",
+        "\tbuild\t-ldflags=\"-s -w\"",
+        "\tbuild\tCGO_ENABLED=0",
+        "\tbuild\tGOARCH=amd64",
+        "\tbuild\tGOOS=linux",
+        "\tbuild\tGOAMD64=v1"
+      ]
+    },
+    {
+      "path": "functions/api/health.func/bootstrap",
+      "file": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=TnwCACko638T2Gz9YPU5/ASghBUSPBuVhh9JupqOa/UZEdBQU-VDp8mieX0cf1/MXKDyphroDprl-tEpAbH, BuildID[sha1]=1896ce052922434612d97a3422657f0df993a796, stripped",
+      "go_build_info": [
+        "functions/api/health.func/bootstrap: go1.26.11",
+        "\tpath\tcommand-line-arguments",
+        "\tdep\tgithub.com/aws/aws-lambda-go\tv1.54.0\th1:EGYpdyRGF88xszqlGcBewz811mJeRS+maNlLZXFheII=",
+        "\tdep\tgithub.com/vercel/go-bridge\tv0.0.0-20260827232521-cfc76d26d554\th1:Fq47WonoFderM7XOyWZrzj8EZqyfzc/rnga8/g3YsnM=",
+        "\tdep\thandler\t(devel)\t",
+        "\tbuild\t-buildmode=exe",
+        "\tbuild\t-compiler=gc",
+        "\tbuild\t-ldflags=\"-s -w\"",
+        "\tbuild\tCGO_ENABLED=0",
+        "\tbuild\tGOARCH=amd64",
+        "\tbuild\tGOOS=linux",
+        "\tbuild\tGOAMD64=v1"
+      ]
+    },
+    {
+      "path": "functions/api/recipes/index.func/bootstrap",
+      "file": "ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, Go BuildID=l47DcCbUdenpy7B3-TOD/unUwLDZIEgoPuLDd8CWy/K9OtP0AoyBsJF8cqz0oV/vCrJ0Qj04udjwJA24Do7, BuildID[sha1]=c7c43816224091346bb796d27b5fbae107b99335, stripped",
+      "go_build_info": [
+        "functions/api/recipes/index.func/bootstrap: go1.26.11",
+        "\tpath\tcommand-line-arguments",
+        "\tdep\tgithub.com/aws/aws-lambda-go\tv1.54.0\th1:EGYpdyRGF88xszqlGcBewz811mJeRS+maNlLZXFheII=",
+        "\tdep\tgithub.com/vercel/go-bridge\tv0.0.0-20260827232521-cfc76d26d554\th1:Fq47WonoFderM7XOyWZrzj8EZqyfzc/rnga8/g3YsnM=",
+        "\tdep\thandler\t(devel)\t",
+        "\tbuild\t-buildmode=exe",
+        "\tbuild\t-compiler=gc",
+        "\tbuild\t-ldflags=\"-s -w\"",
+        "\tbuild\tCGO_ENABLED=0",
+        "\tbuild\tGOARCH=amd64",
+        "\tbuild\tGOOS=linux",
+        "\tbuild\tGOAMD64=v1"
+      ]
+    }
+  ],
+  "limitations": [
+    "not actual application/privateSDK build",
+    "public builders fetched at build time; CLI is not entire toolchain pin",
+    "no deploy, remote service test or uploader validation",
+    "diagnostics/builds.json excluded from any proposed export",
+    "PATH_TO_REGEXP warning emitted despite exit0; exact resulting routes retained for review"
+  ],
+  "metadata_sha256": {
+    "config.json": "a84242b06ebf021c39154516da031edc683161b96c9878512c1c73915fce1ecf",
+    "go-config-x86_64.json": "90b1493e5cdf04dda26383aca276bc63ef5af5450ee8a9b050b395de13057f15"
+  },
+  "binary_sha256": {
+    "functions/api/auth/authorize/index.func/bootstrap": "8d21a787d389aa45e6048c1885efab6240b24dd12d44289609c6e7073aaf7ccc",
+    "functions/api/auth/before-create/index.func/bootstrap": "101d99d42ec389561bff09dea6e9b47a7249da3278d7033c296cd7eb42e62058",
+    "functions/api/auth-config/index.func/bootstrap": "bd828c343aad31566c7106dbb57c7cab6a80a0505b87e67be25d4b5e85b1a82f",
+    "functions/api/auth-proxy/index.func/bootstrap": "6ff40831049ece6ee8ea81ddf4a824f335eb1428e83f3a09624f3ca00674e929",
+    "functions/api/draft-submissions/index.func/bootstrap": "f71df695e05f6c24d16f4a82526e978de247affe5600eb350fc4aecefaabdb81",
+    "functions/api/feedback/connect/index.func/bootstrap": "5a09e0cf0c469238b0c99ff199611969b017947a56c4ab42f3bed3d18dde90fb",
+    "functions/api/feedback/disconnect/index.func/bootstrap": "6f1abca96ac22b7b6520db99b27d148c22f67daa9d02a840a4f2343b787bcd6d",
+    "functions/api/feedback/reports/index.func/bootstrap": "190f90c8adca158d0c6f42f59540ee0794d7490ca1cb02ba1ffff52d02e46c9e",
+    "functions/api/feedback/status/index.func/bootstrap": "eeed67cf04259908cdcf41574fdf24949cae738aa1fcaa4bebab06ab38a0d8a0",
+    "functions/api/health.func/bootstrap": "d5542c9ab91f7100bea919ab470aa9ac1fad362b173fc17f3be380b9c40460b4",
+    "functions/api/recipes/index.func/bootstrap": "eebee3d817aa3e7510cb965610c5c0e26165d8e79fd3d0d9f85964d10073b160"
+  }
+}

@@ -131,7 +131,7 @@ async function list(client, route, field, maximum=300) {
   }
   throw new Error('Incomplete bounded inventory')
 }
-export async function verifyEvidence({repository,prNumber,targetSha,trustedWorkflowSha,token,subject='pr'}, fetcher=fetch) {
+export async function verifyEvidence({repository,prNumber,targetSha,trustedWorkflowSha,token,subject='pr',requirePreview=false}, fetcher=fetch) {
   assert.ok(['pr','develop'].includes(subject))
   if(subject==='pr') integer(prNumber); else assert.equal(prNumber,0)
   sha(targetSha);sha(trustedWorkflowSha)
@@ -174,6 +174,16 @@ export async function verifyEvidence({repository,prNumber,targetSha,trustedWorkf
   // Strict schema: reject ambiguous extra content as well as missing metadata.
   assert.deepEqual(Object.keys(evidence).filter(key=>key!=='subject').sort(),['sha','workflow_sha','package_sha256','lock_sha256','outcome','informational_only','repository','pr','base_sha','run_id','run_attempt','coverage'].sort())
   validateBridge({repository,owner:repo.owner.login,pr,currentBase,trustedWorkflowSha,run,jobs,artifact,evidence,subject})
+  if(requirePreview) {
+    assert.equal(subject,'develop','Deployment evidence is develop-only')
+    for(const name of ['Reviewed complete backend checks','Deploy / preview-pull','Deploy / preview']) {
+      const matches=jobs.filter(job=>job.name===name)
+      assert.equal(matches.length,1,'Missing or duplicated protected deployment job')
+      const job=matches[0]
+      assert.equal(job.run_id,run.id);assert.equal(job.run_attempt,run.run_attempt)
+      assert.equal(job.status,'completed');assert.equal(job.conclusion,'success','Protected deployment/checks not successful')
+    }
+  }
   // Bind reported manifest hashes to the target's actual inert regular blobs.
   const commit=await client.json(`git/commits/${targetSha}`)
   sha(commit.tree?.sha)
@@ -210,7 +220,7 @@ if(process.argv[1] && fileURLToPath(import.meta.url)===process.argv[1]) {
     process.exit(1)
   }
   try {
-    const result=await verifyEvidence({repository:process.env.GITHUB_REPOSITORY,subject:process.env.SUBJECT ?? 'pr',prNumber:process.env.SUBJECT==='develop' ? 0 : Number(process.env.PR_NUMBER),targetSha:process.env.TARGET_SHA,trustedWorkflowSha:process.env.TRUSTED_WORKFLOW_SHA,token:process.env.GH_TOKEN})
+    const result=await verifyEvidence({repository:process.env.GITHUB_REPOSITORY,subject:process.env.SUBJECT ?? 'pr',prNumber:process.env.SUBJECT==='develop' ? 0 : Number(process.env.PR_NUMBER),targetSha:process.env.TARGET_SHA,trustedWorkflowSha:process.env.TRUSTED_WORKFLOW_SHA,token:process.env.GH_TOKEN,requirePreview:process.env.REQUIRE_PREVIEW==='1'})
     console.log(`Verified exact-SHA frontend evidence for ${result.sha}; trusted run ${result.run_id}, attempt ${result.run_attempt}.`)
   } catch {
     // Never print tokens, signed URLs, API bodies, ZIP bytes or assertion values.
