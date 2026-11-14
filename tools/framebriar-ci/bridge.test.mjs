@@ -219,3 +219,27 @@ for(const kind of ['pr','develop']) {
   })
  }
 }
+function previewFixture() {
+ const f=developFixture();f.input.requirePreview=true
+ for(const name of ['Reviewed complete backend checks','Deploy / preview-pull','Deploy / preview'])f.jobs.push({...f.jobs[0],id:1000+f.jobs.length,name})
+ f.routes['actions/runs/123/attempts/1/jobs'].total_count=f.jobs.length
+ return f
+}
+test('private Preview aggregate requires same protected run backend and deployment',async()=>{
+ const f=previewFixture();assert.equal((await verifyEvidence(f.input,f.fetch)).sha,head)
+})
+for(const [name,mutate] of [
+ ['missing backend',f=>{f.jobs.splice(3,1);f.routes['actions/runs/123/attempts/1/jobs'].total_count=f.jobs.length}],
+ ['skipped backend',f=>f.jobs[3].conclusion='skipped'],
+ ['cancelled backend',f=>f.jobs[3].conclusion='cancelled'],
+ ['failed backend',f=>f.jobs[3].conclusion='failure'],
+ ['wrong backend attempt',f=>f.jobs[3].run_attempt=2],
+ ['wrong backend run',f=>f.jobs[3].run_id=124],
+ ['missing deployment',f=>{f.jobs.pop();f.routes['actions/runs/123/attempts/1/jobs'].total_count=f.jobs.length}],
+ ['skipped deployment',f=>f.jobs[5].conclusion='skipped'],
+ ['unauthorized actor',f=>f.run.actor.login='other'],
+ ['other workflow same target',f=>f.run.path='.github/workflows/other.yml'],
+ ['PR-only evidence',f=>f.input.subject='pr'],
+])test(`private Preview rejects ${name}`,async()=>{
+ const f=previewFixture();mutate(f);await assert.rejects(verifyEvidence(f.input,f.fetch))
+})

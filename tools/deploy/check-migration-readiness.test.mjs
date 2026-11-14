@@ -30,7 +30,16 @@ test('rejects missing source and symlinked migration directory', () => fixture(r
   fs.symlinkSync(root, path.join(root, 'migrations'))
   assert.equal(run(root).status, 2)
 }))
-for (const [name, job] of [['preview','build'], ['deploy-production','build'], ['vercel-bootstrap','build-production'], ['vercel-bootstrap','build-preview']]) {
+test('protected Preview now requires actual postbuild readiness before deployment',()=>{
+ const workflow=fs.readFileSync('.github/workflows/framebriar-reviewed-ci.yml','utf8')
+ const frontend=workflow.split('\n  frontend:\n')[1].split('\n  evidence:\n')[0]
+ const deploy=workflow.split('\n  deploy:\n')[1]
+ assert.doesNotMatch(frontend,/check-migration-readiness.sh/)
+ assert.match(deploy,/needs: \[validate, backend, frontend, evidence, pull, runtime-check, readiness\]/)
+ assert.ok(deploy.indexOf('readiness-adapter.mjs consume')<deploy.indexOf('secrets.VERCEL_TOKEN'))
+})
+
+for (const [name, job] of [['deploy-production','build'], ['vercel-bootstrap','build-production'], ['vercel-bootstrap','build-preview']]) {
   test(`${name}/${job} uses unconditional readiness guard before installation/build`, () => {
     const workflow = fs.readFileSync(`.github/workflows/${name}.yml`, 'utf8')
     const body = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n  [a-z][a-z-]*:\n/)[0]
