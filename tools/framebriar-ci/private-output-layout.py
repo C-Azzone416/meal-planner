@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 _spec=importlib.util.spec_from_file_location('private_output_schema',Path(__file__).with_name('private-output-schema.py'))
 schema=importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(schema)
-FUNCTIONS=frozenset(('api/auth-config/index','api/auth-proxy/index','api/auth/authorize/index','api/auth/before-create/index','api/feedback/connect/index','api/feedback/disconnect/index','api/feedback/reports/index','api/feedback/status/index','api/health','api/recipes/index'))
+FUNCTIONS=frozenset(('api/auth-config/index','api/auth-proxy/index','api/auth/authorize/index','api/auth/before-create/index','api/draft-submissions/index','api/feedback/connect/index','api/feedback/disconnect/index','api/feedback/reports/index','api/feedback/status/index','api/health','api/recipes/index'))
 NONPUBLISHED=frozenset(('builds.json','diagnostics/cli_traces.json','diagnostics/deploy-manifest.json','diagnostics/project-manifest.json'))
 ASSET=re.compile(r'static/assets/index-[A-Za-z0-9_-]{8}\.(js|css)\Z')
 MAX_FILE=64*1024*1024

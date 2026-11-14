@@ -8,8 +8,8 @@ The fixed application layout and trusted golden require review when changed.
 
 - Exactly `config.json`, matching the reviewed route golden with no extra
   response-transform, header, daemon or cron behavior.
-- Exactly ten observed Go function directories: auth-config, auth-proxy,
-  auth/authorize, auth/before-create, feedback/connect, feedback/disconnect,
+- Exactly eleven observed Go function directories: auth-config, auth-proxy,
+  auth/authorize, auth/before-create, draft-submissions, feedback/connect, feedback/disconnect,
   feedback/reports, feedback/status, health and recipes. Every function has only
   `.vc-config.json` and executable `bootstrap`. Metadata uses the closed six-key
   x86_64 schema with empty environment; ELF headers must agree.
@@ -61,7 +61,7 @@ configuration was synthetic `https://preview.example.test`, app
 feedback/capture enabled. This source label does not attest the disposable Go
 patch or make this a reviewed release candidate. Nothing was uploaded.
 
-Run `node --test tools/framebriar-ci/private-output-layout.test.mjs` for 18 focused
+Run `node --test tools/framebriar-ci/private-output-layout.test.mjs` for 22 focused
 cases: positive inventory, diagnostics exclusion, unknown/missing paths, empty
 directories, links, FIFO, metadata/environment, ELF architecture, public provenance,
 index/capture checks, modes, independent hardlink staging and changed-source
@@ -76,3 +76,15 @@ inputs, not evidence of unchanged release-source identity. No release receipt
 was created. Every eventual publish candidate must be rebuilt from its exact
 reviewed commit, checked for the patched compiler in all function binaries,
 scanned for vulnerabilities and verified through its protected workflow.
+
+## Complete synthetic route refresh (2026-11-14)
+
+The metadata-only `vercel-65.9.0-full-routes-node26` fixture records a fresh
+CLI 65.9.0 build with all eleven current API filenames, including draft submissions.
+Its route config is byte-identical to the existing trusted golden: no route schema
+was broadened. All eleven generated functions were actual Linux amd64 ELF binaries
+with Go 1.26.11; binaries and raw logs are not committed. Exactly the one named
+function is added to the closed inventory (27 published files in the synthetic
+layout tests). Missing or extra complete endpoints still fail. This is metadata
+compatibility evidence, not a full application build, live routing, runtime
+authorization, or a private-output release gate. See the fixture README for limits.

@@ -34,7 +34,24 @@ class Tests(unittest.TestCase):
         while parent!=self.root:parent.chmod(0o755);parent=parent.parent
         p.write_bytes(data);p.chmod(mode)
     def run_check(self):return l.inspect_layout(self.root,GOLDEN,EXPECTED)
-    def test_positive(self):self.assertEqual(len(self.run_check()['published_files']),25)
+    def test_positive(self):self.assertEqual(len(self.run_check()['published_files']),27)
+    def test_exact_function_inventory(self):
+        self.assertEqual(l.FUNCTIONS, frozenset((
+            'api/auth-config/index','api/auth-proxy/index','api/auth/authorize/index',
+            'api/auth/before-create/index','api/draft-submissions/index',
+            'api/feedback/connect/index','api/feedback/disconnect/index',
+            'api/feedback/reports/index','api/feedback/status/index','api/health','api/recipes/index')))
+    def test_draft_submission_required(self):
+        (self.root/'functions/api/draft-submissions/index.func/bootstrap').unlink()
+        with self.assertRaises(ValueError):self.run_check()
+    def test_extra_complete_function_rejected(self):
+        self.put('functions/api/draft-submissions/extra.func/.vc-config.json',json.dumps(GO).encode())
+        self.put('functions/api/draft-submissions/extra.func/bootstrap',header(),0o755)
+        with self.assertRaises(ValueError):self.run_check()
+    def test_regenerated_metadata_unchanged(self):
+        fixture=HERE/'fixtures/vercel-65.9.0-full-routes-node26'
+        self.assertEqual((fixture/'config.json').read_bytes(), GOLDEN)
+        self.assertEqual(json.loads((fixture/'go-config-x86_64.json').read_bytes()), GO)
     def test_diagnostics_not_read(self):
         self.put('builds.json',b'not-json and deliberately not parsed')
         self.put('diagnostics/cli_traces.json',b'private local details not consumed')
