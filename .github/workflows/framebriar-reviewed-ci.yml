@@ -1,4 +1,4 @@
-name: Framebriar reviewed CI (informational)
+name: Framebriar reviewed validation and optional Preview
 run-name: ${{ inputs.subject == 'develop' && format('Reviewed develop at {0}', inputs.sha) || format('Reviewed PR {0} at {1}', inputs.pr, inputs.sha) }}
 on:
   workflow_dispatch:
@@ -126,6 +126,7 @@ jobs:
           bash .github/scripts/gate_test.sh
           node --test tools/framebriar-ci/*.test.mjs
           node --test tools/deploy/check-migration-readiness.test.mjs
+          node --test tools/deploy/readiness-*.test.mjs tools/deploy/migration-readiness.test.mjs
           bash tools/deploy/vercel-evidence_test.sh
           bash tools/deploy/runbook-token_test.sh
           bash tools/deploy/check-pulled-env_test.sh
@@ -236,9 +237,6 @@ jobs:
           set -euo pipefail
           npm run --prefix web test:browser
           bash tools/feedback/check-targets.sh
-      - name: Verify Preview migration readiness with trusted guard
-        if: inputs.preview
-        run: bash trusted/tools/deploy/check-migration-readiness.sh target
       - name: Download clean project metadata
         if: inputs.preview
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -404,9 +402,97 @@ jobs:
           if-no-files-found: error
 
 
+  runtime-check:
+    name: Inspect fresh Preview runtime configuration
+    needs: [validate, backend, frontend]
+    if: inputs.preview
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: preview
+    permissions:
+      contents: read
+    outputs:
+      runtime_digest: ${{ steps.runtime.outputs.runtime_digest }}
+      runtime_project_id: ${{ steps.runtime.outputs.runtime_project_id }}
+      observed_at_ms: ${{ steps.runtime.outputs.observed_at_ms }}
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+    steps:
+      - name: Install pinned CLI without credentials
+        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" --version
+      - name: Pull fresh Preview configuration with no checkout present
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: npx --yes "vercel@${VERCEL_CLI_VERSION}" pull --yes --environment=preview
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: tools/deploy
+          persist-credentials: false
+          path: trusted
+      - name: Validate and discard all pulled values
+        id: runtime
+        if: always()
+        run: |
+          set -euo pipefail
+          trap 'find .vercel -type f -name ".env*" -delete || true' EXIT
+          bash trusted/tools/deploy/check-pulled-env.sh .vercel
+          node trusted/tools/deploy/readiness-runtime-config.mjs .vercel/.env.preview.local
+
+  readiness:
+    name: Inspect fresh Preview schema readiness
+    needs: [validate, backend, frontend, runtime-check]
+    if: inputs.preview
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: framebriar-ci
+    permissions:
+      contents: read
+    outputs:
+      record: ${{ steps.inspect.outputs.record }}
+      record_sha256: ${{ steps.inspect.outputs.record_sha256 }}
+      provider_map: ${{ steps.inspect.outputs.provider_map }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: tools/deploy
+          persist-credentials: false
+          path: trusted
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          sparse-checkout: |
+            db/migrations
+            migrations
+            hosted/migrations
+          persist-credentials: false
+          path: source-migrations
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '26'
+      - name: Verify exact migration source and client availability
+        env:
+          SOURCE_SHA: ${{ needs.validate.outputs.sha }}
+        run: |
+          [[ "$(git -C source-migrations rev-parse HEAD)" == "$SOURCE_SHA" ]] || exit 1
+          [[ -x /usr/bin/psql ]] || exit 1
+      - name: Fixed read-only catalog inspection
+        id: inspect
+        env:
+          FRAMEBRIAR_PREVIEW_CATALOG_DATABASE_URL: ${{ secrets.FRAMEBRIAR_PREVIEW_CATALOG_DATABASE_URL }}
+          FRAMEBRIAR_PREVIEW_PROVIDER_MAP: ${{ vars.FRAMEBRIAR_PREVIEW_PROVIDER_MAP }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          SOURCE_SHA: ${{ needs.validate.outputs.sha }}
+          RUNTIME_DIGEST: ${{ needs.runtime-check.outputs.runtime_digest }}
+          RUNTIME_PROJECT_ID: ${{ needs.runtime-check.outputs.runtime_project_id }}
+          RUNTIME_OBSERVED_AT_MS: ${{ needs.runtime-check.outputs.observed_at_ms }}
+        run: node trusted/tools/deploy/readiness-adapter.mjs inspect source-migrations
+
   deploy:
     name: Deploy / preview
-    needs: [validate, backend, frontend, evidence, pull]
+    needs: [validate, backend, frontend, evidence, pull, runtime-check, readiness]
     if: inputs.preview && inputs.subject == 'develop'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -496,6 +582,29 @@ jobs:
           EXPECTED_PACKAGE_HASH: ${{ needs.validate.outputs.package_sha256 }}
           EXPECTED_LOCK_HASH: ${{ needs.validate.outputs.lock_sha256 }}
         run: node .deploy-tools/tools/framebriar-ci/verify.mjs
+      - name: Read exact source migration bytes without execution
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          sparse-checkout: |
+            db/migrations
+            migrations
+            hosted/migrations
+          persist-credentials: false
+          path: source-migrations
+      - name: Verify fresh authenticated readiness before deployment
+        env:
+          FRAMEBRIAR_PREVIEW_PROVIDER_MAP: ${{ needs.readiness.outputs.provider_map }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          SOURCE_SHA: ${{ needs.validate.outputs.sha }}
+          READINESS_RECORD: ${{ needs.readiness.outputs.record }}
+          READINESS_DIGEST: ${{ needs.readiness.outputs.record_sha256 }}
+          RUNTIME_DIGEST: ${{ needs.runtime-check.outputs.runtime_digest }}
+          RUNTIME_PROJECT_ID: ${{ needs.runtime-check.outputs.runtime_project_id }}
+          RUNTIME_OBSERVED_AT_MS: ${{ needs.runtime-check.outputs.observed_at_ms }}
+        run: |
+          [[ "$(git -C source-migrations rev-parse HEAD)" == "$SOURCE_SHA" ]] || exit 1
+          node .deploy-tools/tools/deploy/readiness-adapter.mjs consume source-migrations
       - name: Vercel deploy (preview)
         id: deploy
         env:

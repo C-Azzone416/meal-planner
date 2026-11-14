@@ -30,11 +30,11 @@ test('rejects missing source and symlinked migration directory', () => fixture(r
   fs.symlinkSync(root, path.join(root, 'migrations'))
   assert.equal(run(root).status, 2)
 }))
-test('protected Preview build retains its explicit fail-closed readiness guard',()=>{
+test('protected Preview now requires actual postbuild readiness before deployment',()=>{
  const workflow=fs.readFileSync('.github/workflows/framebriar-reviewed-ci.yml','utf8')
- const body=workflow.split('\n  frontend:\n')[1].split('\n  evidence:\n')[0]
- const guard='      - name: Verify Preview migration readiness with trusted guard\n        if: inputs.preview\n        run: bash trusted/tools/deploy/check-migration-readiness.sh target'
- assert.ok(body.includes(guard))
- assert.ok(body.indexOf(guard)<body.indexOf('      - name: Build approved Preview'))
- assert.equal(body.split('check-migration-readiness.sh').length-1,1)
+ const frontend=workflow.split('\n  frontend:\n')[1].split('\n  evidence:\n')[0]
+ const deploy=workflow.split('\n  deploy:\n')[1]
+ assert.doesNotMatch(frontend,/check-migration-readiness.sh/)
+ assert.match(deploy,/needs: \[validate, backend, frontend, evidence, pull, runtime-check, readiness\]/)
+ assert.ok(deploy.indexOf('readiness-adapter.mjs consume')<deploy.indexOf('secrets.VERCEL_TOKEN'))
 })

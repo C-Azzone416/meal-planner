@@ -36,7 +36,7 @@ try {
     fs.writeFileSync(path.join(process.env.INSTALL_ROOT,'project','package-lock.json'),lockBytes)
   }
   if (process.env.GITHUB_OUTPUT) for(const [key,value] of Object.entries(evidence)) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`)
-  fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Validated ${evidence.subject} subject (${evidence.pr || evidence.base})\n\nTarget SHA: ${evidence.sha}\nTrusted workflow SHA: ${evidence.workflow_sha}\nPackage manifest SHA-256: ${evidence.package_sha256}\nLockfile SHA-256: ${evidence.lock_sha256}\n\nOwner approval authorizes executing this exact source with the private SDK present. No deployment or live report is authorized.\n`)
+  fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Validated ${evidence.subject} subject (${evidence.pr || evidence.base})\n\nTarget SHA: ${evidence.sha}\nTrusted workflow SHA: ${evidence.workflow_sha}\nPackage manifest SHA-256: ${evidence.package_sha256}\nLockfile SHA-256: ${evidence.lock_sha256}\n\nOwner approval authorizes executing this exact source with the private SDK present. Frontend-only runs do not deploy. Explicit Preview dispatches require additional backend, runtime, readiness and deployment gates. No live report is authorized.\n`)
 } catch {
   // Never log API bodies, manifests, credentials or assertion values.
   console.error('::error::Reviewed CI validation failed. Verify owner, current PR/main SHA, trusted workflow revision, environment policy and locked manifests. No target substitution or access fallback is allowed.')
