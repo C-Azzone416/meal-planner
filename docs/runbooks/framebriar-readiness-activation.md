@@ -44,6 +44,11 @@ Legacy runtime `FRAMEBRIAR_BUILD_SHA` is rejected; provenance belongs to the exa
 build. Draft ingestion remains disabled and its runtime settings absent.
 Invitations and synthetic live receipt checks remain separate steps.
 
+Placeholder checks confirm configured secret names/type only; they do not prove
+the hidden connection uses the inspected branch/role or that the key is valid.
+Before operational acceptance, observe the authenticated app’s actual connection
+metadata and a complete receipt.
+
 ## Implemented boundaries
 
 1. Full backend/frontend checks and compilation run without runtime credentials.
@@ -92,3 +97,8 @@ explicit trusted workflow promotion/pin; confirmed endpoint mapping and least-
 privilege role setup; protected clean install/build; actual provider runtime and
 catalog inspection; live Preview sign-in and complete feedback/image receipt.
 No local fixture result is a claim that those live steps already passed.
+
+The real PostgreSQL 18 fixture passed locally. It is not exercised by ordinary
+CI because `READINESS_PG_BIN` is opt-in; synthetic contract/adapter tests do run
+in ordinary CI. Live Neon inspection and authenticated app verification remain
+activation gates.
