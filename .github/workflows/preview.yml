@@ -194,15 +194,11 @@ jobs:
           head=$(git rev-parse HEAD)
           [[ "$head" == "$SHA" ]] || { echo "::error::checked out $head, expected $SHA"; exit 1; }
 
-      # No migration runner executes here. The reviewed hosted/migrations SQL
-      # files are shipped as source only; application requires separate owner-approved
-      # manual activation (docs/runbooks/recipes.md). This legacy guard reserves
-      # db/migrations for a future reviewed runner; it does not detect all SQL files.
-      - name: Reject unsupported db/migrations runner input (Preview)
-        if: ${{ hashFiles('db/migrations/**') != '' }}
-        run: |
-          echo "::error::migrations found under db/migrations but no migration runner is wired yet"
-          exit 1
+
+      # Feedback storage readiness has not yet been independently verified.
+      # No database or migrator credentials are used by this guard.
+      - name: Verify manual migration readiness
+        run: bash tools/deploy/check-migration-readiness.sh .
 
       - name: Download pull data
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2

@@ -1,0 +1,104 @@
+.feedback-action {
+  white-space: nowrap;
+  font: inherit;
+  cursor: pointer;
+}
+.feedback-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: #0008;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.feedback-sheet {
+  background: #fffdf6;
+  color: #25221c;
+  border-radius: 12px;
+  padding: 24px;
+  width: min(600px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  box-shadow: 0 10px 50px #0005;
+}
+.feedback-sheet textarea {
+  display: block;
+  width: 100%;
+  min-height: 110px;
+  font: inherit;
+  box-sizing: border-box;
+}
+.feedback-sheet button,
+.feedback-settings button {
+  margin: 6px;
+  padding: 10px;
+  min-height: 44px;
+}
+.feedback-sheet input {
+  margin-right: 8px;
+}
+.feedback-preview {
+  display: block;
+  width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+  border: 1px solid #aaa;
+}
+.feedback-status {
+  position: relative;
+  margin: 12px;
+  padding: 12px;
+  background: #fffdf6;
+  z-index: 2;
+}
+.feedback-settings {
+  padding: 24px;
+  margin: 24px 0;
+}
+.feedback-settings input {
+  display: block;
+  max-width: 100%;
+  font: inherit;
+}
+@media (max-width: 640px) {
+  .brand-row {
+    flex-wrap: wrap;
+  }
+  .feedback-backdrop {
+    padding: 8px;
+  }
+  .feedback-sheet {
+    padding: 16px;
+    max-height: calc(100dvh - 16px);
+  }
+}
+/* Header actions must participate in layout; the legacy phone sign-out was
+   absolutely positioned and overlapped the new Feedback hit target. */
+.app-shell > .brand-row {
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 18px 24px;
+}
+.app-shell .brand-row .settings-link,
+.app-shell .brand-row .sign-out-link,
+.app-shell .brand-row .feedback-action {
+  position: static;
+  flex: 0 0 auto;
+  min-height: 44px;
+}
+.app-shell .brand-row .desktop-nav {
+  order: 5;
+  flex-basis: 100%;
+  justify-content: center;
+}
+.app-shell .brand-row .wordmark {
+  margin-right: auto;
+}
+@media (max-width: 640px) {
+  .app-shell .brand-row .wordmark {
+    flex-basis: 100%;
+    text-align: center;
+  }
+}

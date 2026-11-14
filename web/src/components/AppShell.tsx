@@ -1,3 +1,4 @@
+import { FeedbackAction, FeedbackSignOut } from '../feedback/Feedback'
 import type { ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { RecipeLoadNotice } from '../recipes/RemoteRecipes'
@@ -40,7 +41,7 @@ export function AppShell({ children, onSignOut }: { children: ReactNode; onSignO
         <NavLink to="/week" className="wordmark">dinner, sorted.</NavLink>
         <nav className="desktop-nav" aria-label="Main navigation"><MainLinks /></nav>
         <NavLink className={({ isActive }) => isActive ? 'settings-link settings-link--active' : 'settings-link'} to="/house-rules" aria-label="House rules">⚙</NavLink>
-        {onSignOut && <button className="sign-out-link" type="button" onClick={onSignOut}>Sign out</button>}
+        <FeedbackAction />{onSignOut && <FeedbackSignOut onSignOut={onSignOut} />}
       </header>
       <main className="page-stack">
         <PageErrorBoundary resetKey={pathname}>{children}</PageErrorBoundary>

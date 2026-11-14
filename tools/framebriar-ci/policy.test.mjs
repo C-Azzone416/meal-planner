@@ -103,7 +103,8 @@ test('public Preview retains original migration and deployment guards',()=>{
  const build=workflow.split('\n  build:\n')[1].split('\n  deploy:\n')[0]
  const deploy=workflow.split('\n  deploy:\n')[1]
  assert.match(build,/ref: \$\{\{ inputs.sha \}\}/)
- assert.match(build,/hashFiles\('db\/migrations\/\*\*'\)/)
+ assert.match(build,/name: Verify manual migration readiness\n        run: bash tools\/deploy\/check-migration-readiness.sh \./)
+ assert.doesNotMatch(build,/hashFiles\('db\/migrations/)
  assert.match(build,/name: Vercel build \(preview\)/)
  assert.match(build,/materialize-output.sh \./)
  assert.match(build,/id: pack/)

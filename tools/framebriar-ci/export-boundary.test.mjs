@@ -34,7 +34,8 @@ test('optional exporter implementation and upload paths are absent',()=>{
  for(const file of ['artifact-tools','seal-prebuild.mjs','prebuild-policy.mjs','prebuild.test.mjs','asset-policy.test.mjs','migration-policy.mjs','migration-policy.test.mjs']) {
   assert.equal(fs.existsSync(path.join('tools/framebriar-ci',file)),false,file)
  }
- for(const file of ['tools/deploy/check-migration-readiness.sh','tools/deploy/check-migration-readiness.test.mjs']) assert.equal(fs.existsSync(file),false,file)
+ // Reconciled feedback adds a fail-closed readiness guard, not a private exporter.
+ assert.match(fs.readFileSync('tools/deploy/check-migration-readiness.sh','utf8'), /do not bypass this guard/)
  const reviewed=fs.readFileSync('.github/workflows/framebriar-reviewed-ci.yml','utf8')
  assert.doesNotMatch(reviewed,/prebuild|Vercel|VERCEL_|download-artifact|pull-preview|build-output\.tar/)
  assert.equal((reviewed.match(/uses: actions\/upload-artifact/g)||[]).length,1)
