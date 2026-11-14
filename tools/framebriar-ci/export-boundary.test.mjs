@@ -39,7 +39,7 @@ test('removed arbitrary exporter stays absent; explicit reviewed Preview is gate
  const reviewed=fs.readFileSync('.github/workflows/framebriar-reviewed-ci.yml','utf8')
  assert.match(reviewed,/description: Build and deploy exact reviewed develop to Preview/)
  assert.match(reviewed,/if: inputs.preview && inputs.subject == 'develop'/)
- assert.match(reviewed,/run: bash trusted\/tools\/deploy\/check-migration-readiness.sh target/)
+ assert.match(reviewed,/readiness-adapter.mjs consume source-migrations/)
  assert.match(reviewed,/artifact-ids: \$\{\{ needs.frontend.outputs.artifact_id \}\}/)
  assert.match(reviewed,/Revalidate compiled inventory on the clean deploy runner/)
  assert.match(reviewed,/path: \$\{\{ runner.temp \}\}\/framebriar-evidence\/evidence.json/)

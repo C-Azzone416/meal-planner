@@ -54,9 +54,9 @@ cross-run `preview-receipt` proposal is not used or claimed operational.
    its private Preview branch verifies that exact protected run, backend and
    successful deploy jobs before completing the aggregate. No earlier green CI
    or successful deployment is claimed. Public-dependency deploys are unchanged.
-3. The current migration guard still fails for migration-bearing sources. Obtain
-   independently verified target-specific schema/least-privilege readiness and
-   wire its approved immutable record before attempting runtime enablement.
+3. The postbuild runtime/catalog readiness gate requires independently approved
+   provider mapping and catalog-only credentials plus reviewed live schema/grants.
+   Missing configuration fails closed. See framebriar-readiness-activation.md.
 4. The trusted workflow must exist at the owner-approved main revision and its
    explicit trust pin must be configured. No main promotion or setting change is
    performed by this candidate; those need the appropriate approval.
