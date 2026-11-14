@@ -45,3 +45,11 @@ test('protected build explicitly prepares provenance before Vercel build',()=>{
  assert.ok(f.indexOf('node tools/feedback/prepare-build.mjs')<f.indexOf('build --target=preview --yes'))
  assert.match(f,/Isolated registry install only[\s\S]*npm ci --ignore-scripts/)
 })
+
+test('protected backend includes every affected security-tool check',()=>{
+ const ci=fs.readFileSync('.github/workflows/ci.yml','utf8')
+ const checks=ci.split('      - name: Test classifier, gate and deploy scripts')[1].split('      - name: Classify changed paths')[0]
+ const commands=checks.split('\n').map(x=>x.trim()).filter(x=>x.startsWith('bash ')||x.startsWith('node --test '))
+ for(const command of commands)assert.ok(job('backend').includes(command),`Missing required tool check: ${command}`)
+ assert.match(job('deploy'),/rechecked-output\/manifest.json/)
+})

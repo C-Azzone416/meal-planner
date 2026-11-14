@@ -125,6 +125,9 @@ jobs:
           bash .github/scripts/classify_test.sh
           bash .github/scripts/gate_test.sh
           node --test tools/framebriar-ci/*.test.mjs
+          node --test tools/deploy/check-migration-readiness.test.mjs
+          bash tools/deploy/vercel-evidence_test.sh
+          bash tools/deploy/runbook-token_test.sh
           bash tools/deploy/check-pulled-env_test.sh
           bash tools/deploy/safe-extract_test.sh
           bash tools/deploy/materialize-output_test.sh
@@ -511,7 +514,7 @@ jobs:
           URL: ${{ steps.deploy.outputs.url }}
         run: |
           jq --arg url "$URL" --arg out "$EXPECTED_OUTPUT_SHA256" \
-            '. + {deployment_url: $url, build_output_tar_sha256: $out}' "$RUNNER_TEMP/build/manifest.json" > preview-manifest.json
+            '. + {deployment_url: $url, build_output_tar_sha256: $out}' "$RUNNER_TEMP/rechecked-output/manifest.json" > preview-manifest.json
           {
             echo "## Preview deployment"
             echo
