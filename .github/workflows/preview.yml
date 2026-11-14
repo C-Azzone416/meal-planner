@@ -127,8 +127,7 @@ jobs:
           PR_NUMBER: '0'
           TARGET_SHA: ${{ inputs.sha }}
           TRUSTED_WORKFLOW_SHA: ${{ vars.FRAMEBRIAR_TRUSTED_WORKFLOW_SHA }}
-          REQUIRE_PREVIEW: '1'
-        run: node trusted/tools/framebriar-ci/bridge.mjs
+        run: node trusted/tools/framebriar-ci/verify-preview.mjs
 
   pull:
     needs: select-source
