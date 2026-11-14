@@ -215,7 +215,11 @@ func TestDraftPostgresRestrictedRuntimeRole(t *testing.T) {
 	id, _ := newRecipeUUID()
 	role := "draft_test_" + strings.ReplaceAll(id, "-", "")
 	quoted := pq.QuoteIdentifier(role)
-	if _, err = recipes.db.Exec(`CREATE ROLE ` + quoted + ` LOGIN NOINHERIT`); err != nil {
+	// This unique credential is synthetic and lives only in the disposable local
+	// test cluster. CI uses SCRAM authentication; a passwordless LOGIN role would
+	// pass under local trust but fail before exercising any privilege checks.
+	password := "draft-ci-only-" + id
+	if _, err = recipes.db.Exec(`CREATE ROLE ` + quoted + ` LOGIN NOINHERIT PASSWORD ` + pq.QuoteLiteral(password)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -228,12 +232,15 @@ func TestDraftPostgresRestrictedRuntimeRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	u, _ := url.Parse(dsn)
-	u.User = url.User(role)
+	u.User = url.UserPassword(role, password)
 	db, err := sql.Open("postgres", u.String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	if err = db.PingContext(context.Background()); err != nil {
+		t.Fatalf("synthetic runtime login failed before privilege test: %v", err)
+	}
 	runtime := NewPostgresDraftStore(db)
 	if _, _, err = runtime.Submit(context.Background(), a, "restricted-operation", syntheticDraftSubmission()); err != nil {
 		t.Fatal("minimal runtime submit failed", err)
