@@ -40,6 +40,8 @@ jobs:
           bash .github/scripts/classify_test.sh
           bash .github/scripts/gate_test.sh
           node --test tools/framebriar-ci/*.test.mjs
+          node --test tools/deploy/check-migration-readiness.test.mjs
+          node --test tools/deploy/readiness-*.test.mjs tools/deploy/migration-readiness.test.mjs
           bash tools/deploy/check-pulled-env_test.sh
           bash tools/deploy/safe-extract_test.sh
           bash tools/deploy/materialize-output_test.sh
@@ -184,6 +186,8 @@ jobs:
         run: |
           test -z "$(gofmt -l .)"
           go vet ./...
+      - name: Go vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./api/... ./hosted/...
       - run: go test ./api/... ./hosted/...
 
   local-go:
@@ -203,6 +207,8 @@ jobs:
         run: |
           test -z "$(gofmt -l .)"
           go vet ./...
+      - name: Go vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./internal/... ./cmd/...
       - run: go test ./internal/... ./cmd/...
       - run: go build ./cmd/...
       - name: Cross-compile
@@ -287,6 +293,8 @@ jobs:
       && !contains(needs.*.result, 'cancelled') }}
     permissions:
       contents: read
+      actions: read
+      pull-requests: read
     uses: ./.github/workflows/preview.yml
     with:
       sha: ${{ github.sha }}

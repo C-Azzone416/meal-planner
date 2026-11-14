@@ -1,0 +1,80 @@
+{
+  "version": 3,
+  "daemons": {},
+  "routes": [
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "^/api/auth-proxy(?:/((?:[^/]+?)(?:/(?:[^/]+?))*))?$",
+      "dest": "/api/auth-proxy?path=$1",
+      "check": true
+    },
+    {
+      "src": "^/sign-in$",
+      "dest": "/index.html",
+      "check": true
+    },
+    {
+      "src": "^/week$",
+      "dest": "/index.html",
+      "check": true
+    },
+    {
+      "src": "^/recipes$",
+      "dest": "/index.html",
+      "check": true
+    },
+    {
+      "src": "^/recipes(?:/((?:[^/]+?)(?:/(?:[^/]+?))*))?$",
+      "dest": "/index.html?path=$1",
+      "check": true
+    },
+    {
+      "src": "^/prep$",
+      "dest": "/index.html",
+      "check": true
+    },
+    {
+      "src": "^/shopping$",
+      "dest": "/index.html",
+      "check": true
+    },
+    {
+      "src": "^/drafts$",
+      "dest": "/index.html",
+      "check": true
+    },
+    {
+      "src": "^/cook$",
+      "dest": "/index.html",
+      "check": true
+    },
+    {
+      "src": "^/house-rules$",
+      "dest": "/index.html",
+      "check": true
+    },
+    {
+      "src": "^/api(/.*)?$",
+      "status": 404
+    },
+    {
+      "handle": "error"
+    },
+    {
+      "status": 404,
+      "src": "^(?!/api).*$",
+      "dest": "/404.html"
+    },
+    {
+      "handle": "miss"
+    },
+    {
+      "src": "^/api/(.+)(?:\\.(?:go))$",
+      "dest": "/api/$1",
+      "check": true
+    }
+  ],
+  "crons": []
+}

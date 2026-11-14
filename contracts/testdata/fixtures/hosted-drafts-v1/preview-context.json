@@ -1,0 +1,16 @@
+{
+  "environment": "Preview",
+  "web_origin": "https://preview.example.invalid",
+  "api_origin": "https://api.preview.example.invalid",
+  "destination_label": "Preview · https://preview.example.invalid",
+  "account_label": "Account · synthetic-owner-a",
+  "owner_issuer": "https://auth.preview.example.invalid",
+  "owner_subject": "synthetic-owner-a",
+  "other_owner_subject": "synthetic-owner-b",
+  "links": {
+    "incomplete_receipt": "https://preview.example.invalid/draft-receipts/22222222-2222-4222-8222-222222222222",
+    "incomplete_draft": "https://preview.example.invalid/drafts/11111111-1111-4111-8111-111111111111",
+    "full_receipt": "https://preview.example.invalid/draft-receipts/44444444-4444-4444-8444-444444444444",
+    "full_draft": "https://preview.example.invalid/drafts/33333333-3333-4333-8333-333333333333"
+  }
+}

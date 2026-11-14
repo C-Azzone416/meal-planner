@@ -2,7 +2,7 @@
 
 Meal Planner is a planned web application for reducing the effort required to cook varied dinners at home. The repository now includes a navigable, responsive UI preview and a fail-closed authentication boundary. The UI starts with clearly labeled sample data. Manual recipe storage now has an authenticated Neon-backed API and app integration, pending the reviewed migration and runtime setup. Week planning and preview data remain browser-local, separately for each authenticated account.
 
-> **Preview status:** The repository has CI workflows, hosted health and authentication functions, a React UI preview, the existing version-only `mealplanner` CLI and protocol-clean `mealplanner-mcp` scaffold. Local recipe-draft commands, file storage and MCP tools are deferred from this web release. The UI covers the planned views and uses invitation-only email-and-password authentication when its provider is configured. Existing invited accounts set or recover a password with a short-lived email code. Hosted manual recipes have a reviewed-migration path; hosted planning and hosted MCP draft submission are not implemented. The app fails closed for hosted saves until the database/runtime configuration is prepared. Browser-local planning is not a database-backed service.
+> **Preview status.** The November web release includes CI workflows, hosted health and authentication functions, a React UI preview and local command scaffolds. This source tree also contains the local draft restore candidate. The UI uses invitation-only email-and-password authentication when its provider is configured. Existing invited accounts set or recover a password with a short-lived email code. Hosted manual recipes have a reviewed migration path. The app fails closed for hosted saves until the database and runtime configuration are prepared. Week planning uses browser-local storage.
 
 ## Product direction
 
@@ -27,15 +27,16 @@ The application will keep user data private even though the source repository is
 - [Setup and delivery plan](docs/setup-and-delivery-plan.md) — provider setup, implementation phases, and release gates.
 - [CI/CD configuration plan](docs/ci-cd-plan.md) — branch protections, affected-component CI, deployment and release sequencing, configuration inventory, and verification steps.
 - [Repository layout](docs/repo-layout.md) — component map and check commands for the current skeleton.
-- [Local draft contract](docs/local-draft-contract.md) — shared-core specification and deferred local-tool design; not executable setup guidance for this release.
+- [Local draft contract](docs/local-draft-contract.md) — specification for the shared core and local draft tools.
+- [Local draft workflow](docs/local-workflow.md) — candidate builds, synthetic workflow and historical host evidence.
 - [Hosted manual recipes](docs/runbooks/recipes.md) — API, migration, least-privilege runtime configuration and Preview verification gates.
 - [Authentication runbook](docs/runbooks/authentication.md) — environment-specific allowlisting, provider wiring, and verification gates.
 
-## Deferred local draft tools
+## Local draft restore candidate
 
-The executable and file-store surface of local recipe-draft epic #19 is excluded from this web release. Its implementation and host-verification work remain in develop and pre-split release history. This release preserves the existing version-only CLI and MCP scaffold, build archives, smoke tests and separately gated CLI publication workflow. It does not install a local store, expose MCP draft tools or change an agent host's configuration.
+The #23 candidate restores the local CLI, file store and stdio MCP tools from the retained #19 source. It rejects ambiguous tool parameters and reused request IDs before SDK dispatch. PR #56's November web release shipped only the version and stdin-draining scaffolds.
 
-The transport-independent `internal/core/draft` package, its tests and synthetic fixtures remain. Hosted manual recipes reuse its strict JSON-string validation to reject malformed Unicode before decoding. The [local draft contract](docs/local-draft-contract.md) remains the shared-core specification and a design for a future separately reviewed local-tool release; its CLI and MCP examples are not available in this release.
+Independent review and renewed #25 acceptance in Codex CLI and Claude Code are pending. Caroline's hands-on Preview gate applies before Production shipment. A release requires approval from Caroline or Bagel and starts from reviewed `develop`, followed by a reviewed, CI-passing PR to `main`. The hosted draft bridge remains paused under #55. [Local draft workflow](docs/local-workflow.md)
 
 ## Current boundaries
 
@@ -44,7 +45,6 @@ The current UI supports hosted manual recipe add/edit after database setup, plus
 - hosted planning, feedback or MCP draft operations;
 - automatic migration execution or real-user seed data;
 - generated application clients;
-- local draft CLI commands, local draft file storage, MCP draft tools, or hosted draft save; or
 - importing or modifying source recipes.
 
 Provider project creation is an organizational setup step. Hosted deployment of the skeleton is governed by the [CI/CD plan](docs/ci-cd-plan.md); manual recipe persistence is gated by the separate database runbook.

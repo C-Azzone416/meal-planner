@@ -83,15 +83,15 @@ The following conceptual modules are proposed, not yet created:
 | CLI adapter | Human-invoked commands and readable output | Duplicate domain logic |
 | MCP adapter | Narrow tool definitions and request mapping | Broad account access or unrestricted data mutation |
 
-The current hosted API and web client directories are recorded in the [repository layout](repo-layout.md). The deferred local draft design below specifies package boundaries for a separate future release.
+The current hosted API and web client directories are recorded in the [repository layout](repo-layout.md). The local draft restore candidate uses the package boundaries below.
 
-## Shared draft core and deferred local tools
+## Shared draft core and local restore candidate
 
 The web release retains the transport-independent `internal/core/draft` model, structural validation, service and persistence interface, with the in-memory store and conformance tests. Hosted manual recipes use its `ValidJSONString` helper to reject malformed Unicode before decoding. The core imports only the standard library and does not import a file store, CLI, MCP SDK or hosted service.
 
-The file store (`internal/localstore`), MCP adapter (`internal/mcpadapter`) and local draft commands from epic #19 are deferred from this release. Their development remains in develop and pre-split release history. The two `cmd/` entry points retain their existing version/scaffold behavior, and their separate build and publication gates remain intact.
+The #23 candidate restores the file store (`internal/localstore`), MCP adapter (`internal/mcpadapter`) and local draft commands from epic #19. The candidate is pending independent review and renewed #25 host acceptance. The November web release retains the shared core and command scaffolds.
 
-The [local draft contract](local-draft-contract.md) remains normative for the shared core and describes the deferred local-tool design. That design stages drafts locally without replacing hosted Postgres; it does not provide a reviewed or approved state, hosted save, import, sync, source fetching or an application LLM call. It does not satisfy Checkpoint E. Local tool and host-compatibility acceptance must be completed in a separate release before those tools are offered for use.
+The [local draft contract](local-draft-contract.md) defines the shared core and local tools. The workflow stages drafts locally without replacing hosted Postgres; it does not provide a reviewed or approved state, hosted save, import, sync, source fetching or an application LLM call. It does not satisfy Checkpoint E. Local tool and host-compatibility acceptance must be completed in a separate release before those tools are offered for use.
 
 ## Proposed contract shape
 

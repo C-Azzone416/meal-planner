@@ -37,6 +37,8 @@ const (
 	CodeSchemaUnsupported = "schema_unsupported"
 
 	CodeStoreFull = "store_full"
+	// CodeRevisionLimit (category limit_exceeded): the draft is at MaxRevision and cannot be updated.
+	CodeRevisionLimit = "revision_limit"
 
 	CodeIOError            = "io_error"
 	CodeLockTimeout        = "lock_timeout"

@@ -369,11 +369,60 @@ check "auth-multiline: rejected by name" has auth-multiline "NEON_AUTH_BASE_URL 
 fixture auth-lookalikes/.env << EOF
 NEON_AUTH_BASE_URI="$secret"
 NEON_AUTH_ENDPOINT="$secret"
-AUTH_ALLOWED_EMAILS="$secret"
+AUTH_ALLOWED_EMAIL_LIST="$secret"
 EOF
 expect 1 auth-lookalikes "$work/auth-lookalikes/.env"
-for n in NEON_AUTH_BASE_URI NEON_AUTH_ENDPOINT AUTH_ALLOWED_EMAILS; do
+for n in NEON_AUTH_BASE_URI NEON_AUTH_ENDPOINT AUTH_ALLOWED_EMAIL_LIST; do
   check "auth-lookalikes: $n flagged" has auth-lookalikes "unexpected variable name $n"
+done
+
+# #53 private multi-member storage is Secret-only; never transfer literal membership to builds.
+fixture auth-members/.env << EOF
+NEON_AUTH_BASE_URL="[SENSITIVE]"
+NEON_AUTH_ENDPOINT_ID="[SENSITIVE]"
+AUTH_ALLOWED_EMAILS="[SENSITIVE]"
+EOF
+expect 0 auth-members "$work/auth-members/.env"
+check "auth-members: reports only setting name" has auth-members "AUTH_ALLOWED_EMAILS"
+
+fixture auth-members-conflict/.env << EOF
+NEON_AUTH_BASE_URL="[SENSITIVE]"
+NEON_AUTH_ENDPOINT_ID="[SENSITIVE]"
+AUTH_ALLOWED_EMAILS="[SENSITIVE]"
+AUTH_ALLOWED_EMAIL="[SENSITIVE]"
+EOF
+expect 1 auth-members-conflict "$work/auth-members-conflict/.env"
+check "auth-members-conflict: exactly one format" has auth-members-conflict "must appear exactly once as a complete set"
+
+# Unlike runtime, a pulled env must omit the legacy setting entirely when using the new list.
+fixture auth-members-empty-legacy/.env << EOF
+NEON_AUTH_BASE_URL="[SENSITIVE]"
+NEON_AUTH_ENDPOINT_ID="[SENSITIVE]"
+AUTH_ALLOWED_EMAILS="[SENSITIVE]"
+AUTH_ALLOWED_EMAIL=""
+EOF
+expect 1 auth-members-empty-legacy "$work/auth-members-empty-legacy/.env"
+check "auth-members-empty-legacy: rejects empty legacy value" has auth-members-empty-legacy "AUTH_ALLOWED_EMAIL has an unexpected value"
+
+fixture auth-members-duplicate/.env << EOF
+NEON_AUTH_BASE_URL="[SENSITIVE]"
+NEON_AUTH_ENDPOINT_ID="[SENSITIVE]"
+AUTH_ALLOWED_EMAILS="[SENSITIVE]"
+AUTH_ALLOWED_EMAILS="[SENSITIVE]"
+EOF
+expect 1 auth-members-duplicate "$work/auth-members-duplicate/.env"
+for missing_name in NEON_AUTH_BASE_URL NEON_AUTH_ENDPOINT_ID; do
+  : > "$work/auth-members-partial.env"
+  [[ $missing_name == NEON_AUTH_BASE_URL ]] || printf 'NEON_AUTH_BASE_URL="[SENSITIVE]"\n' >> "$work/auth-members-partial.env"
+  [[ $missing_name == NEON_AUTH_ENDPOINT_ID ]] || printf 'NEON_AUTH_ENDPOINT_ID="[SENSITIVE]"\n' >> "$work/auth-members-partial.env"
+  printf 'AUTH_ALLOWED_EMAILS="[SENSITIVE]"\n' >> "$work/auth-members-partial.env"
+  expect 1 "auth-members-missing-$missing_name" "$work/auth-members-partial.env"
+done
+for value in '' '[]' '["allowed@example.invalid","other@example.invalid"]' '[SENSITIVE][SENSITIVE]'; do
+  printf 'NEON_AUTH_BASE_URL="[SENSITIVE]"\nNEON_AUTH_ENDPOINT_ID="[SENSITIVE]"\nAUTH_ALLOWED_EMAILS=\x27%s\x27\n' "$value" > "$work/auth-members-literal.env"
+  expect 1 auth-members-literal "$work/auth-members-literal.env"
+  check "auth-members-literal: rejected by name" has auth-members-literal "AUTH_ALLOWED_EMAILS has an unexpected value"
+  check "auth-members-literal: no membership output" lacks auth-members-literal "allowed@example.invalid"
 done
 
 # Every allowed value, unquoted, double-quoted and single-quoted.

@@ -1,0 +1,20 @@
+{
+  "content_schema_version": 1,
+  "content": {
+    "title": "  Synthetic café draft 🥣  ",
+    "ingredients": [],
+    "instructions": [],
+    "notes": "Synthetic incomplete content.\nTimes, yield and claims are unknown.",
+    "sources": [],
+    "guidance": [],
+    "estimates": {
+      "active_minutes": {
+        "value": 0,
+        "basis": {
+          "kind": "sourced",
+          "source_ref": "missing"
+        }
+      }
+    }
+  }
+}

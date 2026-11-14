@@ -1,0 +1,15 @@
+{
+  "content_schema_version": 1,
+  "content": {
+    "title": "  Synthetic café draft 🥣  ",
+    "ingredients": [],
+    "instructions": [],
+    "notes": "Synthetic incomplete content.\nTimes, yield and claims are unknown.",
+    "sources": [],
+    "guidance": [],
+    "owner": {
+      "issuer": "https://forged.example.invalid",
+      "subject": "synthetic-owner-b"
+    }
+  }
+}

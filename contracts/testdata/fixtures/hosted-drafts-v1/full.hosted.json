@@ -1,0 +1,599 @@
+{
+  "api_version": "draft-v1",
+  "draft": {
+    "schema_version": 1,
+    "content_schema_version": 1,
+    "id": "33333333-3333-4333-8333-333333333333",
+    "revision": 1,
+    "status": "draft",
+    "origin": "agent",
+    "owner": {
+      "issuer": "https://auth.preview.example.invalid",
+      "subject": "synthetic-owner-a"
+    },
+    "created_at": "2026-11-09T12:00:00Z",
+    "updated_at": "2026-11-09T12:00:00Z",
+    "content": {
+      "title": "Synthetic grain bowl 🥣",
+      "yield": "Serves 4–6 (original text)",
+      "ingredients": [
+        {
+          "text": "1 1/2 cups example grains, rinsed",
+          "quantity": "1 1/2",
+          "unit": "cups",
+          "name": "example grains",
+          "note": "rinsed"
+        },
+        {
+          "text": "salt, to taste",
+          "quantity": "to taste",
+          "name": "salt"
+        },
+        {
+          "text": "0 optional garnish leaves",
+          "quantity": "0",
+          "unit": "leaves",
+          "name": "optional garnish",
+          "note": "A literal zero quantity, not unknown."
+        },
+        {
+          "text": "an unspecified synthetic ingredient"
+        }
+      ],
+      "instructions": [
+        {
+          "text": "Example prep-ahead instruction; unverified.",
+          "phase": "prep_ahead",
+          "phase_basis": {
+            "kind": "sourced",
+            "source_ref": "book_source",
+            "note": "Synthetic citation; not checked."
+          }
+        },
+        {
+          "text": "Arrange the synthetic ingredients.",
+          "phase": "prep_tonight",
+          "phase_basis": {
+            "kind": "agent_estimate"
+          }
+        },
+        {
+          "text": "Example cooking instruction.\nNo operational safety advice is implied.",
+          "phase": "cook_tonight",
+          "phase_basis": {
+            "kind": "sourced",
+            "source_ref": "url_source",
+            "note": "Synthetic citation; not checked."
+          }
+        },
+        {
+          "text": "Unclassified synthetic finishing instruction."
+        }
+      ],
+      "notes": "Synthetic data only.\nPreserve café, 🥣 and spacing.\tNo real recipe or safety advice.",
+      "sources": [
+        {
+          "id": "url_source",
+          "kind": "url",
+          "label": "Synthetic reference",
+          "url": "https://example.invalid/recipes/synthetic-bowl",
+          "locator": "Example paragraph 2"
+        },
+        {
+          "id": "book_source",
+          "kind": "publication",
+          "label": "Imaginary Cookbook",
+          "locator": "Synthetic page 12"
+        },
+        {
+          "id": "user_source",
+          "kind": "user_supplied",
+          "label": "Synthetic pasted note",
+          "locator": "Example line 3"
+        },
+        {
+          "id": "agent_source",
+          "kind": "agent_generated",
+          "label": "Synthetic agent output",
+          "locator": "Example session"
+        }
+      ],
+      "estimates": {
+        "active_minutes": {
+          "value": 20,
+          "basis": {
+            "kind": "agent_estimate"
+          }
+        },
+        "total_minutes": {
+          "value": 90,
+          "basis": {
+            "kind": "sourced",
+            "source_ref": "url_source",
+            "note": "Synthetic citation; not checked."
+          }
+        },
+        "attention": {
+          "value": "medium",
+          "basis": {
+            "kind": "agent_estimate"
+          }
+        },
+        "cleanup": {
+          "value": "medium",
+          "basis": {
+            "kind": "sourced",
+            "source_ref": "book_source",
+            "note": "Synthetic citation; not checked."
+          }
+        },
+        "variability": {
+          "value": "high",
+          "basis": {
+            "kind": "agent_estimate",
+            "note": "Synthetic uncertainty."
+          }
+        }
+      },
+      "phase_estimates": {
+        "prep_ahead": {
+          "active_minutes": {
+            "value": 0,
+            "basis": {
+              "kind": "agent_estimate"
+            }
+          },
+          "total_minutes": {
+            "value": 15,
+            "basis": {
+              "kind": "sourced",
+              "source_ref": "url_source",
+              "note": "Synthetic citation; not checked."
+            }
+          },
+          "attention": {
+            "value": "low",
+            "basis": {
+              "kind": "agent_estimate"
+            }
+          },
+          "cleanup": {
+            "value": "medium",
+            "basis": {
+              "kind": "sourced",
+              "source_ref": "book_source",
+              "note": "Synthetic citation; not checked."
+            }
+          },
+          "variability": {
+            "value": "high",
+            "basis": {
+              "kind": "agent_estimate",
+              "note": "Synthetic uncertainty."
+            }
+          }
+        },
+        "prep_tonight": {
+          "active_minutes": {
+            "value": 5,
+            "basis": {
+              "kind": "agent_estimate"
+            }
+          },
+          "total_minutes": {
+            "value": 10,
+            "basis": {
+              "kind": "sourced",
+              "source_ref": "url_source",
+              "note": "Synthetic citation; not checked."
+            }
+          },
+          "attention": {
+            "value": "medium",
+            "basis": {
+              "kind": "agent_estimate"
+            }
+          },
+          "cleanup": {
+            "value": "medium",
+            "basis": {
+              "kind": "sourced",
+              "source_ref": "book_source",
+              "note": "Synthetic citation; not checked."
+            }
+          },
+          "variability": {
+            "value": "high",
+            "basis": {
+              "kind": "agent_estimate",
+              "note": "Synthetic uncertainty."
+            }
+          }
+        },
+        "cook_tonight": {
+          "active_minutes": {
+            "value": 15,
+            "basis": {
+              "kind": "agent_estimate"
+            }
+          },
+          "total_minutes": {
+            "value": 60,
+            "basis": {
+              "kind": "sourced",
+              "source_ref": "url_source",
+              "note": "Synthetic citation; not checked."
+            }
+          },
+          "attention": {
+            "value": "high",
+            "basis": {
+              "kind": "agent_estimate"
+            }
+          },
+          "cleanup": {
+            "value": "medium",
+            "basis": {
+              "kind": "sourced",
+              "source_ref": "book_source",
+              "note": "Synthetic citation; not checked."
+            }
+          },
+          "variability": {
+            "value": "high",
+            "basis": {
+              "kind": "agent_estimate",
+              "note": "Synthetic uncertainty."
+            }
+          }
+        }
+      },
+      "guidance": [
+        {
+          "topic": "prep_ahead",
+          "text": "Synthetic prep-ahead assertion, not operational advice.",
+          "basis": {
+            "kind": "sourced",
+            "source_ref": "book_source",
+            "note": "Synthetic citation; not checked."
+          }
+        },
+        {
+          "topic": "storage",
+          "text": "Synthetic storage assertion; no keeping duration is supplied.",
+          "basis": {
+            "kind": "agent_estimate",
+            "note": "Unverified; do not infer unlimited keeping."
+          }
+        },
+        {
+          "topic": "food_safety",
+          "text": "Synthetic safety assertion, not verified or usable advice.",
+          "basis": {
+            "kind": "sourced",
+            "source_ref": "user_source",
+            "note": "Synthetic citation; not checked."
+          }
+        },
+        {
+          "topic": "other",
+          "text": "Synthetic claim without an identified source.",
+          "basis": {
+            "kind": "sourced",
+            "note": "Intentionally missing reference; retain warning."
+          }
+        }
+      ]
+    },
+    "review": {
+      "revision": 1,
+      "state": "not_started",
+      "draft_revision": 1,
+      "policy_version": null,
+      "candidate": null,
+      "confirmations": []
+    },
+    "approved_recipe_id": null
+  },
+  "receipt": {
+    "id": "44444444-4444-4444-8444-444444444444",
+    "draft_id": "33333333-3333-4333-8333-333333333333",
+    "submitted_at": "2026-11-09T12:00:00Z",
+    "accepted_revision": 1,
+    "content_schema_version": 1,
+    "submission_content": {
+      "title": "Synthetic grain bowl 🥣",
+      "yield": "Serves 4–6 (original text)",
+      "ingredients": [
+        {
+          "text": "1 1/2 cups example grains, rinsed",
+          "quantity": "1 1/2",
+          "unit": "cups",
+          "name": "example grains",
+          "note": "rinsed"
+        },
+        {
+          "text": "salt, to taste",
+          "quantity": "to taste",
+          "name": "salt"
+        },
+        {
+          "text": "0 optional garnish leaves",
+          "quantity": "0",
+          "unit": "leaves",
+          "name": "optional garnish",
+          "note": "A literal zero quantity, not unknown."
+        },
+        {
+          "text": "an unspecified synthetic ingredient"
+        }
+      ],
+      "instructions": [
+        {
+          "text": "Example prep-ahead instruction; unverified.",
+          "phase": "prep_ahead",
+          "phase_basis": {
+            "kind": "sourced",
+            "source_ref": "book_source",
+            "note": "Synthetic citation; not checked."
+          }
+        },
+        {
+          "text": "Arrange the synthetic ingredients.",
+          "phase": "prep_tonight",
+          "phase_basis": {
+            "kind": "agent_estimate"
+          }
+        },
+        {
+          "text": "Example cooking instruction.\nNo operational safety advice is implied.",
+          "phase": "cook_tonight",
+          "phase_basis": {
+            "kind": "sourced",
+            "source_ref": "url_source",
+            "note": "Synthetic citation; not checked."
+          }
+        },
+        {
+          "text": "Unclassified synthetic finishing instruction."
+        }
+      ],
+      "notes": "Synthetic data only.\nPreserve café, 🥣 and spacing.\tNo real recipe or safety advice.",
+      "sources": [
+        {
+          "id": "url_source",
+          "kind": "url",
+          "label": "Synthetic reference",
+          "url": "https://example.invalid/recipes/synthetic-bowl",
+          "locator": "Example paragraph 2"
+        },
+        {
+          "id": "book_source",
+          "kind": "publication",
+          "label": "Imaginary Cookbook",
+          "locator": "Synthetic page 12"
+        },
+        {
+          "id": "user_source",
+          "kind": "user_supplied",
+          "label": "Synthetic pasted note",
+          "locator": "Example line 3"
+        },
+        {
+          "id": "agent_source",
+          "kind": "agent_generated",
+          "label": "Synthetic agent output",
+          "locator": "Example session"
+        }
+      ],
+      "estimates": {
+        "active_minutes": {
+          "value": 20,
+          "basis": {
+            "kind": "agent_estimate"
+          }
+        },
+        "total_minutes": {
+          "value": 90,
+          "basis": {
+            "kind": "sourced",
+            "source_ref": "url_source",
+            "note": "Synthetic citation; not checked."
+          }
+        },
+        "attention": {
+          "value": "medium",
+          "basis": {
+            "kind": "agent_estimate"
+          }
+        },
+        "cleanup": {
+          "value": "medium",
+          "basis": {
+            "kind": "sourced",
+            "source_ref": "book_source",
+            "note": "Synthetic citation; not checked."
+          }
+        },
+        "variability": {
+          "value": "high",
+          "basis": {
+            "kind": "agent_estimate",
+            "note": "Synthetic uncertainty."
+          }
+        }
+      },
+      "phase_estimates": {
+        "prep_ahead": {
+          "active_minutes": {
+            "value": 0,
+            "basis": {
+              "kind": "agent_estimate"
+            }
+          },
+          "total_minutes": {
+            "value": 15,
+            "basis": {
+              "kind": "sourced",
+              "source_ref": "url_source",
+              "note": "Synthetic citation; not checked."
+            }
+          },
+          "attention": {
+            "value": "low",
+            "basis": {
+              "kind": "agent_estimate"
+            }
+          },
+          "cleanup": {
+            "value": "medium",
+            "basis": {
+              "kind": "sourced",
+              "source_ref": "book_source",
+              "note": "Synthetic citation; not checked."
+            }
+          },
+          "variability": {
+            "value": "high",
+            "basis": {
+              "kind": "agent_estimate",
+              "note": "Synthetic uncertainty."
+            }
+          }
+        },
+        "prep_tonight": {
+          "active_minutes": {
+            "value": 5,
+            "basis": {
+              "kind": "agent_estimate"
+            }
+          },
+          "total_minutes": {
+            "value": 10,
+            "basis": {
+              "kind": "sourced",
+              "source_ref": "url_source",
+              "note": "Synthetic citation; not checked."
+            }
+          },
+          "attention": {
+            "value": "medium",
+            "basis": {
+              "kind": "agent_estimate"
+            }
+          },
+          "cleanup": {
+            "value": "medium",
+            "basis": {
+              "kind": "sourced",
+              "source_ref": "book_source",
+              "note": "Synthetic citation; not checked."
+            }
+          },
+          "variability": {
+            "value": "high",
+            "basis": {
+              "kind": "agent_estimate",
+              "note": "Synthetic uncertainty."
+            }
+          }
+        },
+        "cook_tonight": {
+          "active_minutes": {
+            "value": 15,
+            "basis": {
+              "kind": "agent_estimate"
+            }
+          },
+          "total_minutes": {
+            "value": 60,
+            "basis": {
+              "kind": "sourced",
+              "source_ref": "url_source",
+              "note": "Synthetic citation; not checked."
+            }
+          },
+          "attention": {
+            "value": "high",
+            "basis": {
+              "kind": "agent_estimate"
+            }
+          },
+          "cleanup": {
+            "value": "medium",
+            "basis": {
+              "kind": "sourced",
+              "source_ref": "book_source",
+              "note": "Synthetic citation; not checked."
+            }
+          },
+          "variability": {
+            "value": "high",
+            "basis": {
+              "kind": "agent_estimate",
+              "note": "Synthetic uncertainty."
+            }
+          }
+        }
+      },
+      "guidance": [
+        {
+          "topic": "prep_ahead",
+          "text": "Synthetic prep-ahead assertion, not operational advice.",
+          "basis": {
+            "kind": "sourced",
+            "source_ref": "book_source",
+            "note": "Synthetic citation; not checked."
+          }
+        },
+        {
+          "topic": "storage",
+          "text": "Synthetic storage assertion; no keeping duration is supplied.",
+          "basis": {
+            "kind": "agent_estimate",
+            "note": "Unverified; do not infer unlimited keeping."
+          }
+        },
+        {
+          "topic": "food_safety",
+          "text": "Synthetic safety assertion, not verified or usable advice.",
+          "basis": {
+            "kind": "sourced",
+            "source_ref": "user_source",
+            "note": "Synthetic citation; not checked."
+          }
+        },
+        {
+          "topic": "other",
+          "text": "Synthetic claim without an identified source.",
+          "basis": {
+            "kind": "sourced",
+            "note": "Intentionally missing reference; retain warning."
+          }
+        }
+      ]
+    },
+    "links": {
+      "receipt": "/draft-receipts/44444444-4444-4444-8444-444444444444",
+      "draft": "/drafts/33333333-3333-4333-8333-333333333333"
+    }
+  },
+  "validation": {
+    "scope": "structural",
+    "structurally_valid": true,
+    "errors": [],
+    "warnings": [
+      {
+        "code": "partial_phase_assignment",
+        "path": "/instructions",
+        "message": "some steps have a phase and others do not"
+      },
+      {
+        "code": "sourced_without_reference",
+        "path": "/guidance/3/basis",
+        "message": "a sourced basis should name a source_ref"
+      }
+    ],
+    "notice": "Structural check only. This is not food-safety verification, recipe review, or approval."
+  }
+}

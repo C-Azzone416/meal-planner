@@ -34,8 +34,10 @@ type BearerAuthConfig struct {
 	ExpectedEndpoint string
 	JWKSURL          string
 	AllowedEmail     string
-	Client           HTTPDoer
-	Now              func() time.Time
+	// AllowedEmailsJSON is a private JSON array; nil selects legacy AllowedEmail.
+	AllowedEmailsJSON *string
+	Client            HTTPDoer
+	Now               func() time.Time
 }
 
 // UserIdentity is the verified caller identity placed on protected requests.
@@ -73,9 +75,10 @@ type bearerClaims struct {
 // protected API handlers.
 func BearerAuthConfigFromEnvironment() BearerAuthConfig {
 	return BearerAuthConfig{
-		BaseURL:          os.Getenv("NEON_AUTH_BASE_URL"),
-		ExpectedEndpoint: os.Getenv("NEON_AUTH_ENDPOINT_ID"),
-		AllowedEmail:     os.Getenv("AUTH_ALLOWED_EMAIL"),
+		BaseURL:           os.Getenv("NEON_AUTH_BASE_URL"),
+		ExpectedEndpoint:  os.Getenv("NEON_AUTH_ENDPOINT_ID"),
+		AllowedEmail:      os.Getenv("AUTH_ALLOWED_EMAIL"),
+		AllowedEmailsJSON: authAllowedEmailsFromEnvironment(),
 	}
 }
 
@@ -83,7 +86,10 @@ func BearerAuthConfigFromEnvironment() BearerAuthConfig {
 // Neon identity policy. Product APIs should use this wrapper rather than
 // performing ad-hoc token checks.
 func RequireUser(next http.Handler) http.Handler {
-	return RequireUserWithConfig(BearerAuthConfigFromEnvironment(), next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Read membership at request time even when the wrapper is long-lived.
+		RequireUserWithConfig(BearerAuthConfigFromEnvironment(), next).ServeHTTP(w, r)
+	})
 }
 
 // RequireUserWithConfig is the injectable form of RequireUser.
@@ -114,7 +120,7 @@ func UserFromContext(ctx context.Context) (UserIdentity, bool) {
 // VerifyBearer validates a Neon Ed25519 JWT and the app's environment-specific
 // identity restrictions.
 func VerifyBearer(ctx context.Context, authorization string, config BearerAuthConfig) (UserIdentity, error) {
-	baseURL, err := normalizeAuthPolicy(config.BaseURL, config.ExpectedEndpoint, config.AllowedEmail)
+	baseURL, members, err := normalizeAuthMembership(config.BaseURL, config.ExpectedEndpoint, config.AllowedEmail, config.AllowedEmailsJSON)
 	if err != nil {
 		return UserIdentity{}, ErrAuthConfiguration
 	}
@@ -142,19 +148,12 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 		return UserIdentity{}, ErrInvalidBearer
 	}
 
-	jwksURL := strings.TrimSpace(config.JWKSURL)
-	if jwksURL == "" {
-		jwksURL = baseURL + "/.well-known/jwks.json"
-	}
-	publicKey, err := fetchEd25519PublicKey(ctx, config.Client, jwksURL, header.KeyID)
-	if err != nil {
-		if errors.Is(err, errSigningKeyNotFound) {
-			return UserIdentity{}, ErrInvalidBearer
-		}
-		return UserIdentity{}, fmt.Errorf("%w: signing keys unavailable", ErrAuthConfiguration)
-	}
+	// Reject malformed signatures before any provider I/O. A structurally
+	// invalid token cannot authenticate, even when the signing service is down.
+	// This avoids amplifying trivial invalid requests into remote JWKS fetches;
+	// it is not a substitute for deployment-level rate limiting.
 	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil || len(signature) != ed25519.SignatureSize || !ed25519.Verify(publicKey, []byte(parts[0]+"."+parts[1]), signature) {
+	if err != nil || len(signature) != ed25519.SignatureSize {
 		return UserIdentity{}, ErrInvalidBearer
 	}
 
@@ -174,25 +173,33 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 	if config.Now != nil {
 		now = config.Now
 	}
-	instant := now()
-	nowUnix := new(big.Rat).SetInt64(instant.Unix())
-	nowUnix.Add(nowUnix, new(big.Rat).SetFrac64(int64(instant.Nanosecond()), 1_000_000_000))
-	expiration, err := numericDate(claims.Expiration)
-	if err != nil || expiration.Cmp(nowUnix) <= 0 {
+	if !bearerClaimsTimeValid(claims, now()) {
 		return UserIdentity{}, ErrInvalidBearer
 	}
-	if len(claims.NotBefore) != 0 {
-		notBefore, err := numericDate(claims.NotBefore)
-		if err != nil || notBefore.Cmp(nowUnix) > 0 {
-			return UserIdentity{}, ErrInvalidBearer
-		}
+
+	// Claims checked above are untrusted rejection filters, never authorization.
+	// Keep private membership checks below cryptographic verification so failed
+	// signatures cannot probe the allowlist through provider-call timing.
+
+	jwksURL := strings.TrimSpace(config.JWKSURL)
+	if jwksURL == "" {
+		jwksURL = baseURL + "/.well-known/jwks.json"
 	}
-	// iat is optional and is not an activation time, but when present it must
-	// retain the registered NumericDate type rather than being ignored.
-	if len(claims.IssuedAt) != 0 {
-		if _, err := numericDate(claims.IssuedAt); err != nil {
+	publicKey, err := fetchEd25519PublicKey(ctx, config.Client, jwksURL, header.KeyID)
+	if err != nil {
+		if errors.Is(err, errSigningKeyNotFound) {
 			return UserIdentity{}, ErrInvalidBearer
 		}
+		return UserIdentity{}, fmt.Errorf("%w: signing keys unavailable", ErrAuthConfiguration)
+	}
+	if !ed25519.Verify(publicKey, []byte(parts[0]+"."+parts[1]), signature) {
+		return UserIdentity{}, ErrInvalidBearer
+	}
+
+	// Fetching keys can take time. Recheck temporal validity immediately before
+	// authorization, not just against the earlier preflight instant.
+	if !bearerClaimsTimeValid(claims, now()) {
+		return UserIdentity{}, ErrInvalidBearer
 	}
 
 	email := claims.Email
@@ -204,10 +211,35 @@ func VerifyBearer(ctx context.Context, authorization string, config BearerAuthCo
 			emailVerified = *claims.EmailVerifiedSnake
 		}
 	}
-	if claims.Subject == "" || !emailVerified || !authEmailMatches(email, config.AllowedEmail) {
+	_, allowed := members.email(email)
+	if claims.Subject == "" || !emailVerified || !allowed {
 		return UserIdentity{}, ErrInvalidBearer
 	}
 	return UserIdentity{Issuer: claims.Issuer, Subject: claims.Subject, Email: strings.Trim(email, " \t\r\n")}, nil
+}
+
+func bearerClaimsTimeValid(claims bearerClaims, instant time.Time) bool {
+	nowUnix := new(big.Rat).SetInt64(instant.Unix())
+	nowUnix.Add(nowUnix, new(big.Rat).SetFrac64(int64(instant.Nanosecond()), 1_000_000_000))
+	expiration, err := numericDate(claims.Expiration)
+	if err != nil || expiration.Cmp(nowUnix) <= 0 {
+		return false
+	}
+	if len(claims.NotBefore) != 0 {
+		notBefore, err := numericDate(claims.NotBefore)
+		if err != nil || notBefore.Cmp(nowUnix) > 0 {
+			return false
+		}
+	}
+	// iat is optional and is not an activation time, but when present it must
+	// retain the registered NumericDate type rather than being ignored.
+	if len(claims.IssuedAt) != 0 {
+		if _, err := numericDate(claims.IssuedAt); err != nil {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (header bearerHeader) supported() bool {

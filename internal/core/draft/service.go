@@ -171,7 +171,8 @@ func (s *Service) List(ctx context.Context, opts ListOptions) (ListPage, error) 
 }
 
 // Update replaces the whole content of draft id if its stored revision is expectedRevision, and
-// sets revision to expectedRevision+1. A stale expectedRevision is conflict/revision_mismatch with
+// sets revision to expectedRevision+1. A draft already at MaxRevision is limit_exceeded/revision_limit and
+// nothing is written. A stale expectedRevision is conflict/revision_mismatch with
 // CurrentRevision set; a failed or conflicting update never changes the stored draft.
 func (s *Service) Update(ctx context.Context, id string, expectedRevision int64, in Content) (WriteResult, error) {
 	if err := checkContext(ctx); err != nil {
@@ -180,8 +181,9 @@ func (s *Service) Update(ctx context.Context, id string, expectedRevision int64,
 	if !ValidID(id) {
 		return WriteResult{}, invalidID()
 	}
-	if expectedRevision < 1 {
-		return WriteResult{}, &Error{Category: CategoryInvalidArgument, Code: CodeInvalidRevision, Message: "expected_revision must be 1 or greater"}
+	if expectedRevision < 1 || expectedRevision > MaxRevision {
+		return WriteResult{}, &Error{Category: CategoryInvalidArgument, Code: CodeInvalidRevision,
+			Message: fmt.Sprintf("expected_revision must be between 1 and %d", MaxRevision)}
 	}
 	content := normalize(in)
 	res := Validate(content)
@@ -195,13 +197,22 @@ func (s *Service) Update(ctx context.Context, id string, expectedRevision int64,
 	if cur.Revision != expectedRevision {
 		return WriteResult{}, revisionMismatch(expectedRevision, cur.Revision)
 	}
+	if cur.Revision >= MaxRevision {
+		return WriteResult{}, revisionLimit()
+	}
+	// updated_at never moves backwards: a clock that stepped back must not leave a stored draft
+	// whose updated_at is earlier than its created_at, which the store would read as corrupt.
+	updatedAt := s.timestamp()
+	if updatedAt.Before(cur.UpdatedAt) {
+		updatedAt = cur.UpdatedAt
+	}
 	next := Draft{
 		SchemaVersion: SchemaVersion,
 		ID:            id,
 		Revision:      expectedRevision + 1,
 		Status:        StatusDraft,
 		CreatedAt:     cur.CreatedAt,
-		UpdatedAt:     s.timestamp(),
+		UpdatedAt:     updatedAt,
 		Content:       content,
 	}
 	if err := s.store.Replace(ctx, id, expectedRevision, next.Clone()); err != nil {
@@ -289,6 +300,14 @@ func revisionMismatch(expected, current int64) *Error {
 		Code:            CodeRevisionMismatch,
 		Message:         fmt.Sprintf("expected revision %d but the draft is at revision %d; read it again and retry", expected, current),
 		CurrentRevision: current,
+	}
+}
+
+func revisionLimit() *Error {
+	return &Error{
+		Category: CategoryLimitExceeded,
+		Code:     CodeRevisionLimit,
+		Message:  fmt.Sprintf("the draft is at the maximum revision (%d) and cannot be updated; save its content as a new draft with draft_create", MaxRevision),
 	}
 }
 

@@ -151,9 +151,9 @@ Implementation must preserve the behavior above even if the eventual workflow us
 
 ### Local draft tools (deferred from the web release)
 
-The executable and file-store surface of local recipe-draft epic #19 is deferred from the November web release. Existing development remains in develop and pre-split release history for a separately reviewed local-tool release, including its protocol, storage and host-compatibility acceptance. The version-only CLI and MCP scaffold, archive builds and separate CLI publication gates remain unchanged in scope.
+The November web release retains the local command scaffolds. The separate #23 restore candidate brings back the executable and file-store surface of epic #19 for independent review and renewed #25 host acceptance. [Local draft workflow](local-workflow.md)
 
-The transport-independent draft core, tests and synthetic fixtures remain because hosted manual recipes reuse the strict JSON-string validator. The [local draft contract](local-draft-contract.md) is retained as the shared-core specification and deferred design, not an installation guide. The local slice does not satisfy any numbered phase's exit gate and does not imply hosted draft save, source import, authentication activation, database setup or new provider credentials.
+The transport-independent draft core, tests and synthetic fixtures remain because hosted manual recipes reuse the strict JSON-string validator. The [local draft contract](local-draft-contract.md) specifies the shared core and local tools. The local slice does not satisfy any numbered phase's exit gate and does not imply hosted draft save, source import, authentication activation, database setup or new provider credentials.
 
 ### Phase 0: planning and provider organization
 

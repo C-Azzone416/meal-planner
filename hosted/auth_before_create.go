@@ -31,8 +31,10 @@ type HTTPDoer interface {
 // AuthWebhookConfig configures the blocking Neon user.before_create webhook.
 // JWKSURL exists for deterministic tests; production derives it from BaseURL.
 type AuthWebhookConfig struct {
-	BaseURL           string
-	AllowedEmail      string
+	BaseURL      string
+	AllowedEmail string
+	// AllowedEmailsJSON is a private JSON array; nil selects legacy AllowedEmail.
+	AllowedEmailsJSON *string
 	ExpectedEndpoint  string
 	JWKSURL           string
 	Client            HTTPDoer
@@ -45,9 +47,10 @@ type AuthWebhookConfig struct {
 // environment configuration.
 func AuthBeforeCreateFromEnvironment(w http.ResponseWriter, r *http.Request) {
 	AuthBeforeCreate(AuthWebhookConfig{
-		BaseURL:          os.Getenv("NEON_AUTH_BASE_URL"),
-		AllowedEmail:     os.Getenv("AUTH_ALLOWED_EMAIL"),
-		ExpectedEndpoint: os.Getenv("NEON_AUTH_ENDPOINT_ID"),
+		BaseURL:           os.Getenv("NEON_AUTH_BASE_URL"),
+		AllowedEmail:      os.Getenv("AUTH_ALLOWED_EMAIL"),
+		AllowedEmailsJSON: authAllowedEmailsFromEnvironment(),
+		ExpectedEndpoint:  os.Getenv("NEON_AUTH_ENDPOINT_ID"),
 	}).ServeHTTP(w, r)
 }
 
@@ -105,7 +108,7 @@ func serveAuthBeforeCreate(w http.ResponseWriter, r *http.Request, config AuthWe
 		return
 	}
 
-	baseURL, err := normalizeAuthPolicy(config.BaseURL, config.ExpectedEndpoint, config.AllowedEmail)
+	baseURL, members, err := normalizeAuthMembership(config.BaseURL, config.ExpectedEndpoint, config.AllowedEmail, config.AllowedEmailsJSON)
 	if err != nil {
 		http.Error(w, "authentication webhook is not configured", http.StatusServiceUnavailable)
 		return
@@ -194,7 +197,7 @@ func serveAuthBeforeCreate(w http.ResponseWriter, r *http.Request, config AuthWe
 
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
-	if !authEmailMatches(email, config.AllowedEmail) {
+	if _, allowed := members.email(email); !allowed {
 		_ = json.NewEncoder(w).Encode(beforeCreateResponse{
 			Allowed:      false,
 			ErrorMessage: "This app is private and is not accepting signups for this email.",

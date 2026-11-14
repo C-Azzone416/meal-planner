@@ -1,0 +1,426 @@
+{
+  "accepted": [
+    {
+      "name": "incomplete",
+      "warning_codes": [
+        "no_ingredients",
+        "no_instructions",
+        "no_sources"
+      ]
+    },
+    {
+      "name": "full",
+      "warning_codes": [
+        "partial_phase_assignment",
+        "sourced_without_reference"
+      ]
+    }
+  ],
+  "rejected": [
+    {
+      "file": "rejected/root-owner.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/content-owner.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/root-owner_issuer.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/content-owner_issuer.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/root-owner_subject.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/content-owner_subject.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/root-approval.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/content-approval.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/root-approved.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/content-approved.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/root-status.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/content-status.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/root-origin.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/content-origin.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/root-id.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/content-id.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/root-receipt_id.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/content-receipt_id.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/root-recipe_id.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/content-recipe_id.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/root-created_at.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/content-created_at.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/root-updated_at.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/content-updated_at.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/root-revision.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/content-revision.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/root-schema_version.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/content-schema_version.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/root-review.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/content-review.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/unsupported-version.json",
+      "status": 422,
+      "code": "unsupported_content_schema"
+    },
+    {
+      "file": "rejected/string-version.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/null-version.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/boolean-version.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/missing-version.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/null-content.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/case-variant.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/claim-without-basis.json",
+      "status": 400,
+      "code": "invalid_content",
+      "issue_code": "basis_required"
+    },
+    {
+      "file": "rejected/estimate-without-value.json",
+      "status": 400,
+      "code": "invalid_content",
+      "issue_code": "required"
+    },
+    {
+      "file": "rejected/dangling-source-reference.json",
+      "status": 400,
+      "code": "invalid_content",
+      "issue_code": "unknown_source_ref"
+    },
+    {
+      "file": "rejected/duplicate-root.json",
+      "status": 400,
+      "code": "duplicate_key"
+    },
+    {
+      "file": "rejected/duplicate-content.json",
+      "status": 400,
+      "code": "duplicate_key"
+    },
+    {
+      "file": "rejected/decimal-version.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/exponent-version.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/unpaired-surrogate.json",
+      "status": 400,
+      "code": "invalid_characters"
+    },
+    {
+      "file": "rejected/trailing-json.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/duplicate-source-id.json",
+      "status": 400,
+      "code": "duplicate_key"
+    },
+    {
+      "file": "rejected/duplicate-estimate-value.json",
+      "status": 400,
+      "code": "duplicate_key"
+    },
+    {
+      "file": "rejected/case-content-title.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/case-content-title-pair.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/case-estimate-active-minutes.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/case-basis-kind.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/case-root-content.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/invalid-utf8.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/missing-content.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/oversized-body.json",
+      "status": 413,
+      "code": "input_too_large"
+    },
+    {
+      "file": "rejected/nul-character.json",
+      "status": 400,
+      "code": "invalid_content",
+      "issue_code": "invalid_characters"
+    },
+    {
+      "file": "rejected/control-character.json",
+      "status": 400,
+      "code": "invalid_content",
+      "issue_code": "invalid_characters"
+    },
+    {
+      "file": "rejected/raw-control-byte.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/huge-version.json",
+      "status": 422,
+      "code": "unsupported_content_schema"
+    },
+    {
+      "file": "rejected/root-null.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/root-array.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/empty-body.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/array-content.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/string-content.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/number-title.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/string-ingredients.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/root-string.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/root-number.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/root-boolean.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/version-array.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/version-object.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/version-zero.json",
+      "status": 422,
+      "code": "unsupported_content_schema"
+    },
+    {
+      "file": "rejected/version-negative.json",
+      "status": 422,
+      "code": "unsupported_content_schema"
+    },
+    {
+      "file": "rejected/version-negative-zero.json",
+      "status": 422,
+      "code": "unsupported_content_schema"
+    },
+    {
+      "file": "rejected/ingredients-null-element.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/ingredients-number-element.json",
+      "status": 400,
+      "code": "invalid_type"
+    },
+    {
+      "file": "rejected/truncated-json.json",
+      "status": 400,
+      "code": "invalid_request"
+    },
+    {
+      "file": "rejected/unknown-field-null.json",
+      "status": 400,
+      "code": "unknown_field"
+    },
+    {
+      "file": "rejected/bom-prefix.json",
+      "status": 400,
+      "code": "invalid_request"
+    }
+  ]
+}

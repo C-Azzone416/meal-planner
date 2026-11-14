@@ -228,7 +228,7 @@ func TestAuthPolicyCanonicalURLAcrossRuntimeEntryPoints(t *testing.T) {
 		testIssuer + "/custom_DB-2/auth/",
 	} {
 		t.Run(baseURL, func(t *testing.T) {
-			canonical, err := normalizeAuthPolicy(baseURL, " "+testEndpointID+" ", testAllowedEmail)
+			canonical, _, err := normalizeAuthMembership(baseURL, " "+testEndpointID+" ", testAllowedEmail, nil)
 			if err != nil || !strings.HasPrefix(canonical, testIssuer+"/") || strings.HasSuffix(canonical, "/") {
 				t.Fatalf("canonical URL = %q, %v", canonical, err)
 			}
@@ -277,7 +277,7 @@ func TestAuthPolicyAcceptsDeploymentEmailShape(t *testing.T) {
 		strings.Repeat("a", 64) + "@example.invalid",
 		"a@" + strings.Repeat("b", 244) + ".invalid",
 	} {
-		if _, err := normalizeAuthPolicy(testIssuer+"/neondb/auth", testEndpointID, email); err != nil {
+		if _, _, err := normalizeAuthMembership(testIssuer+"/neondb/auth", testEndpointID, email, nil); err != nil {
 			t.Errorf("deployment-valid email rejected: %v", err)
 		}
 	}

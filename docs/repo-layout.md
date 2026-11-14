@@ -1,6 +1,6 @@
 # Repository Layout
 
-Component map for the UI/authentication preview and retained local-tool scaffolds. All commands run from the repository root. Manual recipe API/storage and reviewed migration files exist; hosted planning and the executable local recipe-draft surface are not included.
+Component map for the UI and authentication preview and the separate #23 local draft restore candidate. Run commands from the repository root. The candidate is pending #25 host acceptance.
 
 | Path | Component | Purpose | Check commands |
 | --- | --- | --- | --- |
@@ -9,8 +9,9 @@ Component map for the UI/authentication preview and retained local-tool scaffold
 | `hosted/migrations/` | database | Reviewed, explicitly applied manual-recipe schema; never startup migration | `go test -tags=integration ./hosted/...` against disposable localhost Postgres |
 | `hosted/` | hosted API | Manual recipe ownership/storage plus plain `net/http` handlers for health, public auth configuration, signup policy, and reusable bearer-token protection | `go test ./api/... ./hosted/...` |
 | `api/` | hosted API | Vercel Go functions for `/api/health`, `/api/auth-config`, and the signed blocking signup webhook | `go test ./api/... ./hosted/...` |
-| `cmd/mealplanner/` | local tools | CLI scaffold: `version`, `--version`; no args prints usage and exits 2; no draft commands | `go test ./cmd/...`, `go build ./cmd/...` |
-| `cmd/mealplanner-mcp/` | local tools | MCP scaffold: `--version`, otherwise drains stdin and exits 0 without stdout; no protocol tools or file store | `go test ./cmd/...`, `go build ./cmd/...` |
+| `cmd/mealplanner/` | local tools | Candidate CLI with version, draft validation, listing and inspection | `go test ./cmd/...`, `go build ./cmd/...` |
+| `cmd/mealplanner-mcp/` | local tools | Candidate stdio server with draft tools, status and a wire gate | `go test ./cmd/...`, `go build ./cmd/...` |
+| `internal/localstore/` and `internal/mcpadapter/` | local tools | Candidate file persistence and MCP tool schemas and handlers | `go test ./internal/localstore ./internal/mcpadapter` |
 | `contracts/` | contract | `openapi.yaml` (OpenAPI 3.1) and `contract_test.go` checking the hosted handler against it | `go test ./contracts/...` |
 | `web/` | web client | Vite + React + TypeScript; protected responsive preview routes and email-and-password sign-in; Node version in `web/.nvmrc` | `npm ci --prefix web`, then `npm run --prefix web lint` / `typecheck` / `test` / `build` (output `web/dist`) |
 | `vercel.json` | hosted deploy | Builds `web/` to static `web/dist`; `api/*.go` are detected as Go functions | none locally |
@@ -21,7 +22,7 @@ Shared draft core retained for the hosted release:
 | --- | --- | --- |
 | `internal/core/draft/` (+ `memstore/`, `storetest/`) | shared core | Draft model, strict JSON-string validation reused by hosted recipes, structural validation, service, persistence interface, in-memory store and conformance suite |
 
-All core tests and synthetic fixtures remain. The [local draft contract](local-draft-contract.md) specifies the core and the deferred epic #19 design. `internal/localstore/`, `internal/mcpadapter/`, local draft CLI commands and MCP draft tools are excluded from this release; no local setup is required. CI continues to test all remaining internal and command packages with `go test ./internal/... ./cmd/...`. Reserved local-tool classifier rules remain for future separately reviewed development.
+The local Go job includes the candidate commands, store and adapter. [Local draft contract](local-draft-contract.md) · [Local draft workflow](local-workflow.md)
 
 Additional checks:
 
