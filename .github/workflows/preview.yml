@@ -89,12 +89,45 @@ jobs:
           set -euo pipefail
           [[ "$(git -C .target-manifests rev-parse HEAD)" == "$SHA" ]] || exit 1
           node .dependency-policy/tools/framebriar-ci/classify-dependency.mjs .target-manifests
-      - name: Require supported public Preview dependencies
+      - name: Require known Preview dependency classification
         env:
           PRIVATE_DEPENDENCY: ${{ steps.dependency.outputs.private }}
         run: |
           set -euo pipefail
-          [[ "$PRIVATE_DEPENDENCY" == false ]] || { echo '::error::Private or unknown Preview dependencies are blocked: reviewed private artifact export is not implemented. No direct install/build fallback is permitted.'; exit 1; }
+          [[ "$PRIVATE_DEPENDENCY" == false || "$PRIVATE_DEPENDENCY" == true ]] || { echo '::error::Unknown Preview dependencies are blocked. No direct install/build fallback is permitted.'; exit 1; }
+
+  private-proof:
+    name: Deploy / verify protected Preview
+    needs: select-source
+    if: needs.select-source.outputs.private == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    steps:
+      - name: Require explicit trusted revision
+        env:
+          PIN: ${{ vars.FRAMEBRIAR_TRUSTED_WORKFLOW_SHA }}
+        run: '[[ "$PIN" =~ ^[a-f0-9]{40}$ ]] || exit 1'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ vars.FRAMEBRIAR_TRUSTED_WORKFLOW_SHA }}
+          persist-credentials: false
+          sparse-checkout: tools/framebriar-ci
+          path: trusted
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '26'
+      - name: Verify exact completed protected deployment and backend checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUBJECT: develop
+          PR_NUMBER: '0'
+          TARGET_SHA: ${{ inputs.sha }}
+          TRUSTED_WORKFLOW_SHA: ${{ vars.FRAMEBRIAR_TRUSTED_WORKFLOW_SHA }}
+        run: node trusted/tools/framebriar-ci/verify-preview.mjs
 
   pull:
     needs: select-source
@@ -193,6 +226,7 @@ jobs:
         run: |
           head=$(git rev-parse HEAD)
           [[ "$head" == "$SHA" ]] || { echo "::error::checked out $head, expected $SHA"; exit 1; }
+
 
       # No migration runner executes here. The reviewed hosted/migrations SQL
       # files are shipped as source only; application requires separate owner-approved
