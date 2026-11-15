@@ -178,7 +178,7 @@ export function ScreenshotEditor({
             : "";
 
   return (
-    <div className="shot-editor">
+    <div className="shot-editor" data-capture="FRAMEBRIAR_ANNOTATION_ACTIVE">
       <div className="shot-tools">
         <div role="radiogroup" aria-label={EDITOR_COPY.inkGroup} className="ink-picker">
           {INK_COLORS.map((color, index) => {

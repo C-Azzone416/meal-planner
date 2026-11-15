@@ -25,6 +25,6 @@ function walk(dir) {
 walk(root)
 assert.ok(scripts.includes(expected.buildSha), 'Actual JavaScript lacks the exact deployed SHA')
 assert.ok(scripts.includes(expected.appId), 'Actual JavaScript lacks the environment app identity')
-if (!expected.screenshots) assert.ok(!/FRAMEBRIAR_CAPTURE_ACTIVE|html2canvas|html-to-image|toPng\(/.test(scripts), 'Screenshot code present with capture disabled')
-if (expected.screenshots) assert.ok(scripts.includes('FRAMEBRIAR_CAPTURE_ACTIVE'), 'Enabled capture marker absent from actual JavaScript')
+if (!expected.screenshots) assert.ok(!/FRAMEBRIAR_CAPTURE_ACTIVE|FRAMEBRIAR_ANNOTATION_ACTIVE|html2canvas|html-to-image|toPng\(/.test(scripts), 'Screenshot code present with capture disabled')
+if (expected.screenshots) assert.ok(scripts.includes('FRAMEBRIAR_CAPTURE_ACTIVE') && scripts.includes('FRAMEBRIAR_ANNOTATION_ACTIVE'), 'Enabled capture marker absent from actual JavaScript')
 console.log('Framebriar target artifact verified:', expected.environment, expected.enabled ? 'enabled' : 'disabled', expected.screenshots ? 'capture enabled' : 'capture absent')

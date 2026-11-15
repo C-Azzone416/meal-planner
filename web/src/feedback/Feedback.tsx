@@ -29,9 +29,7 @@ import {
   type Connection,
 } from './client'
 import './feedback.css'
-import { ScreenshotEditor } from './ScreenshotEditor'
-import { useAnnotationDraft } from './use-annotation-draft'
-import { finalScreenshot } from './annotation-final'
+import { ScreenshotEditor, useAnnotationDraft, finalScreenshot } from 'feedback-images'
 
 type Controls = {
   open(opener: HTMLElement): void

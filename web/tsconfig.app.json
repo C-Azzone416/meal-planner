@@ -10,7 +10,7 @@
 
     /* Bundler mode */
     "moduleResolution": "bundler",
-    "paths": { "feedback-capture": ["./src/feedback/capture.ts"] },
+    "paths": { "feedback-capture": ["./src/feedback/capture.ts"], "feedback-images": ["./src/feedback/images.ts"] },
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",

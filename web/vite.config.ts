@@ -10,6 +10,7 @@ export default defineConfig(({ mode }) => {
     envPrefix: [],
     define: { __FRAMEBRIAR_CONFIG__: JSON.stringify(feedback) },
     resolve: { alias: {
+      'feedback-images': fileURLToPath(new URL(`./src/feedback/images${feedback.screenshots ? '' : '.disabled'}.ts`, import.meta.url)),
       'feedback-capture': fileURLToPath(new URL(`./src/feedback/capture${feedback.screenshots ? '' : '.disabled'}.ts`, import.meta.url)),
     } },
     plugins: [react(), {

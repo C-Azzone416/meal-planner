@@ -28,6 +28,7 @@ const fixture = vi.hoisted(() => ({
   receipt: null as
     null | ((receipt: { id: string; gameId: string; status: string }) => void),
 }))
+vi.mock('feedback-images', () => import('./images'))
 vi.mock('feedback-capture', () => ({ captureViewport: fixture.capture }))
 vi.mock('./config', () => ({
   feedbackConfig: {

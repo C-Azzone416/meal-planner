@@ -17,7 +17,7 @@ test('artifact guard checks actual JavaScript, exact target, capture and secrets
   const valid = `${env.FRAMEBRIAR_BUILD_SHA} meal-planner-preview`
   fs.writeFileSync(file, valid)
   assert.equal(check(dir), 0)
-  for (const marker of ['FRAMEBRIAR_CAPTURE_ACTIVE', 'FRAMEBRIAR_TEST_SECRET', 'FRAMEBRIAR_FAKE_SERVICE', `ghp_${'x'.repeat(30)}`]) {
+  for (const marker of ['FRAMEBRIAR_CAPTURE_ACTIVE', 'FRAMEBRIAR_ANNOTATION_ACTIVE', 'FRAMEBRIAR_TEST_SECRET', 'FRAMEBRIAR_FAKE_SERVICE', `ghp_${'x'.repeat(30)}`]) {
     fs.writeFileSync(file, `${valid} ${marker}`)
     assert.notEqual(check(dir), 0)
   }
@@ -36,4 +36,15 @@ test('server guard requires real materialized feedback binary provenance', () =>
   assert.equal(run(), 0)
   fs.writeFileSync(file, 'no provenance')
   assert.notEqual(run(), 0)
+}))
+
+test('enabled screenshot artifact requires capture and annotation; disabled rejects both', () => fixture(dir => {
+  const active = { ...env, FRAMEBRIAR_SCREENSHOTS: '1' }
+  fs.writeFileSync(path.join(dir, 'framebriar-build.json'), JSON.stringify(publicConfig(active)))
+  const file = path.join(dir, 'app.js')
+  const valid = `${env.FRAMEBRIAR_BUILD_SHA} meal-planner-preview FRAMEBRIAR_CAPTURE_ACTIVE`
+  fs.writeFileSync(file, valid)
+  assert.notEqual(check(dir, active), 0)
+  fs.writeFileSync(file, `${valid} FRAMEBRIAR_ANNOTATION_ACTIVE`)
+  assert.equal(check(dir, active), 0)
 }))

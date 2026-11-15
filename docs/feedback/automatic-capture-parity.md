@@ -48,3 +48,8 @@ checks compare real UI region pixels with capture pixels, verify excluded canari
 inspect actual outgoing PNG annotation pixels, and exercise metadata-received /
 image-502 or invalid-receipt recovery across close/reload. This is not evidence of
 live Framebriar delivery or permission to activate the integration.
+
+Build boundary: `feedback-images` resolves to a type-only disabled stub whenever
+screenshots are disabled, alongside `feedback-capture`. Editor/compositor/drawing
+implementation is absent from those artifacts; the artifact matrix requires
+both active markers only for explicitly capture-enabled builds.
