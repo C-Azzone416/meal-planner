@@ -16,7 +16,8 @@ test('build has install-only reader and no Vercel or runtime credentials',()=>{
  assert.doesNotMatch(f,/VERCEL_TOKEN|DATABASE_URL|COOKIE_SECRET|ENCRYPTION_KEY/)
  assert.match(f,/npm ci --ignore-scripts/)
  assert.match(f,/go-version: '1.26.11'/)
- assert.match(f,/govulncheck@v1.9.0 -mode=binary/)
+ assert.match(f,/bash trusted\/tools\/framebriar-ci\/verify-go-binaries\.sh target\/\.vercel\/output\/functions/)
+ assert.match(fs.readFileSync('tools/framebriar-ci/verify-go-binaries.sh','utf8'),/govulncheck@v1.9.0 -mode=binary/)
 })
 test('deploy consumes immutable same-run artifact and checks before token',()=>{
  const d=job('deploy')
