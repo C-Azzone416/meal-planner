@@ -22,3 +22,7 @@
 web/node_modules/
 web/dist/
 .vercel/
+
+# Browser test artifacts
+web/test-results/
+web/playwright-report/

@@ -38,3 +38,18 @@ test('protected Preview now requires actual postbuild readiness before deploymen
  assert.match(deploy,/needs: \[validate, backend, frontend, evidence, pull, runtime-check, readiness\]/)
  assert.ok(deploy.indexOf('readiness-adapter.mjs consume')<deploy.indexOf('secrets.VERCEL_TOKEN'))
 })
+
+for (const [name, job] of [['deploy-production','build'], ['vercel-bootstrap','build-production'], ['vercel-bootstrap','build-preview']]) {
+  test(`${name}/${job} uses unconditional readiness guard before installation/build`, () => {
+    const workflow = fs.readFileSync(`.github/workflows/${name}.yml`, 'utf8')
+    const body = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n  [a-z][a-z-]*:\n/)[0]
+    assert.ok(body, 'Expected build job exists')
+    const guard = '      - name: Verify manual migration readiness\n        run: bash tools/deploy/check-migration-readiness.sh .'
+    assert.ok(body.includes(guard), 'Guard must be unconditional and have no ignored failure')
+    assert.equal(body.split('check-migration-readiness.sh').length - 1, 1)
+    // The private registry install belongs only to the protected workflow.
+    assert.doesNotMatch(body, /secrets\.FRAMEBRIAR_PACKAGE_READ_TOKEN/)
+    assert.ok(body.indexOf(guard) < body.indexOf('      - name: Vercel build'))
+    assert.doesNotMatch(body, /skipped, no schema yet|hashFiles\('db\/migrations/)
+  })
+}

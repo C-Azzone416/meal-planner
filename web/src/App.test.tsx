@@ -29,6 +29,7 @@ const user: AuthUser = {
 
 function makeService(session: AuthUser | null): AuthService {
   return {
+    getToken: vi.fn().mockResolvedValue('fixture-token'),
     getSession: vi.fn().mockResolvedValue(session),
     signInWithPassword: vi.fn().mockResolvedValue(user),
     sendPasswordResetCode: vi.fn().mockResolvedValue(undefined),
