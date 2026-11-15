@@ -29,6 +29,9 @@ import {
   type Connection,
 } from './client'
 import './feedback.css'
+import { ScreenshotEditor } from './ScreenshotEditor'
+import { useAnnotationDraft } from './use-annotation-draft'
+import { finalScreenshot } from './annotation-final'
 
 type Controls = {
   open(opener: HTMLElement): void
@@ -65,7 +68,8 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false),
     [notes, setNotes] = useState(''),
     [media, setMedia] = useState<Blob | null>(null)
-  const previewImage = useRef<HTMLImageElement>(null)
+  const [includeImage, setIncludeImage] = useState(true)
+  const opening = useRef(false)
   const [busy, setBusy] = useState(false),
     [message, setMessage] = useState('')
   const box = useRef<DurableFeedback | null>(null),
@@ -79,6 +83,9 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
   const saveAbort = useRef<AbortController | null>(null)
   const received = useRef(new Set<string>())
   const currentScope = useRef('')
+  const currentConnection = useRef(connection)
+  useEffect(() => { currentConnection.current = connection }, [connection])
+  const annotation = useAnnotationDraft(connection.outboxKey ?? null)
   const captureScene = useRef('other')
   const refreshSequence = useRef(0)
   const captureTime = useRef<string | null>(null)
@@ -149,6 +156,7 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
     const end = () => {
       epoch.current++
       captureEpoch.current++
+      opening.current = false
       saveAbort.current?.abort()
       box.current?.stop()
       const scope = currentScope.current
@@ -174,12 +182,6 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
     }
   }, [refresh])
   useEffect(() => {
-    if (!media) return
-    const url = URL.createObjectURL(media)
-    if (previewImage.current) previewImage.current.src = url
-    return () => URL.revokeObjectURL(url)
-  }, [media, open])
-  useEffect(() => {
     if (!open) return
     dialog.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus()
     return () => {
@@ -189,8 +191,10 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
   const close = () => {
     if (pending.current) return
     captureEpoch.current++
+      opening.current = false
     setCapturing(false)
     setOpen(false)
+    if (!prepared.current) annotation.discard()
     if (!prepared.current) setMedia(null)
   }
   const clear = async () => {
@@ -201,6 +205,7 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
       )
     epoch.current++
     captureEpoch.current++
+      opening.current = false
     saveAbort.current?.abort()
     box.current?.stop()
     setCapturing(false)
@@ -238,6 +243,7 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
       // before ending authentication; no local ownership is guessed here.
       epoch.current++
       captureEpoch.current++
+      opening.current = false
       saveAbort.current?.abort()
       box.current?.stop()
       await saveSettled.current
@@ -266,17 +272,23 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
     setBusy(true)
     const ticket = epoch.current
     try {
-      if (!prepared.current)
+      if (!prepared.current) {
+        const image = await finalScreenshot({ include: includeImage, original: media, drawing: annotation.drawing })
+        if (image.kind === 'failed' || image.kind === 'too-large') {
+          setMessage('Could not prepare the reviewed screenshot within the 4 MB limit. Undo marks or uncheck Include screenshot to send notes only.')
+          return
+        }
+        if (ticket !== epoch.current) return
         prepared.current = await prepareLocalFeedback({
-          blob: media,
+          blob: image.kind === 'ready' ? image.blob : null,
           notes,
           captureContext: {
             gameId: feedbackConfig.appId,
             buildSha: feedbackConfig.buildSha,
-            scene: media
+            scene: media && includeImage
               ? captureScene.current
               : (screens[location.pathname] ?? 'other'),
-            capturedAt: (media ? captureTime.current : null) ?? new Date().toISOString(),
+            capturedAt: (media && includeImage ? captureTime.current : null) ?? new Date().toISOString(),
             sessionId: crypto.randomUUID(),
             seed: null,
             platform: innerWidth < 640 ? 'mobile' : 'desktop',
@@ -284,6 +296,7 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
             breadcrumbs: [],
           },
         })
+      }
       if (ticket !== epoch.current) return
       setLocked(true)
       const draft = prepared.current
@@ -315,40 +328,44 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
       setBusy(false)
     }
   }
-  const chooseCapture = async () => {
-    if (media) {
-      captureEpoch.current++
-      setMedia(null)
-      prepared.current = null
-      return
-    }
+  useEffect(() => {
+    captureEpoch.current++
+    opening.current = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- navigation must revoke asynchronous capture and its visible sheet together
+    setCapturing(false)
+    setOpen(false)
+    if (!pending.current && !prepared.current) setMedia(null)
+  }, [location.pathname])
+  const openSheet = async (opener: HTMLElement) => {
+    if (opening.current || open || connection.status !== 'connected') return
+    returnFocus.current = opener
+    if (prepared.current) { setOpen(true); return }
     const ticket = ++captureEpoch.current
-    const startedAt = new Date().toISOString()
-    const scene = screens[location.pathname] ?? 'other'
+    const account = epoch.current
+    const scope = currentScope.current
+    const path = location.pathname
+    opening.current = true
     setCapturing(true)
-    try {
-      const blob = await captureViewport()
-      if (ticket === captureEpoch.current) {
-        setMedia(blob)
-        captureTime.current = blob ? startedAt : null
-        captureScene.current = scene
-        prepared.current = null
-        if (!blob)
-          setMessage(
-            'Screenshot unavailable on this screen. You can send notes only.',
-          )
-      }
-    } catch {
-      if (ticket === captureEpoch.current)
-        setMessage('Screenshot unavailable. You can send notes only.')
-    } finally {
-      if (ticket === captureEpoch.current) setCapturing(false)
-    }
+    setMessage('')
+    annotation.discard()
+    const startedAt = new Date().toISOString()
+    const blob = feedbackConfig.screenshots && connection.screenshots ? await captureViewport() : null
+    if (ticket !== captureEpoch.current || account !== epoch.current) return
+    opening.current = false
+    setCapturing(false)
+    if (scope !== currentScope.current || currentConnection.current.status !== 'connected') return
+    setMedia(blob)
+    setIncludeImage(!!blob)
+    captureTime.current = blob ? startedAt : null
+    captureScene.current = screens[path] ?? (path.startsWith('/recipes/') ? 'recipes' : 'other')
+    if (!blob && feedbackConfig.screenshots) setMessage('Screenshot unavailable on this screen. You can send notes only.')
+    opening.current = false
+    setCapturing(false)
+    setOpen(true)
   }
   const controls: Controls = {
     open: (opener) => {
-      returnFocus.current = opener
-      setOpen(true)
+      void openSheet(opener)
     },
     signOut,
     connection,
@@ -416,18 +433,18 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
             <p>
               Sent to Framebriar: your notes, reviewed screen code, device/input
               class, app/environment, build version and capture time. No
-              automatic recipe data, account identity, page text or URLs.
+              automatic account identity or URLs. Optional screenshots show the visible app, including recipes and page text, with private regions excluded.
             </p>
             {feedbackConfig.screenshots && connection.screenshots && (
               <>
                 <label>
                   <input
                     type="checkbox"
-                    checked={!!media}
-                    disabled={busy || locked || capturing}
-                    onChange={() => void chooseCapture()}
+                    checked={includeImage && !!media}
+                    disabled={busy || locked || capturing || !media}
+                    onChange={(event) => { setIncludeImage(event.target.checked); annotation.discard(); prepared.current = null }}
                   />{' '}
-                  Include a screenshot (off by default)
+                  Include screenshot
                 </label>
                 <p>
                   Screenshots may show private recipes, meal plans or household
@@ -435,13 +452,7 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
                 </p>
               </>
             )}
-            {media && (
-              <img
-                className="feedback-preview"
-                ref={previewImage}
-                alt="Review the sanitized visible screen screenshot"
-              />
-            )}
+            {media && includeImage && <ScreenshotEditor blob={media} draft={annotation} disabled={busy || locked} />}
             <p>
               Delivered reports remain in Framebriar. Clearing this device’s
               outbox does not erase them.
@@ -483,7 +494,7 @@ export function FeedbackProvider({ children }: { children: ReactNode }) {
 }
 export function FeedbackAction() {
   const context = useContext(Context)
-  return context && enabled() ? (
+  return context && enabled() && context.connection.status === 'connected' ? (
     <button
       className="feedback-action"
       type="button"
@@ -581,6 +592,7 @@ function ConnectedFeedbackSettings({ context }: { context: Controls }) {
           </button>
         </>
       )}
+      {context.connection.status === 'connected' && <button type="button" onClick={(event) => context.open(event.currentTarget)}>Send feedback</button>}
       <button disabled={busy} onClick={() => void context.refresh()}>
         Refresh status
       </button>

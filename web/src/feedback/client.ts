@@ -81,7 +81,7 @@ export function transport(
     })
     if (
       json.size > 16384 ||
-      (media && (media.size > 3 * 1024 * 1024 || media.type !== 'image/png'))
+      (media && (media.size > 4_000_000 || media.type !== 'image/png'))
     )
       throw new FeedbackError('invalid-input')
     form.append('report', json, 'report.json')

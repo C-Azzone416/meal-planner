@@ -1,146 +1,70 @@
+// Adapted from Packed Smart c1a381e screenshot-capture/capture-exclusion.
+// Capture the real viewport, not a reconstructed drawing. Private nodes are
+// rejected BEFORE html-to-image clones them; settings can still be reported.
 import { toBlob } from 'html-to-image'
-
-export const MAX_MEDIA = 3 * 1024 * 1024
-const blocked =
-  'input,textarea,select,button,img,svg,canvas,video,iframe,[data-feedback-private],[data-feedback-ui],header,nav'
-const safePages = new Set([
-  '/week',
-  '/recipes',
-  '/prep',
-  '/shopping',
-  '/drafts',
-  '/cook',
-])
-
-// Omit rather than reconstruct partially clipped content. This keeps scroll
-// containers, opacity-hidden ancestors and overflow masks from exposing text
-// that was not visible in the original viewport.
-function visibleWithinAncestors(node: HTMLElement, rect: DOMRect): boolean {
-  for (
-    let ancestor: HTMLElement | null = node;
-    ancestor;
-    ancestor = ancestor.parentElement
-  ) {
-    const style = getComputedStyle(ancestor)
-    if (
-      style.opacity === '0' ||
-      style.display === 'none' ||
-      style.visibility === 'hidden' ||
-      style.contentVisibility === 'hidden'
-    )
-      return false
-    if (ancestor === node) continue
-    const bounds = ancestor.getBoundingClientRect()
-    const clipsX = /^(hidden|clip|scroll|auto)$/.test(
-      style.overflowX === 'visible'
-        ? style.overflow
-        : style.overflowX || style.overflow,
-    )
-    const clipsY = /^(hidden|clip|scroll|auto)$/.test(
-      style.overflowY === 'visible'
-        ? style.overflow
-        : style.overflowY || style.overflow,
-    )
-    if (clipsX && (rect.left < bounds.left || rect.right > bounds.right))
-      return false
-    if (clipsY && (rect.top < bounds.top || rect.bottom > bounds.bottom))
-      return false
-  }
-  return true
+export const MAX_MEDIA = 8 * 1024 * 1024
+export function captureAllowed(path: string) {
+  return /^\/(week|prep|shopping|drafts|cook|house-rules)$/.test(path) || /^\/recipes(?:\/[^/]+){0,3}$/.test(path)
 }
-
-/** Build a fresh, inert drawing of the visible viewport. No source attributes,
- * controls, URLs, or hidden DOM are cloned, even into an intermediate SVG. */
-export function sanitizedViewport(): HTMLElement | null {
-  if (
-    !safePages.has(location.pathname) ||
-    (window.visualViewport && window.visualViewport.scale !== 1)
-  )
-    return null
-  const source = document.querySelector('.page-stack')
-  if (!source) return null
-  const width = window.innerWidth,
-    height = window.innerHeight
-  const root = document.createElement('div')
-  Object.assign(root.style, {
-    position: 'relative',
-    width: `${width}px`,
-    height: `${height}px`,
-    overflow: 'hidden',
-    background: '#f4f1e9',
-  })
-  for (const node of source.querySelectorAll('*')) {
-    if (!(node instanceof HTMLElement) || node.closest(blocked)) continue
-    const rect = node.getBoundingClientRect(),
-      style = getComputedStyle(node)
-    if (
-      !rect.width ||
-      !rect.height ||
-      rect.bottom <= 0 ||
-      rect.right <= 0 ||
-      rect.top >= height ||
-      rect.left >= width ||
-      style.visibility !== 'visible' ||
-      style.display === 'none' ||
-      !visibleWithinAncestors(node, rect)
-    )
-      continue
-    // Direct text nodes only: children are positioned independently from actual
-    // viewport rectangles, so document and nested scroll offsets are exact.
-    const text = Array.from(node.childNodes)
-      .filter((n) => n.nodeType === Node.TEXT_NODE)
-      .map((n) => n.textContent)
-      .join('')
-      .trim()
-    const draw = document.createElement('div')
-    Object.assign(draw.style, {
-      position: 'absolute',
-      left: `${rect.left}px`,
-      top: `${rect.top}px`,
-      width: `${rect.width}px`,
-      height: `${rect.height}px`,
-      boxSizing: 'border-box',
-      overflow: 'hidden',
-      backgroundColor: style.backgroundColor,
-      borderRadius: style.borderRadius,
-      color: style.color,
-      font: style.font,
-      lineHeight: style.lineHeight,
-      padding: style.padding,
-      textAlign: style.textAlign,
-      whiteSpace: style.whiteSpace,
-    })
-    draw.textContent = text
-    root.append(draw)
+const excluded = '[data-feedback-private],[data-feedback-ui],[data-feedback-exclude],[data-feedback-sensitive-portal],input[type="password"],input[type="email"]'
+function resourceStyle(node: Element) {
+  // No capture-time resource requests, including CSS images/masks/pseudo-elements.
+  for (const pseudo of [null, '::before', '::after']) {
+    const style = getComputedStyle(node, pseudo)
+    for (let i = 0; i < style.length; i++)
+      if (/url\s*\(/i.test(style.getPropertyValue(style[i]))) return true
   }
-  return root
+  return false
 }
-
+export function includeInCapture(node: Node): boolean {
+  if (!(node instanceof Element)) return true
+  if (node.closest(excluded)) return false
+  if (node.matches('head,script,style,link,meta,iframe,object,embed,video,audio,canvas,img,foreignObject')) return false
+  // html-to-image deep-clones SVG descendants. Permit only inert local shapes,
+  // never a nested foreignObject, image/use, resource URL or private marker.
+  if (node instanceof SVGElement) {
+    const svg = node.closest('svg')!
+    if (svg.querySelector(`${excluded},image,use,foreignObject,script,style,a`) ||
+      [svg,...svg.querySelectorAll('*')].some(n => Array.from(n.attributes).some(a => /href|^on/i.test(a.name)) || resourceStyle(n))) return false
+  }
+  if (resourceStyle(node)) return false
+  const style = getComputedStyle(node)
+  return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0'
+}
+export function captureReady() {
+  if (!captureAllowed(location.pathname) || document.querySelector('[data-feedback-sensitive-portal]') ||
+    (window.visualViewport && window.visualViewport.scale !== 1)) return false
+  for (const region of document.querySelectorAll('[data-feedback-identity]'))
+    if (!region.closest('[data-feedback-private],[data-feedback-exclude="account-identity"]')) return false
+  return !resourceStyle(document.documentElement)
+}
 export async function captureViewport(): Promise<Blob | null> {
-  // Artifact guard: executable marker exists only in the active capture module.
-  const marker = 'FRAMEBRIAR_CAPTURE_ACTIVE'
-  const root = sanitizedViewport()
-  if (root) root.dataset.capture = marker
-  if (!root) return null
-  // html-to-image copies computed styles. A detached tree has incomplete
-  // computed styles in real engines, so mount only this already-sanitized
-  // drawing offscreen. No original/private node is ever mounted or cloned.
-  const mount = document.createElement('div')
-  Object.assign(mount.style, { position: 'fixed', left: '-100000px', top: '0' })
-  mount.setAttribute('aria-hidden', 'true')
-  mount.append(root)
-  document.body.append(mount)
+  if (!captureReady()) return null
+  const width = innerWidth, height = innerHeight, path = location.href
+  if (!width || !height || width > 4096 || height > 4096 || width * height > 12_000_000) return null
+  const root = document.documentElement
+  root.dataset.capture = 'FRAMEBRIAR_CAPTURE_ACTIVE'
+  let invalidated = false
+  const observer = new MutationObserver(() => { if (!captureReady()) invalidated = true })
+  observer.observe(document.body, { subtree:true, childList:true, attributes:true })
+  const invalidate = () => { invalidated = true }
+  window.addEventListener('feedback-session-ended', invalidate)
   try {
+    for (const pixelRatio of [1, 0.5, 0.25]) {
     const blob = await toBlob(root, {
-      width: innerWidth,
-      height: innerHeight,
-      pixelRatio: 1,
-      skipFonts: true,
+      width, height, pixelRatio, skipFonts:true,
+      style:{marginTop:`${-scrollY}px`,marginLeft:`${-scrollX}px`},
+      filter:includeInCapture,
     })
-    return blob?.type === 'image/png' && blob.size > 0 && blob.size <= MAX_MEDIA
-      ? blob
-      : null
-  } finally {
-    mount.remove()
+    if (invalidated || !captureReady() || location.href !== path || innerWidth !== width || innerHeight !== height) return null
+    if (blob?.type === 'image/png' && blob.size > 0 && blob.size <= MAX_MEDIA) return blob
+    if (!blob) return null
+    }
+    return null
+  } catch { return null }
+  finally {
+    observer.disconnect()
+    window.removeEventListener('feedback-session-ended',invalidate)
+    delete root.dataset.capture
   }
 }

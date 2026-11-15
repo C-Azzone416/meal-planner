@@ -102,3 +102,118 @@
     text-align: center;
   }
 }
+
+/* Packed Smart annotation layout; Meal theme variable fallbacks. */
+.feedback-sheet { --line-strong:#555; --control-radius:6px; --control-bg:#fff; --accent-2:#3f5c44; --ink-edge-halo:#fff; --ink-edge-outer:#111; --detail-surface:#eee; }
+.shot-editor,
+.shot-tools {
+  display: grid;
+  gap: 8px;
+}
+.ink-picker {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.ink-swatch {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 2px;
+  min-height: 44px;
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--control-radius);
+  background: var(--control-bg);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+/* Selection is a heavier border (inset, so nothing shifts), a tick and aria-checked: never colour alone. */
+.ink-swatch[aria-checked="true"] {
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+.ink-swatch:focus-visible {
+  outline: 3px solid var(--accent-2);
+  outline-offset: 2px;
+}
+.ink-swatch[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.ink-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  /* The same two rings that sit under every stroke (a near-black line, then white), so the dot is seen on any background. */
+  box-shadow:
+    0 0 0 1.5px var(--ink-edge-halo),
+    0 0 0 2.5px var(--ink-edge-outer);
+}
+.ink-name {
+  font-size: 13px;
+  font-weight: 700;
+}
+.ink-check {
+  position: absolute;
+  top: 3px;
+  right: 7px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.shot-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.shot-actions .button {
+  min-height: 44px;
+  justify-content: center;
+}
+.shot-status {
+  margin: 0;
+}
+.shot-preview {
+  position: relative;
+  width: 100%;
+  height: min(60dvh, 480px);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--detail-surface);
+}
+.shot-image,
+.shot-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.shot-image {
+  pointer-events: none;
+  user-select: none;
+}
+/* Only the canvas stops the browser scrolling or zooming under a finger; the body around it still scrolls. */
+.shot-canvas {
+  touch-action: none;
+  cursor: crosshair;
+}
+@media (min-width: 660px) {
+  .shot-tools {
+    grid-template-columns: auto auto;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .ink-picker {
+    grid-template-columns: repeat(4, 88px);
+  }
+  .shot-actions {
+    display: flex;
+  }
+  .shot-preview {
+    height: min(46dvh, 420px);
+  }
+}

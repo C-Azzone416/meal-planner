@@ -15,7 +15,7 @@ import (
 	"unicode/utf8"
 )
 
-const feedbackMaxMedia = 3 * 1024 * 1024
+const feedbackMaxMedia = 4_000_000
 const feedbackMaxJSON = 16 * 1024
 const feedbackMaxBody = feedbackMaxMedia + feedbackMaxJSON + 4096
 

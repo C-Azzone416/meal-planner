@@ -116,7 +116,7 @@ async function open() {
   mount()
   await screen.findByText('connected')
   fireEvent.click(screen.getByRole('button', { name: 'Feedback' }))
-  return screen.getByLabelText('Notes')
+  return await screen.findByLabelText('Notes')
 }
 test('Cancel/reopen retains notes without sending and restores focus', async () => {
   const notes = await open()
@@ -129,7 +129,7 @@ test('Cancel/reopen retains notes without sending and restores focus', async () 
     screen.getByRole('button', { name: 'Feedback' }),
   )
   fireEvent.click(screen.getByRole('button', { name: 'Feedback' }))
-  expect((screen.getByLabelText('Notes') as HTMLTextAreaElement).value).toBe(
+  expect(((await screen.findByLabelText('Notes')) as HTMLTextAreaElement).value).toBe(
     'Review only',
   )
 })
@@ -162,7 +162,7 @@ test('storage failure retains immutable review and retry ID', async () => {
   fireEvent.change(notes, { target: { value: 'Keep me' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send' }))
   await screen.findByText(/Could not confirm the save/)
-  expect((screen.getByLabelText('Notes') as HTMLTextAreaElement).value).toBe(
+  expect(((await screen.findByLabelText('Notes')) as HTMLTextAreaElement).value).toBe(
     'Keep me',
   )
   fireEvent.click(screen.getByRole('button', { name: 'Send' }))
@@ -171,20 +171,16 @@ test('storage failure retains immutable review and retry ID', async () => {
     fixture.enqueue.mock.calls[1][0].report.id,
   )
 })
-test('late capture cannot resurrect screenshot after Cancel', async () => {
-  let finish: (blob: Blob) => void = () => {}
-  fixture.capture.mockReturnValue(
-    new Promise<Blob>((resolve) => {
-      finish = resolve
-    }),
-  )
-  await open()
-  fireEvent.click(screen.getByRole('checkbox'))
-  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-  finish(new Blob(['synthetic'], { type: 'image/png' }))
+test('late automatic capture cannot open a sheet after session end', async () => {
+  let resolve: (blob: Blob) => void = () => {}
+  fixture.capture.mockReturnValue(new Promise<Blob>(done => { resolve = done }))
+  mount()
+  await screen.findByText('connected')
   fireEvent.click(screen.getByRole('button', { name: 'Feedback' }))
-  await waitFor(() => expect(screen.queryByRole('img')).toBeNull())
-  expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(false)
+  fireEvent(window, new Event('feedback-session-ended'))
+  resolve(new Blob(['synthetic'], { type:'image/png' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  expect(fixture.enqueue).not.toHaveBeenCalled()
 })
 test('signout aborts pending save and waits before clear', async () => {
   let aborted = false
@@ -301,7 +297,6 @@ test('text-only send after removing a screenshot uses the current timestamp', as
   fixture.capture.mockResolvedValue(new Blob(['synthetic'], { type: 'image/png' }))
   const notes = await open()
   fireEvent.change(notes, { target: { value: 'Text after removing capture' } })
-  fireEvent.click(screen.getByRole('checkbox'))
   await screen.findByRole('img')
   fireEvent.click(screen.getByRole('checkbox'))
   await waitFor(() => expect(screen.queryByRole('img')).toBeNull())
@@ -309,4 +304,19 @@ test('text-only send after removing a screenshot uses the current timestamp', as
   fireEvent.click(screen.getByRole('button', { name: 'Send' }))
   await waitFor(() => expect(fixture.enqueue).toHaveBeenCalledOnce())
   expect(fixture.enqueue.mock.calls[0][0].report.capturedAt).toBe('2026-11-13T10:10:00.000Z')
+})
+
+test('clearing while capture is pending permits a fresh same-account attempt', async () => {
+  let resolve: (blob: Blob) => void = () => {}
+  fixture.capture.mockReturnValueOnce(new Promise<Blob>(done => { resolve = done })).mockResolvedValue(null)
+  mount()
+  await screen.findByText('connected')
+  fireEvent.click(screen.getByRole('button', { name: 'Feedback' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Delete unsent reports (0)' }))
+  await screen.findByText('Unsent reports deleted from this device.')
+  resolve(new Blob(['synthetic'], { type: 'image/png' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  fireEvent.click(screen.getByRole('button', { name: 'Feedback' }))
+  await screen.findByLabelText('Notes')
+  expect(fixture.capture).toHaveBeenCalledTimes(2)
 })

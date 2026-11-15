@@ -122,7 +122,7 @@ test('rejects media and JSON exceeding lower hosted limits', async () => {
   await expect(
     send({
       report,
-      media: new Blob([new Uint8Array(3 * 1024 * 1024 + 1)], {
+      media: new Blob([new Uint8Array(4_000_000 + 1)], {
         type: 'image/png',
       }),
     }),
