@@ -1,6 +1,9 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import {inventory} from './migration-readiness.mjs'
 import {spawnSync} from 'node:child_process'
 import {planFor,inspect,consume,diagnostic,psqlFailureStage} from './readiness-adapter.mjs'
 import {runtimeDigest} from './readiness-runtime-config.mjs'
@@ -81,11 +84,23 @@ test('CLI provider map errors emit only their fixed stage',()=>{
  assert.equal(r.stderr,diagnostic('provider-map')+'\n')
 })
 test('real CLI distinguishes inventory, runtime evidence and DSN without connecting',()=>{
- const env={PATH:process.env.PATH,FRAMEBRIAR_PREVIEW_CATALOG_DATABASE_URL:'SECRET_INVALID_DSN',FRAMEBRIAR_PREVIEW_PROVIDER_MAP:JSON.stringify(map()),VERCEL_PROJECT_ID:'prj_Synthetic',SOURCE_SHA:'a'.repeat(40),RUNTIME_DIGEST:runtimeDigest,RUNTIME_OBSERVED_AT_MS:String(Date.now()),RUNTIME_PROJECT_ID:'prj_Synthetic'}
- for(const [root,overrides,expected] of [['/nonexistent',{},'inventory'],[process.cwd(),{RUNTIME_DIGEST:'SECRET_BAD_DIGEST'},'runtime-evidence'],[process.cwd(),{},'dsn']]){
-  const r=spawnSync(process.execPath,['tools/deploy/readiness-adapter.mjs','inspect',root],{env:{...env,...overrides},encoding:'utf8',timeout:5000})
-  assert.equal(r.status,1);assert.equal(r.stdout,'');assert.equal(r.stderr,diagnostic(expected)+'\n')
- }
+ // Main intentionally lacks the feature migration. Materialize reviewed bytes
+ // in an isolated fixture, never an application migration directory or database.
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'readiness-cli-inventory-'))
+ try{
+  const fixture=JSON.parse(fs.readFileSync(new URL('./fixtures/readiness-cli-inventory.json',import.meta.url),'utf8'))
+  assert.equal(fixture.version,1)
+  assert.deepEqual(Object.keys(fixture.files).sort(),baseline.inventory.files.map(f=>f.path).sort())
+  for(const f of baseline.inventory.files){
+   const target=path.join(root,f.path);fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,fixture.files[f.path])
+  }
+  assert.deepEqual(inventory(root),baseline.inventory,'CLI fixture must preserve exact reviewed migration hashes')
+  const env={PATH:process.env.PATH,FRAMEBRIAR_PREVIEW_CATALOG_DATABASE_URL:'SECRET_INVALID_DSN',FRAMEBRIAR_PREVIEW_PROVIDER_MAP:JSON.stringify(map()),VERCEL_PROJECT_ID:'prj_Synthetic',SOURCE_SHA:'a'.repeat(40),RUNTIME_DIGEST:runtimeDigest,RUNTIME_OBSERVED_AT_MS:String(Date.now()),RUNTIME_PROJECT_ID:'prj_Synthetic'}
+  for(const [source,overrides,expected] of [['/nonexistent',{},'inventory'],[root,{RUNTIME_DIGEST:'SECRET_BAD_DIGEST'},'runtime-evidence'],[root,{},'dsn']]){
+   const r=spawnSync(process.execPath,['tools/deploy/readiness-adapter.mjs','inspect',source],{env:{...env,...overrides},encoding:'utf8',timeout:5000})
+   assert.equal(r.status,1);assert.equal(r.stdout,'');assert.equal(r.stderr,diagnostic(expected)+'\n')
+  }
+ }finally{fs.rmSync(root,{recursive:true,force:true})}
 })
 test('actual recipe or feedback policy mismatch is assigned to correct fixed stage',()=>{
  for(const wanted of ['recipes','feedback']){
