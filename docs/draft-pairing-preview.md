@@ -77,11 +77,16 @@ grant. Cross-owner and absent grant IDs have the same 404 behavior.
 - The one shared draft runtime role can bind pairing owners, insert grants and
   revoke grants for any owner at the SQL privilege layer. Owner isolation is
   enforced by the reviewed application predicates, not RLS or endpoint-specific
-  roles. Live Preview therefore requires Caroline's explicit decision to accept
-  that whole-service credential scope for synthetic data or require a split-role,
-  RLS, or narrow-procedure design first.
+  roles. Caroline accepted that whole-service credential scope only for one
+  short, controlled synthetic Preview trial. Real content or wider use requires
+  a split-role, RLS, or narrow-procedure design and a new security review.
 - A bounded ad-hoc Mac canary showed that its exact observer returned no
   credential after the owner chose Deny. That is user-mediated evidence for two
   test executables, not distribution-package signing/ACL acceptance, universal
   unrelated-program denial, lock/cancellation behavior, or final private-storage
   acceptance. No plaintext fallback is authorized.
+
+The November 16, 2026 decision does not authorize a live change or real content.
+The exact prerequisites, action-time approval packets, restoration steps and
+evidence requirements are recorded in
+[`runbooks/draft-synthetic-preview-activation.md`](runbooks/draft-synthetic-preview-activation.md).

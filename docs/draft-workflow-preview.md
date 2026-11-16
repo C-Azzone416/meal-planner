@@ -122,10 +122,13 @@ insert send grants; and the connection-management path can revoke any grant at
 the SQL privilege layer. Application bearer/origin checks and owner predicates
 enforce the intended routes, and the integration tests exercise cross-owner
 isolation, but there is no RLS or separate endpoint role. A compromised runtime
-credential therefore has this whole-service scope. Before live Preview, Caroline
-must explicitly choose either to accept that residual for synthetic Preview data
-or require separate DSNs/roles, RLS, or narrowly owned procedures. No choice is
-made by this rehearsal, and the gate stays closed.
+credential therefore has this whole-service scope. Caroline accepted that
+residual on November 16, 2026 only for a short, controlled synthetic Preview
+trial. Real recipes, personal content, persistent use or broader membership
+remain blocked until split DSNs/roles, RLS, or narrowly owned procedures receive
+a new security review. The decision does not open a source/runtime gate or
+authorize a live change. The staged approval and restoration boundary is in
+[`runbooks/draft-synthetic-preview-activation.md`](runbooks/draft-synthetic-preview-activation.md).
 
 The same rehearsal forces recipe creation to commit and the subsequent draft
 link update to fail. It verifies one recipe and one create receipt exist while
@@ -181,18 +184,20 @@ destructive job or lifetime was added.
 ## Tomorrow's live hookup checklist
 
 1. Independently review the final exact commit and all additive SQL.
-2. Complete distribution-signed package Keychain acceptance, including lock and
+2. Complete the code-only readiness and authenticated edge-adapter prerequisites
+   in [`runbooks/draft-synthetic-preview-activation.md`](runbooks/draft-synthetic-preview-activation.md).
+3. Complete distribution-signed package Keychain acceptance, including lock and
    cancellation behavior; the bounded ad-hoc Deny pass is not final package
    evidence. Do not add a plaintext fallback.
-3. Review the completed disposable PostgreSQL 18 role/migration rehearsal, then
+4. Review the completed disposable PostgreSQL 18 role/migration rehearsal, then
    separately authorize creating the equivalent Preview-only role and applying
    the reviewed migrations to the protected Preview branch.
-4. Add exact Preview origins and server secrets through the protected owner
+5. Add exact Preview origins and server secrets through the protected owner
    workflow; keep both source and environment feature gates off while verifying.
-5. Verify membership-epoch rotation/removal, grant revocation and old deployment
+6. Verify membership-epoch rotation/removal, grant revocation and old deployment
    retirement. Do not claim provider password-reset revocation.
-6. Enable only the protected Preview, issue only a synthetic test grant, and run
+7. Enable only the protected Preview, issue only a synthetic test grant, and run
    Caroline's end-to-end pairing, direct-MCP consent, retry and account-switch
    acceptance with synthetic recipes.
-7. Disable again and inspect receipts/logs/quotas before considering a longer
+8. Disable again and inspect receipts/logs/quotas before considering a longer
    Preview trial. Production and `main` require a separate decision and review.
