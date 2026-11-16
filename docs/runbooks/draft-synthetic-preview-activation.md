@@ -117,12 +117,23 @@ plan. Approval of one packet does not authorize the next.
 - Use only designated synthetic accounts and conspicuously synthetic recipe
   content. Do not paste personal recipes, credentials or other real data.
 - Run one bounded acceptance window. Normal teardown is mandatory: revoke the
-  test grant; remove the two runtime flags and redeploy closed mode; remove the
-  three remaining draft settings and the `MEAL_DRAFTS_DATABASE_URL` Preview
-  Secret. While the inspector still has LOGIN, rerun the closed runtime and
-  catalog observations, verify through the authenticated provider configuration
-  that no `MEAL_DRAFT_*` setting or `MEAL_DRAFTS_DATABASE_URL` Secret remains,
-  and run the private aggregate inspection once more. Then use the exact verified
+  test grant; delete the exact trial credential through the reviewed Keychain
+  adapter and verify it is absent; and record that no persistent MCP registration
+  was added. If an unexpected registration exists, remove that exact entry and
+  verify absence. A Keychain access prompt is handed to Caroline and is never
+  approved automatically.
+- Remove the two runtime flags, the three remaining draft settings and the
+  `MEAL_DRAFTS_DATABASE_URL` Preview Secret. Redeploy the pre-recorded exact last
+  accepted SHA whose pairing, workflow and ingest source gates are all `false`.
+  Verify the deployed SHA, all three closed source gates, disabled route behavior
+  and absent runtime configuration through authenticated evidence.
+- Remove the three exact Preview edge rules and the two pairing function-duration
+  overrides. Obtain a fresh authenticated provider observation proving their
+  absence and no Production effect.
+- While the inspector still has LOGIN, rerun the closed runtime and catalog
+  observations, verify through the authenticated provider configuration that no
+  `MEAL_DRAFT_*` setting or `MEAL_DRAFTS_DATABASE_URL` Secret remains, and run
+  the private aggregate inspection once more. Then use the exact verified
   Preview migration-owner session to disable LOGIN for the shared draft runtime
   and catalog-inspector roles, rotate their credentials, and verify both
   `rolcanlogin` values are false. The recipe credential is outside this trial and
@@ -145,12 +156,16 @@ plan. Approval of one packet does not authorize the next.
 5. The private post-run inspection reports no integrity blocker or owner at a
    retained cap. Logs, process arguments, public artifacts and local ledgers
    contain no credential or recipe content.
-6. The grant is revoked, both source-served routes are runtime-disabled, every
-   Preview `MEAL_DRAFT_*` setting and the draft DSN Secret are removed, and both
-   draft-specific database logins are disabled/rotated after the window. Closed
-   runtime and catalog observations plus the final private aggregate are
+6. The grant is revoked; the Keychain trial item is deleted; and no persistent
+   MCP registration remains. The exact previously accepted closed-source SHA is
+   restored with all three source gates false. Every Preview `MEAL_DRAFT_*`
+   setting and the draft DSN Secret are removed; the three edge rules and two
+   function overrides are absent with no Production effect; and both
+   draft-specific database logins are disabled/rotated. Authenticated source,
+   runtime, edge and catalog observations plus the final private aggregate are
    retained as evidence. The additive schema and grants may remain, but no
-   active credential or runtime setting may silently extend the trial.
+   active credential, source gate, provider rule or runtime setting may silently
+   extend the trial.
 
 Stop immediately on an unexpected owner/Keychain prompt, target ambiguity,
 Production effect, provider-evidence mismatch, role/schema drift, literal secret
