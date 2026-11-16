@@ -28,46 +28,50 @@ type feedbackConfig struct {
 }
 
 func feedbackConfiguration() (feedbackConfig, error) {
+	return feedbackConfigurationForBuild(feedbackBuildSHA, feedbackBuildEnvironment, feedbackBuildApp)
+}
+
+func feedbackConfigurationForBuild(buildSHA, buildEnvironment, buildApp string) (feedbackConfig, error) {
 	c := feedbackConfig{Enabled: os.Getenv("FRAMEBRIAR_ENABLED") == "1", Screenshots: os.Getenv("FRAMEBRIAR_SCREENSHOTS") == "1", Environment: os.Getenv("FRAMEBRIAR_ENVIRONMENT"), Origin: os.Getenv("FRAMEBRIAR_ALLOWED_ORIGIN"), App: os.Getenv("FRAMEBRIAR_APP_ID"), Database: os.Getenv("FRAMEBRIAR_DATABASE_URL")}
 	if !c.Enabled {
 		return c, nil
 	}
 	var buildErr error
-	c.SHA, buildErr = feedbackRuntimeBuildSHA(os.Getenv("FRAMEBRIAR_BUILD_SHA"), c.Environment, c.App, feedbackBuildSHA, feedbackBuildEnvironment, feedbackBuildApp)
+	c.SHA, buildErr = feedbackRuntimeBuildSHA(os.Getenv("FRAMEBRIAR_BUILD_SHA"), c.Environment, c.App, buildSHA, buildEnvironment, buildApp)
 	if buildErr != nil {
-		return c, buildErr
+		return c, feedbackDiagnostic{fbConfigProvenance, feedbackUnavailable}
 	}
 	expected := map[string]string{"preview": "meal-planner-preview", "production": "meal-planner"}[c.Environment]
 	u, e := url.Parse(c.Origin)
 	if e != nil || u.Scheme != "https" || u.Host == "" || strings.Contains(u.Host, "*") || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" || u.ForceQuery || expected == "" || c.App != expected || !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(c.SHA) || c.Database == "" {
-		return c, feedbackUnavailable
+		return c, feedbackDiagnostic{fbConfigPublic, feedbackUnavailable}
 	}
 	shot := os.Getenv("FRAMEBRIAR_SCREENSHOTS")
 	if shot != "0" && shot != "1" {
-		return c, feedbackUnavailable
+		return c, feedbackDiagnostic{fbConfigPublic, feedbackUnavailable}
 	}
 	c.Provider, e = normalizeManagedAuthBaseURL(os.Getenv("NEON_AUTH_BASE_URL"), os.Getenv("NEON_AUTH_ENDPOINT_ID"))
 	if e != nil {
-		return c, feedbackUnavailable
+		return c, feedbackDiagnostic{fbConfigAuthProvider, feedbackUnavailable}
 	}
 	var ring struct {
 		Current string            `json:"current"`
 		Keys    map[string]string `json:"keys"`
 	}
 	if json.Unmarshal([]byte(os.Getenv("FRAMEBRIAR_CREDENTIAL_KEYS")), &ring) != nil || ring.Current == "" || len(ring.Keys) == 0 {
-		return c, feedbackUnavailable
+		return c, feedbackDiagnostic{fbConfigKeyRing, feedbackUnavailable}
 	}
 	c.Current = ring.Current
 	c.Keys = map[string][]byte{}
 	for id, key := range ring.Keys {
 		b, e := base64.StdEncoding.DecodeString(key)
 		if e != nil || len(b) != 32 || len(id) > 64 {
-			return c, feedbackUnavailable
+			return c, feedbackDiagnostic{fbConfigKeyRing, feedbackUnavailable}
 		}
 		c.Keys[id] = b
 	}
 	if c.Keys[c.Current] == nil {
-		return c, feedbackUnavailable
+		return c, feedbackDiagnostic{fbConfigKeyRing, feedbackUnavailable}
 	}
 	return c, nil
 }
@@ -98,7 +102,7 @@ func FeedbackHandler(action string) http.Handler {
 	return RequireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := feedbackConfiguration()
 		if err != nil {
-			feedbackJSON(w, 503, map[string]string{"error": "UNAVAILABLE"})
+			feedbackWriteError(w, err)
 			return
 		}
 		var store feedbackStore
@@ -111,7 +115,7 @@ func FeedbackHandler(action string) http.Handler {
 			store = feedbackRuntime.store
 			feedbackRuntime.Unlock()
 			if err != nil || store == nil {
-				feedbackJSON(w, 503, map[string]string{"error": "UNAVAILABLE"})
+				feedbackWriteError(w, err)
 				return
 			}
 		}
@@ -127,6 +131,7 @@ func feedbackJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 func feedbackWriteError(w http.ResponseWriter, err error) {
+	logFeedbackDiagnostic(err)
 	var f feedbackFailure
 	if errors.As(err, &f) {
 		feedbackJSON(w, f.Status, map[string]string{"error": f.Code})

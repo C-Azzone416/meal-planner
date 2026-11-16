@@ -40,11 +40,11 @@ var errFeedbackStorage = errors.New("feedback storage unavailable")
 func newFeedbackSQLStore(databaseURL string) (feedbackStore, error) {
 	dsn, err := feedbackDatabaseURL(databaseURL)
 	if err != nil {
-		return nil, errFeedbackStorage
+		return nil, feedbackDiagnostic{fbStoreDSN, errFeedbackStorage}
 	}
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
-		return nil, errFeedbackStorage
+		return nil, feedbackDiagnostic{fbStoreDSN, errFeedbackStorage}
 	}
 	db.SetMaxOpenConns(3)
 	db.SetMaxIdleConns(1)
@@ -97,7 +97,7 @@ func feedbackNullableTime(t time.Time) any {
 
 func (s *feedbackSQLStore) WithRecord(ctx context.Context, owner string, fn func(*feedbackRecord) error) error {
 	if owner == "" || len(owner) > 256 || fn == nil {
-		return errFeedbackStorage
+		return feedbackDiagnostic{fbStoreInput, errFeedbackStorage}
 	}
 	// Bound lock contention and the entire operation, including a callback's
 	// upstream request. The service additionally uses shorter upstream deadlines.
@@ -105,23 +105,23 @@ func (s *feedbackSQLStore) WithRecord(ctx context.Context, owner string, fn func
 	defer cancel()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return errFeedbackStorage
+		return feedbackDiagnostic{fbStoreBegin, errFeedbackStorage}
 	}
 	defer tx.Rollback()
 	if _, err = tx.ExecContext(ctx, "SET LOCAL lock_timeout = '5s'"); err != nil {
-		return errFeedbackStorage
+		return feedbackDiagnostic{fbStoreTimeouts, errFeedbackStorage}
 	}
 	if _, err = tx.ExecContext(ctx, "SET LOCAL statement_timeout = '10s'"); err != nil {
-		return errFeedbackStorage
+		return feedbackDiagnostic{fbStoreTimeouts, errFeedbackStorage}
 	}
 	generation, err := feedbackGeneration()
 	if err != nil {
-		return errFeedbackStorage
+		return feedbackDiagnostic{fbStoreRandom, errFeedbackStorage}
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO public.framebriar_enrollments (owner, generation)
  VALUES ($1, $2) ON CONFLICT (owner) DO NOTHING`, owner, generation)
 	if err != nil {
-		return errFeedbackStorage
+		return feedbackDiagnostic{fbStoreInsert, errFeedbackStorage}
 	}
 	r := feedbackRecord{Owner: owner}
 	var expires, attemptAt, cooldown, rateWindow sql.NullTime
@@ -131,7 +131,7 @@ func (s *feedbackSQLStore) WithRecord(ctx context.Context, owner string, fn func
 		&r.Generation, &r.State, &r.KeyID, &r.Sealed, &expires, &r.Attempt,
 		&attemptAt, &cooldown, &rateWindow, &r.RateCount, &r.AttemptDigest)
 	if err != nil {
-		return errFeedbackStorage
+		return feedbackDiagnostic{fbStoreSelect, errFeedbackStorage}
 	}
 	r.Expires, r.AttemptAt, r.Cooldown, r.RateWindow = expires.Time, attemptAt.Time, cooldown.Time, rateWindow.Time
 	callbackErr := fn(&r)
@@ -143,10 +143,10 @@ func (s *feedbackSQLStore) WithRecord(ctx context.Context, owner string, fn func
 		r.Attempt, feedbackNullableTime(r.AttemptAt), feedbackNullableTime(r.Cooldown),
 		feedbackNullableTime(r.RateWindow), r.RateCount, r.AttemptDigest)
 	if err != nil {
-		return errFeedbackStorage
+		return feedbackDiagnostic{fbStoreUpdate, errFeedbackStorage}
 	}
 	if err = tx.Commit(); err != nil {
-		return errFeedbackStorage
+		return feedbackDiagnostic{fbStoreCommit, errFeedbackStorage}
 	}
 	return callbackErr
 }
