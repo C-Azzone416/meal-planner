@@ -141,11 +141,13 @@ transactions set an eight-second statement timeout and three-second lock timeout
 The atomic browser decision begins with twelve-second statement and three-second
 lock timeouts; its approval path then enters hosted-draft insertion, which
 tightens the transaction-local statement timeout to eight seconds. Pairing
-creation, grant listing/revocation/authentication, and hosted review/link are
-single database calls without their own transaction-local statement timeout;
-they rely on the ten-second pairing or twelve-second workflow handler context and
-driver cancellation. These source limits do not replace an edge throttle or
-establish an upload deadline.
+creation and grant listing/revocation are single database calls that rely on the
+ten-second pairing-handler context; hosted review/link similarly rely on the
+twelve-second owner-draft handler context. The unwired
+`AuthenticateDraftProposal` seam has no local timeout and accepts its caller's
+context, so any future caller must supply a bounded context before activation.
+These source limits do not replace an edge throttle or establish an upload
+deadline.
 
 Before activation, the stable Preview hostname still needs three exact-path,
 POST-only edge rate rules. `/api/draft-pairings` needs a burst limit of 3
