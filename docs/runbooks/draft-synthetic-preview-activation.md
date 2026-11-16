@@ -16,6 +16,64 @@ roles/DSNs, RLS, or narrow owned procedures and a new security review.
 
 ## Pre-activation prerequisites
 
+### Vercel plan and throttle decision (November 16, 2026)
+
+The setup receipt last verified this project in a personal Hobby account on
+November 1. That is historical evidence, not proof of the current plan. A
+read-only recheck on November 16 found no local `.vercel/project.json`; the
+local Vercel CLI reported logged out, and the GitHub CLI credential was not
+usable. No credential was requested or inspected, and no provider call or
+setting change was made. The current plan therefore remains **unverified**.
+
+Vercel's current published WAF limits materially change this packet. Hobby
+allows one rate-limit rule per project and a maximum ten-minute fixed window;
+Pro allows 40 rules but the same maximum window; Enterprise allows 250 rules
+and a one-hour maximum. Counters are per region, so none of these limits is a
+global request cap. The three-rule policy below is impossible on Hobby, and its
+`10/hour` rule is impossible on Hobby or Pro. Do not approximate it silently.
+
+`tools/deploy/draft-edge-plan-adapter.mjs` is a read-only, authenticated plan
+probe for a future protected job. It verifies the exact Vercel project and
+account, accepts only a full team response, emits only canonical bounded
+Hobby/Pro/Enterprise capability evidence, and never emits the token or provider
+response. Its CLI accepts the token only on standard input, never through argv,
+an environment variable or a file. It has not been run against Vercel. A fresh
+result less than 15 minutes old is required before choosing an edge policy.
+
+**Recommendation if the plan is Pro:** retain `3/IP/60s` for create, replace
+`10/IP/hour` with `2/IP/10min`, and replace `150/IP/15min` for poll with
+`150/IP/10min`. This preserves a complete ten-minute pairing session at the
+documented five-second polling interval. The tradeoff is explicit: the create
+average rises from 10 to 12 per hour per region and fixed-window boundaries can
+admit adjacent bursts (still constrained by the 3/minute rule), while a
+legitimate third create from one household/NAT in a ten-minute window is
+blocked. Poll protection becomes 50% weaker by elapsed rate, although valid
+credentials remain server-throttled to one poll per five seconds and pairings
+expire after ten minutes. This is acceptable only for the one-client synthetic
+trial, not wider or persistent use.
+
+**Recommendation if the plan is Hobby:** do not activate on the current design.
+One provider rule cannot independently protect create burst, create sustained
+load and polling. Protecting only create leaves unauthenticated poll lookups as
+a database/compute exhaustion path; sharing one budget would either allow too
+many creates or break the required polling cadence. Upgrade to at least Pro or
+add a separately reviewed edge with independent counters. Enterprise may keep
+the original three-rule policy unchanged, but is not required for the bounded
+trial if Caroline explicitly accepts the Pro tradeoff.
+
+No rate-limit constants have been changed by this analysis. Caroline must first
+choose either the original Enterprise policy or the recommended Pro policy;
+that decision controls the normalized verifier and authenticated firewall
+adapter. Plan verification or a plan change does not authorize publishing
+rules, deploying, enabling a source/runtime gate, or touching Production.
+
+The code-only function prerequisite is now prepared: `vercel.json` assigns a
+15-second `maxDuration` to exactly the create and poll entrypoints, ahead of the
+general Go fallback, and `inspectDraftFunctionConfig` rejects drift or broader
+overrides. This is source evidence only. A future inert Preview deployment must
+still be checked with authenticated `vercel inspect <deployment> --json` and
+show `timeout: 15` for both built functions before activation.
+
 The source items must land and pass QA and Security Judge, and the package item
 must produce its own evidence, before requesting any live approval:
 

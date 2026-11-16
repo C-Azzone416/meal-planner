@@ -76,6 +76,14 @@
     }
   ],
   "functions": {
+    "api/draft-pairings/index.go": {
+      "architecture": "x86_64",
+      "maxDuration": 15
+    },
+    "api/draft-pairings/poll/index.go": {
+      "architecture": "x86_64",
+      "maxDuration": 15
+    },
     "api/**/*.go": {
       "architecture": "x86_64"
     }

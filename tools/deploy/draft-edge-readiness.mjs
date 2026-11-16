@@ -18,6 +18,24 @@ export const draftFunctionLimits=Object.freeze([
  Object.freeze({source:'api/draft-pairings/poll/index.go',maxDurationSeconds:15}),
 ])
 
+export function inspectDraftFunctionConfig(raw){
+ assert.equal(typeof raw,'string');assert.ok(Buffer.byteLength(raw)>0&&Buffer.byteLength(raw)<=1024*1024)
+ const config=JSON.parse(raw)
+ assert.ok(config&&typeof config==='object'&&!Array.isArray(config))
+ const functions=config.functions
+ exact(functions,['api/draft-pairings/index.go','api/draft-pairings/poll/index.go','api/**/*.go'])
+ // Vercel documents function-pattern order as significant. Exact matches stay
+ // ahead of the fallback and therefore repeat the architecture explicitly.
+ assert.deepEqual(Object.keys(functions),['api/draft-pairings/index.go','api/draft-pairings/poll/index.go','api/**/*.go'])
+ for(const {source,maxDurationSeconds} of draftFunctionLimits){
+  exact(functions[source],['architecture','maxDuration'])
+  assert.deepEqual(functions[source],{architecture:'x86_64',maxDuration:maxDurationSeconds})
+ }
+ exact(functions['api/**/*.go'],['architecture'])
+ assert.deepEqual(functions['api/**/*.go'],{architecture:'x86_64'})
+ return draftFunctionLimits
+}
+
 export function verifyDraftEdgeObservation(observation,approved,nowMs){
  exact(approved,['projectId','sourceSha'])
  identity(approved.projectId);assert.match(approved.sourceSha,/^[a-f0-9]{40}$/)

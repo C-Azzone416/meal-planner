@@ -1,6 +1,7 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {draftEdgeRules,draftFunctionLimits,verifyDraftEdgeObservation} from './draft-edge-readiness.mjs'
+import fs from 'node:fs'
+import {draftEdgeRules,draftFunctionLimits,inspectDraftFunctionConfig,verifyDraftEdgeObservation} from './draft-edge-readiness.mjs'
 
 const now=1800000000000
 const approved={projectId:'prj_test',sourceSha:'a'.repeat(40)}
@@ -9,6 +10,19 @@ const fixture=()=>({version:1,target:'preview',projectId:approved.projectId,sour
 test('accept exact Preview-only pairing edge observation',()=>{
  assert.match(verifyDraftEdgeObservation(fixture(),approved,now),/^[a-f0-9]{64}$/)
 })
+
+test('source config limits only the two pairing functions before the Go fallback',()=>{
+ assert.deepEqual(inspectDraftFunctionConfig(fs.readFileSync('vercel.json','utf8')),draftFunctionLimits)
+})
+
+for(const [name,mutate] of [
+ ['create duration raised',c=>c.functions['api/draft-pairings/index.go'].maxDuration=16],
+ ['poll duration missing',c=>delete c.functions['api/draft-pairings/poll/index.go'].maxDuration],
+ ['fallback duration added',c=>c.functions['api/**/*.go'].maxDuration=15],
+ ['pairing architecture drift',c=>c.functions['api/draft-pairings/index.go'].architecture='arm64'],
+ ['extra function override',c=>c.functions['api/other.go']={maxDuration:15}],
+ ['fallback ordered first',c=>c.functions={'api/**/*.go':c.functions['api/**/*.go'],'api/draft-pairings/index.go':c.functions['api/draft-pairings/index.go'],'api/draft-pairings/poll/index.go':c.functions['api/draft-pairings/poll/index.go']}],
+])test(`function config rejects ${name}`,()=>{const c=JSON.parse(fs.readFileSync('vercel.json','utf8'));mutate(c);assert.throws(()=>inspectDraftFunctionConfig(JSON.stringify(c)))})
 
 for(const [name,mutate] of [
  ['production target',o=>o.target='production'],
