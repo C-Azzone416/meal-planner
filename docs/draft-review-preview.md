@@ -1,5 +1,10 @@
 # Preview draft consent and review slice
 
+Status: source-complete, runtime-disabled. The projection editor is wired only
+into the inert hosted-review page, while the native credential adapter is not
+constructed by a shipped command. This document records code behavior, not live
+Preview acceptance.
+
 This source is intentionally inert. `draftWorkflowSourceEnabled` is `false`, and
 the runtime additionally requires Preview plus `MEAL_DRAFT_WORKFLOW_ENABLED=true`
 and the exact pinned Preview origin. Migration `006_draft_review_workflow.sql` is
@@ -34,9 +39,18 @@ the review link update fails, retry returns the same recipe receipt and finishes
 the link. A different projection with the same key conflicts rather than creating
 a second recipe. Canonical content and provenance remain in the hosted draft.
 
-The current Preview page can approve/deny incoming snapshots and mark an exact
-draft revision reviewed. It intentionally does not invent the incompatible manual
-projection. The save API exists and rejects incomplete projections; a product-
-reviewed projection editor remains a final hookup. Runtime verification of Neon
-permissions, migrations, provider membership behavior and protected deployment is
-also pending.
+The Preview source can approve or deny incoming snapshots, mark an exact draft
+revision reviewed, and then collect a complete explicit manual projection. Every
+lossy field begins unresolved. Canonical title, ingredient and instruction text
+stay read-only until the owner deliberately copies them; quantity, unit, aisle,
+pantry, phase, time, timer, storage, keep-limit and tag decisions remain explicit.
+Blank values are not coerced to zero or false. Save is bound to the exact draft
+and review revisions; an uncertain response retains the identical projection for
+retry, while stale revisions and duplicate clicks fail closed. The API remains the
+authoritative validator and idempotent recipe creator.
+
+The shipped MCP command still does not construct the sender or native Keychain
+adapter, and every workflow gate remains closed. Runtime verification of the
+signed package and Keychain ACL, Neon permissions and migrations, provider
+membership behavior, authenticated Preview UI, and protected deployment is still
+pending.

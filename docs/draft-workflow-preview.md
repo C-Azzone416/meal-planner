@@ -81,20 +81,25 @@ Saving requires an explicit, complete owner-supplied projection into the existin
 manual recipe model. The owner API reuses the existing recipe repository and a
 stable idempotency key. It never silently converts strings to numbers, assigns
 phases, invents pantry/aisle/timer/storage values, or drops provenance. Stale
-revisions conflict, and a double save resolves to the same recipe. The current
-Preview page deliberately stops at reviewed/ready because no lossless projection
-editor exists yet; that UI is a tomorrow hookup rather than an unsafe guess.
+revisions conflict, and a double save resolves to the same recipe. The Preview
+source now includes an explicit projection editor. Every incompatible or lossy
+field starts unresolved; canonical text remains read-only context unless the
+owner deliberately copies it, and null, empty, zero and false require distinct
+choices. The editor binds the exact draft and review revisions and locks an
+uncertain retry to the identical projection. This is source-complete UI behind
+the closed workflow gates, not evidence of authenticated Preview operation.
 
 ## Local durability
 
-The credential-store interface has no plaintext or environment fallback. The
-real macOS Keychain implementation and its signing/ACL behavior remain a final
-hookup gate; source tests use an in-memory fake. The receipt ledger contains no
-recipe content or credentials. Its namespace includes exact environment, API
-origin, account binding, local draft ID, local revision and canonical content
-hash. The compiled Preview profile pins the web origin to that same exact origin.
-An ambiguous retry reuses the same operation key. A changed revision or account
-uses a different namespace.
+The credential-store interface has no plaintext or environment fallback. An
+unwired Darwin+cgo Security.framework adapter exists and non-cgo/non-macOS builds
+fail closed. Automated tests inject a synthetic backend and make no real Keychain
+calls; packaged-binary signing, ACL and other-process behavior remain final hookup
+gates. The receipt ledger contains no recipe content or credentials. Its namespace
+includes exact environment, API origin, account binding, local draft ID, local
+revision and canonical content hash. The compiled Preview profile pins the web
+origin to that same exact origin. An ambiguous retry reuses the same operation
+key. A changed revision or account uses a different namespace.
 
 ## Tomorrow's live hookup checklist
 
