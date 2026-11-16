@@ -112,7 +112,11 @@ func (s *PostgresDraftWorkflowStore) CreateIntent(ctx context.Context, a DraftAc
 	}
 	now = now.UTC().Truncate(time.Second)
 	expires := now.Add(30 * time.Minute)
-	charge := int64(len(body) + len(key) + len(a.Environment) + len(g.Owner.Issuer) + len(g.Owner.Subject) + 64 + 4096)
+	var canonicalBodyBytes int64
+	if err = tx.QueryRowContext(ctx, `SELECT octet_length($1::jsonb::text)`, string(body)).Scan(&canonicalBodyBytes); err != nil {
+		return zero, false, ErrDraftUnavailable
+	}
+	charge := canonicalBodyBytes + int64(len(key)+len(a.Environment)+len(g.Owner.Issuer)+len(g.Owner.Subject)+64+4096)
 	var retained int64
 	var count, pending, hourly int
 	err = tx.QueryRowContext(ctx, `SELECT count(*),count(*) FILTER (WHERE state='pending' AND expires_at>$4),count(*) FILTER (WHERE created_at>$4-interval '1 hour'),COALESCE(sum(retained_bytes),0) FROM public.draft_send_intents WHERE environment=$1 AND owner_issuer=$2 AND owner_subject=$3`, a.Environment, g.Owner.Issuer, g.Owner.Subject, now).Scan(&count, &pending, &hourly, &retained)

@@ -42,6 +42,13 @@ func TestDraftWorkflowConcurrentApproveDenyIsAtomic(t *testing.T) {
 	if err != nil || replay {
 		t.Fatalf("create intent: replay=%v err=%v", replay, err)
 	}
+	var retained, required int64
+	if err = store.drafts.db.QueryRow(`SELECT retained_bytes,octet_length(submission::text)+octet_length(operation_key)+octet_length(environment)+octet_length(owner_issuer)+octet_length(owner_subject)+64+4096 FROM public.draft_send_intents WHERE id=$1`, intent.ID).Scan(&retained, &required); err != nil {
+		t.Fatal(err)
+	}
+	if retained != required {
+		t.Fatalf("retained bytes = %d, canonical requirement = %d", retained, required)
+	}
 
 	start := make(chan struct{})
 	errs := make(chan error, 2)
