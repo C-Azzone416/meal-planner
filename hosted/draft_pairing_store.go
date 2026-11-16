@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"time"
@@ -20,6 +21,14 @@ const (
 )
 
 type PostgresDraftPairingStore struct{ db *sql.DB }
+
+func draftGrantOwnerLockKey(environment, issuer, subject string) (string, error) {
+	namespace, err := json.Marshal([]string{"draft-grant-owner", environment, issuer, subject})
+	if err != nil {
+		return "", err
+	}
+	return string(namespace), nil
+}
 
 func OpenDraftPairingStore(_ context.Context, raw string) (*PostgresDraftPairingStore, error) {
 	dsn, err := recipeDatabaseURL(raw)
@@ -168,7 +177,10 @@ func (s *PostgresDraftPairingStore) PollPairing(ctx context.Context, c DraftPair
 	if p.Status != "approved" || !p.OwnerIssuer.Valid || !p.OwnerSubject.Valid || !p.OwnerEmail.Valid || !p.ApprovalEpoch.Valid || p.ApprovalEpoch.String != c.MembershipEpoch {
 		return out, ErrDraftPairingGone
 	}
-	ownerKey := c.Environment + "\x00" + p.OwnerIssuer.String + "\x00" + p.OwnerSubject.String
+	ownerKey, err := draftGrantOwnerLockKey(c.Environment, p.OwnerIssuer.String, p.OwnerSubject.String)
+	if err != nil {
+		return out, ErrDraftUnavailable
+	}
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, ownerKey); err != nil {
 		return out, ErrDraftUnavailable
 	}

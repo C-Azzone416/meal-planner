@@ -50,6 +50,29 @@ func testPairingConfig() DraftPairingConfig {
 	return DraftPairingConfig{Enabled: true, Environment: "preview", Issuer: "https://ep-auth.example.test", APIOrigin: draftPreviewOrigin, WebOrigin: draftPreviewOrigin, MembershipEpoch: "epoch_000000000001"}
 }
 
+func TestDraftGrantOwnerLockKeyIsTextSafeAndUnambiguous(t *testing.T) {
+	keys := make(map[string]bool)
+	for _, parts := range [][3]string{
+		{"preview", "ab", "c"},
+		{"preview", "a", "bc"},
+		{"preview", `quote"and\\slash`, "subject"},
+		{"preview", "quote", `and"\\slashsubject`},
+		{"preview", "issuer", "subject\x00with-null"},
+	} {
+		key, err := draftGrantOwnerLockKey(parts[0], parts[1], parts[2])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.ContainsRune(key, '\x00') || !json.Valid([]byte(key)) {
+			t.Fatalf("unsafe lock key %q", key)
+		}
+		if keys[key] {
+			t.Fatalf("ambiguous lock key %q", key)
+		}
+		keys[key] = true
+	}
+}
+
 func testVerifier() (string, string) {
 	verifier := strings.Repeat("a", 43)
 	h := sha256.Sum256([]byte(verifier))
