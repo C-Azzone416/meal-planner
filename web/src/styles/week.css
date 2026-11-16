@@ -322,3 +322,51 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* One refrigerator: a freezer overview and a lower meal door, as in the
+   original Week design. Navigation is chrome, not a third fridge door. */
+.app-shell--week > .brand-row {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.week-fridge {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.week-fridge > .hero-panel {
+  border-radius: 34px 34px 12px 12px;
+}
+
+.week-fridge > .week-grid {
+  position: relative;
+  border: 2px solid rgba(255, 255, 255, .5);
+  border-radius: 12px 12px 34px 34px;
+  box-shadow: 0 3px 0 rgba(62, 72, 58, .12);
+  padding-right: 76px;
+  min-height: 350px;
+}
+
+.week-fridge .fridge-handle {
+  display: block;
+  pointer-events: none;
+}
+
+.week-fridge .week-lower-handle {
+  height: 280px;
+}
+
+@media (max-width: 900px) {
+  .week-fridge > .hero-panel,
+  .week-fridge > .week-grid {
+    padding-right: 44px;
+  }
+
+  .week-fridge .fridge-handle {
+    right: 12px;
+    width: 12px;
+  }
+}

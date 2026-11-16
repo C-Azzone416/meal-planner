@@ -442,3 +442,12 @@ test('skip and reopening preserve the weekday cue while status stays explicit', 
   click('Plan my week')
   expect(cardMagnet('Wednesday').className).toBe(original)
 })
+
+test('Week uses two connected doors with decorative handles and the notice outside', () => {
+  const { container } = renderPlanner()
+  const fridge = container.querySelector('.week-fridge')!
+  expect(fridge.children).toHaveLength(2)
+  expect(fridge.querySelectorAll('.fridge-handle[aria-hidden="true"]')).toHaveLength(2)
+  expect(fridge.querySelector('.preview-notice')).toBeNull()
+  expect(container.querySelector('.preview-notice')).not.toBeNull()
+})

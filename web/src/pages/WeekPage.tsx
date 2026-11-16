@@ -172,6 +172,7 @@ export function WeekPage() {
 
   return (
     <div className="week-planner planner-view">
+      <div className="week-fridge">
       <FridgePanel className="hero-panel">
         <PaperTitle words={['this', 'week’s', 'dinners']} headingRef={heading} />
         <div className="week-toolbar">
@@ -251,7 +252,6 @@ export function WeekPage() {
         </div>
         {night && <NightDetail key={night.day} night={night} />}
       </FridgePanel>
-      <PreviewNotice />
       <div className="week-grid">
         {planned.length === 0 ? (
           <StateCard icon="🗓" heading="No dinners yet" action={{ label: 'Plan my week', onClick: onFillWeek }}>
@@ -282,6 +282,7 @@ export function WeekPage() {
             })}
           </div>
         )}
+        <span className="fridge-handle week-lower-handle" aria-hidden="true" />
         <aside className="sticky-note">
           <span aria-hidden="true"><PawMagnet /></span>
           <h2>{DAY_NAMES[prep.prepDay]} prep</h2>
@@ -294,6 +295,8 @@ export function WeekPage() {
           <Link className="button button--paper" to="/prep">See prep plan →</Link>
         </aside>
       </div>
+      </div>
+      <PreviewNotice />
     </div>
   )
 }
