@@ -455,7 +455,7 @@ test('Week uses two connected doors with decorative handles and the notice outsi
 
 test('explains pin controls without changing their toggle behavior', () => {
   renderPlanner()
-  const help = screen.getByText(/Pin keeps a dinner when planning or using Surprise me/)
+  const help = screen.getByText(/Pin prevents Surprise me from replacing this dinner/)
   expect(help.id).toBe('pin-help')
   const pin = screen.getByRole('button', { name: 'Pin Monday dinner', pressed: false })
   expect(pin.getAttribute('aria-describedby')).toBe(help.id)

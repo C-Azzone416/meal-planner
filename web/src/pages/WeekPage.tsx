@@ -236,7 +236,7 @@ export function WeekPage() {
             )
           })}
         </ul>
-        {planned.length > 0 && <p id="pin-help" className="week-pin-help">📌 Pin keeps a dinner when planning or using Surprise me. You can still move or edit it.</p>}
+        {planned.length > 0 && <p id="pin-help" className="week-pin-help">📌 Pin prevents Surprise me from replacing this dinner. You can still move it or change its servings.</p>}
         <div className={suggestion ? 'week-proposal inline-note' : 'sr-only'}>
           <p role="status">{suggestion && <>Try: <strong>{suggestion.title}</strong></>}</p>
           {suggestion && proposal && (
