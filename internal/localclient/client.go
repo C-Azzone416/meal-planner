@@ -66,11 +66,15 @@ type submission struct {
 type intentCreateResponse struct {
 	APIVersion string `json:"api_version"`
 	Intent     struct {
-		ID          string    `json:"id"`
-		State       string    `json:"state"`
-		Revision    int64     `json:"revision"`
-		ContentHash string    `json:"content_hash"`
-		ExpiresAt   time.Time `json:"expires_at"`
+		ID               string    `json:"id"`
+		State            string    `json:"state"`
+		Revision         int64     `json:"revision"`
+		ContentHash      string    `json:"content_hash"`
+		ExpiresAt        time.Time `json:"expires_at"`
+		DraftID          string    `json:"draft_id,omitempty"`
+		ReceiptID        string    `json:"receipt_id,omitempty"`
+		AcceptedRevision int64     `json:"accepted_revision,omitempty"`
+		SubmittedAt      time.Time `json:"submitted_at,omitempty"`
 	} `json:"intent"`
 	Approval struct {
 		Path string `json:"path"`
@@ -95,7 +99,8 @@ type pollResponse struct {
 		SubmittedAt      time.Time `json:"submitted_at"`
 	} `json:"receipt,omitempty"`
 	Error *struct {
-		Code string `json:"code"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
 	} `json:"error,omitempty"`
 }
 
@@ -147,20 +152,43 @@ func (c *Client) createIntent(ctx context.Context, credential Credential, body [
 	}
 	var decoded intentCreateResponse
 	if decodeResponse(response, &decoded) != nil || decoded.APIVersion != "draft-intent-v1" ||
-		!uuidPattern.MatchString(decoded.Intent.ID) || decoded.Intent.State != "pending" ||
-		decoded.Intent.Revision < 1 || decoded.Intent.ContentHash != record.Scope.ContentHash ||
-		!decoded.Intent.ExpiresAt.After(time.Now().Add(-time.Minute)) || !validApprovalPath(decoded.Approval.Path, decoded.Intent.ID) {
+		!uuidPattern.MatchString(decoded.Intent.ID) || decoded.Intent.Revision < 1 ||
+		decoded.Intent.ContentHash != record.Scope.ContentHash || decoded.Intent.ExpiresAt.IsZero() ||
+		!validApprovalPath(decoded.Approval.Path, decoded.Intent.ID) {
 		return SendResult{}, ErrInvalidResponse
 	}
 	record.IntentID = decoded.Intent.ID
 	record.ApprovalPath = decoded.Approval.Path
-	record.State = "pending"
-	if err := c.ledger.Update(ctx, record); err != nil {
-		// The server accepted the idempotent operation, but a durable local receipt
-		// was not committed. Retrying reuses the operation key from Begin.
-		return SendResult{}, ErrUnavailable
+	switch decoded.Intent.State {
+	case "pending":
+		if !decoded.Intent.ExpiresAt.After(time.Now()) {
+			return SendResult{}, ErrExpired
+		}
+		record.State = "pending"
+		if err := c.ledger.Update(ctx, record); err != nil {
+			// The server accepted the idempotent operation, but a durable local receipt
+			// was not committed. Retrying reuses the operation key from Begin.
+			return SendResult{}, ErrUnavailable
+		}
+		return pendingResult(c.profile, record), nil
+	case "denied":
+		return SendResult{}, ErrDenied
+	case "approved":
+		if !uuidPattern.MatchString(decoded.Intent.ReceiptID) ||
+			!uuidPattern.MatchString(decoded.Intent.DraftID) ||
+			decoded.Intent.AcceptedRevision < 1 || decoded.Intent.SubmittedAt.IsZero() {
+			return SendResult{}, ErrInvalidResponse
+		}
+		record.State = "saved"
+		record.ReceiptID = decoded.Intent.ReceiptID
+		record.HostedDraftID = decoded.Intent.DraftID
+		if err := c.ledger.Update(ctx, record); err != nil {
+			return SendResult{}, ErrUnavailable
+		}
+		return savedResult(record), nil
+	default:
+		return SendResult{}, ErrInvalidResponse
 	}
-	return pendingResult(c.profile, record), nil
 }
 
 func (c *Client) pollIntent(ctx context.Context, credential Credential, record ledgerRecord) (SendResult, error) {
@@ -188,6 +216,8 @@ func (c *Client) pollIntent(ctx context.Context, credential Credential, record l
 				return SendResult{}, ErrDenied
 			case "intent_expired":
 				return SendResult{}, ErrExpired
+			case "credential_revoked", "unauthorized":
+				return SendResult{}, ErrCredentialMissing
 			}
 		}
 		return SendResult{}, ErrUnavailable
@@ -247,7 +277,8 @@ func decodeResponse(response *http.Response, into any) error {
 func responseError(response *http.Response) error {
 	var body struct {
 		Error struct {
-			Code string `json:"code"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
 		} `json:"error"`
 	}
 	if decodeResponse(response, &body) == nil {

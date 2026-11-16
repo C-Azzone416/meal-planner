@@ -189,6 +189,101 @@ func TestSendCreatesIntentThenPollsAndPersistsReceipt(t *testing.T) {
 	}
 }
 
+func TestCreateReplayRecoversTerminalAcceptedReceipt(t *testing.T) {
+	local := testDraft(7)
+	submissionBytes, _ := json.Marshal(submission{ContentSchemaVersion: 1, Content: local.Content})
+	hash := sha256Hex(submissionBytes)
+	expires := time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339)
+	submitted := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	doer := &queueDoer{responses: []*http.Response{jsonResponse(200,
+		`{"api_version":"draft-intent-v1","intent":{"id":"`+testIntent+`","state":"approved","revision":2,"content_hash":"`+hash+`","expires_at":"`+expires+`","draft_id":"`+testHosted+`","receipt_id":"`+testReceipt+`","accepted_revision":1,"submitted_at":"`+submitted+`"},"approval":{"path":"/incoming-drafts/`+testIntent+`"}}`)}}
+	client, _, _ := newTestClient(t, doer, testBinding)
+
+	result, err := client.Send(context.Background(), local)
+	if err != nil || result.State != SendSaved || result.ReceiptID != testReceipt || result.HostedDraftID != testHosted {
+		t.Fatalf("terminal replay = %+v, %v", result, err)
+	}
+	again, err := client.Send(context.Background(), local)
+	if err != nil || again != result || len(doer.requests) != 1 {
+		t.Fatalf("durable terminal replay = %+v, %v; requests=%d", again, err, len(doer.requests))
+	}
+}
+
+func TestCreateReplaySurfacesDeniedAndExpired(t *testing.T) {
+	local := testDraft(7)
+	submissionBytes, _ := json.Marshal(submission{ContentSchemaVersion: 1, Content: local.Content})
+	hash := sha256Hex(submissionBytes)
+	expires := time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339)
+
+	for _, test := range []struct {
+		name, state string
+		want        error
+	}{
+		{name: "denied", state: "denied", want: ErrDenied},
+		{name: "expired pending", state: "pending", want: ErrExpired},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			doer := &queueDoer{responses: []*http.Response{jsonResponse(200,
+				`{"api_version":"draft-intent-v1","intent":{"id":"`+testIntent+`","state":"`+test.state+`","revision":2,"content_hash":"`+hash+`","expires_at":"`+expires+`"},"approval":{"path":"/incoming-drafts/`+testIntent+`"}}`)}}
+			client, _, _ := newTestClient(t, doer, testBinding)
+			if _, err := client.Send(context.Background(), local); err != test.want {
+				t.Fatalf("terminal replay error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestHostedErrorEnvelopeMapsLifecycleErrors(t *testing.T) {
+	for _, test := range []struct {
+		name, code string
+		status     int
+		want       error
+	}{
+		{name: "denied", code: "intent_denied", status: http.StatusGone, want: ErrDenied},
+		{name: "expired", code: "intent_expired", status: http.StatusGone, want: ErrExpired},
+		{name: "revoked", code: "unauthorized", status: http.StatusUnauthorized, want: ErrCredentialMissing},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			doer := &queueDoer{responses: []*http.Response{jsonResponse(test.status,
+				`{"error":{"code":"`+test.code+`","message":"Safe hosted message."}}`)}}
+			client, _, _ := newTestClient(t, doer, testBinding)
+			if _, err := client.Send(context.Background(), testDraft(1)); err != test.want {
+				t.Fatalf("hosted error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestPollMapsHostedLifecycleErrorEnvelope(t *testing.T) {
+	for _, test := range []struct {
+		name, code string
+		status     int
+		want       error
+	}{
+		{name: "denied", code: "intent_denied", status: http.StatusGone, want: ErrDenied},
+		{name: "expired", code: "intent_expired", status: http.StatusGone, want: ErrExpired},
+		{name: "revoked", code: "unauthorized", status: http.StatusUnauthorized, want: ErrCredentialMissing},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			local := testDraft(1)
+			submissionBytes, _ := json.Marshal(submission{ContentSchemaVersion: 1, Content: local.Content})
+			hash := sha256Hex(submissionBytes)
+			expires := time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339)
+			doer := &queueDoer{responses: []*http.Response{
+				jsonResponse(http.StatusCreated, `{"api_version":"draft-intent-v1","intent":{"id":"`+testIntent+`","state":"pending","revision":1,"content_hash":"`+hash+`","expires_at":"`+expires+`"},"approval":{"path":"/incoming-drafts/`+testIntent+`"}}`),
+				jsonResponse(test.status, `{"error":{"code":"`+test.code+`","message":"Safe hosted message."}}`),
+			}}
+			client, _, _ := newTestClient(t, doer, testBinding)
+			if _, err := client.Send(context.Background(), local); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Send(context.Background(), local); err != test.want {
+				t.Fatalf("poll error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
 func TestRedirectAndHostileResponsesFailClosed(t *testing.T) {
 	redirect := jsonResponse(307, `{}`)
 	redirect.Header.Set("Location", "https://evil.invalid/steal")

@@ -73,9 +73,9 @@ immutable receipt, never a recipe.
 
 Owner APIs list and read only the verified `(issuer, subject)` account's hosted
 drafts. Review writes bind both draft revision and review revision. Unsupported
-content schema versions remain readable as uninterpreted stored data but disable
-review and save. Unknown values remain absent/Unknown; present zero remains zero.
-Canonical content and provenance remain attached after recipe save.
+content schema versions fail closed as `unsupported_content_schema`; they are not
+decoded, reviewed, or saved. Unknown values remain absent/Unknown; present zero
+remains zero. Canonical content and provenance remain attached after recipe save.
 
 Saving requires an explicit, complete owner-supplied projection into the existing
 manual recipe model. The owner API reuses the existing recipe repository and a
@@ -91,9 +91,10 @@ The credential-store interface has no plaintext or environment fallback. The
 real macOS Keychain implementation and its signing/ACL behavior remain a final
 hookup gate; source tests use an in-memory fake. The receipt ledger contains no
 recipe content or credentials. Its namespace includes exact environment, API
-origin, web origin, account binding, local draft ID, local revision and canonical
-content hash. An ambiguous retry reuses the same operation key. A changed revision
-or account uses a different namespace.
+origin, account binding, local draft ID, local revision and canonical content
+hash. The compiled Preview profile pins the web origin to that same exact origin.
+An ambiguous retry reuses the same operation key. A changed revision or account
+uses a different namespace.
 
 ## Tomorrow's live hookup checklist
 
