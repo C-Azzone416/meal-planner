@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {spawnSync} from 'node:child_process'
-import {canonical,digest,verifyObservation} from './migration-readiness.mjs'
+import {canonical,digest,migrationFiles,verifyObservation} from './migration-readiness.mjs'
 // Opt-in, disposable local cluster only. Never consumes PGHOST/DATABASE_URL.
 test('real PostgreSQL inspection detects schema and effective privilege drift',{skip:!process.env.READINESS_PG_BIN},()=>{
  const bin=process.env.READINESS_PG_BIN;assert.ok(path.isAbsolute(bin))
@@ -15,7 +15,7 @@ test('real PostgreSQL inspection detects schema and effective privilege drift',{
  let started=false
  try {
  run('initdb',['-D',data,'-A','trust','--no-locale']);run('pg_ctl',['-D',data,'-l',path.join(root,'server.log'),'-o',`-k ${socket} -c listen_addresses=''`,'-w','start']);started=true
- for(const file of ['hosted/migrations/001_recipes.sql','migrations/002_framebriar.sql','hosted/migrations/004_draft_ingest.sql']) run('psql',['-X','-qAt','-v','ON_ERROR_STOP=1','-f',file])
+ for(const file of migrationFiles) run('psql',['-X','-qAt','-v','ON_ERROR_STOP=1','-f',file])
  sql('CREATE ROLE readiness_runtime LOGIN; GRANT USAGE ON SCHEMA meal_planner TO readiness_runtime; GRANT SELECT, INSERT, UPDATE ON meal_planner.recipes TO readiness_runtime; GRANT SELECT, INSERT ON meal_planner.recipe_creates, meal_planner.recipe_updates TO readiness_runtime;')
  const observe=(user=env.PGUSER)=>JSON.parse(run('psql',['-U',user,'-X','-qAt','-v','ON_ERROR_STOP=1','-v','component=recipes','-v','runtime_role=readiness_runtime','-f','tools/deploy/inspect-migration-readiness.sql']))
  const first=observe();assert.equal(first.relations.length,4)
