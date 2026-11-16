@@ -9,7 +9,9 @@ import { DAY_NAMES, DAY_SHORT_NAMES, type DayIndex, type Night } from '../planne
 import { recipePath } from './recipePath'
 import '../styles/week.css'
 
-const mealColors = ['rust', 'green', 'gold'] as const
+// Color belongs to the weekday, not the recipe or its position in the planned list.
+// Text labels remain the primary identifier; the shared palette is a visual cue.
+const dayColors = ['cream', 'rust', 'green', 'gold', 'purple', 'rust', 'green'] as const
 const undoDurationMs = 10_000
 // The provider keeps each undo entry stable across routes, even when sequence numbers are reused.
 const undoDeadlines = new WeakMap<object, number>()
@@ -213,7 +215,7 @@ export function WeekPage() {
                     setSelectedDay(item.day)
                   }}
                 >
-                  <Magnet color={item.status === 'planned' ? 'green' : 'cream'}>{DAY_SHORT_NAMES[item.day]}</Magnet>
+                  <Magnet color={dayColors[item.day]}>{DAY_SHORT_NAMES[item.day]}</Magnet>
                   <span id={`night-info-${item.day}`} className="week-night-info">
                     <strong>{item.status}{item.day === today ? ' · Today' : ''}</strong>
                     {selectedDay === item.day && <span aria-hidden="true">✓ Selected</span>}
@@ -257,12 +259,12 @@ export function WeekPage() {
           </StateCard>
         ) : (
           <div className="meal-card-grid">
-            {planned.map((item, index) => {
+            {planned.map((item) => {
               const recipe = getRecipe(item.recipeId)
               if (!recipe) return null
               return (
                 <article className="paper-card meal-card" key={item.day}>
-                  <span className="card-magnet" aria-hidden="true"><Magnet color={mealColors[index % mealColors.length]}>{recipe.icon}</Magnet></span>
+                  <span className="card-magnet" aria-hidden="true"><Magnet color={dayColors[item.day]}>{recipe.icon}</Magnet></span>
                   <p id={`meal-day-${item.day}`} className="rust-script">{DAY_NAMES[item.day]}</p>
                   <h2>{recipe.title}</h2>
                   <p>{recipe.activeMinutes} min hands-on · {formatDuration(recipe.totalMinutes)} total</p>

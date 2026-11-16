@@ -382,3 +382,63 @@ test('reset data clears Cook progress immediately and after route navigation', (
   fireEvent.click(screen.getByRole('link', { name: 'Cook tonight →', description: 'Monday' }))
   expect(screen.queryAllByRole('checkbox', { checked: true })).toHaveLength(0)
 })
+
+
+function cardMagnet(day: string) {
+  const card = screen.getAllByRole('article').find(element => element.querySelector('.rust-script')?.textContent === day)
+  if (!card) throw new Error(`Missing dinner card for ${day}`)
+  return card.querySelector('.card-magnet .magnet')!
+}
+
+function dayMagnet(day: string) {
+  return night(day).querySelector('.magnet')!
+}
+
+test('pairs each planned dinner magnet with its weekday color without replacing recipe artwork', () => {
+  renderPlanner()
+  for (const day of ['Monday', 'Wednesday', 'Thursday']) {
+    expect(cardMagnet(day).className).toBe(dayMagnet(day).className)
+    expect(cardMagnet(day).textContent).not.toBe(dayMagnet(day).textContent)
+  }
+  expect(cardMagnet('Monday').className).toContain('magnet--rust')
+  expect(cardMagnet('Wednesday').className).toContain('magnet--gold')
+  expect(cardMagnet('Thursday').className).toContain('magnet--purple')
+})
+
+test('weekday colors stay stable after selection and removing an earlier dinner card', () => {
+  renderPlanner()
+  const original = cardMagnet('Thursday').className
+  click('Thursday')
+  expect(cardMagnet('Thursday').className).toBe(original)
+  openNight('Monday')
+  expect(cardMagnet('Thursday').className).toBe(original)
+  expect(cardMagnet('Wednesday').className).toBe(dayMagnet('Wednesday').className)
+  expect(dayMagnet('Monday').className).toContain('magnet--rust')
+  expect(night('Monday').textContent).toContain('open')
+})
+
+test('moved dinners adopt the destination weekday color and keep their artwork', () => {
+  renderPlanner('/week', <MoveThursdayDinner />)
+  const sourceIcon = cardMagnet('Thursday').textContent
+  const targetIcon = cardMagnet('Wednesday').textContent
+  click('Swap Thursday and Wednesday')
+  expect(cardMagnet('Wednesday').textContent).toBe(sourceIcon)
+  expect(cardMagnet('Thursday').textContent).toBe(targetIcon)
+  expect(cardMagnet('Wednesday').className).toBe(dayMagnet('Wednesday').className)
+  expect(cardMagnet('Thursday').className).toBe(dayMagnet('Thursday').className)
+})
+
+
+test('skip and reopening preserve the weekday cue while status stays explicit', () => {
+  renderPlanner()
+  const original = dayMagnet('Wednesday').className
+  click('Wednesday')
+  click('Skip night')
+  expect(dayMagnet('Wednesday').className).toBe(original)
+  expect(night('Wednesday').textContent).toContain('skipped')
+  click('Make open')
+  expect(dayMagnet('Wednesday').className).toBe(original)
+  expect(night('Wednesday').textContent).toContain('open')
+  click('Plan my week')
+  expect(cardMagnet('Wednesday').className).toBe(original)
+})
