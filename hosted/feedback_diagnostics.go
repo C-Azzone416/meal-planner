@@ -30,7 +30,12 @@ type feedbackDiagnostic struct {
 	sentinel error
 }
 
-func (e feedbackDiagnostic) Error() string { return "UNAVAILABLE" }
+func (e feedbackDiagnostic) Error() string {
+	if e.sentinel == errFeedbackStorage {
+		return "feedback storage unavailable"
+	}
+	return "UNAVAILABLE"
+}
 func (e feedbackDiagnostic) Unwrap() error { return e.sentinel }
 func logFeedbackDiagnostic(err error) {
 	var d feedbackDiagnostic
