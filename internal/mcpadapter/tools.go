@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/C-Azzone416/meal-planner/internal/core/draft"
 	"github.com/C-Azzone416/meal-planner/internal/core/version"
+	"github.com/C-Azzone416/meal-planner/internal/localclient"
 )
 
 type handlers struct {
@@ -46,6 +48,10 @@ type (
 		Draft            json.RawMessage `json:"draft"`
 	}
 	statusArgs struct{}
+	sendArgs   struct {
+		ID               string `json:"id"`
+		ExpectedRevision int64  `json:"expected_revision"`
+	}
 )
 
 const (
@@ -74,6 +80,10 @@ func annotations(readOnly, destructive bool) *mcp.ToolAnnotations {
 		a.DestructiveHint = boolp(destructive)
 	}
 	return a
+}
+
+func sendAnnotations() *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolp(false), OpenWorldHint: boolp(true)}
 }
 
 // addTool registers one tool on the low-level SDK API. The generic mcp.AddTool is not used because
@@ -162,6 +172,51 @@ func (h *handlers) register(s *mcp.Server) {
 		InputSchema: obj(map[string]any{}),
 		Annotations: annotations(true, false),
 	}, h.status)
+	if h.cfg.sender != nil {
+		addTool(h, s, &mcp.Tool{
+			Name:        ToolDraftSend,
+			Description: "Explicitly propose one immutable local draft revision to the pinned Preview account. The signed-in owner must independently approve this exact snapshot in the browser before it is saved. Repeating the same ID and revision safely polls or resumes the same operation. No credential is accepted or returned.",
+			InputSchema: obj(map[string]any{
+				"id":                prop("string", idDesc),
+				"expected_revision": prop("integer", "The exact local revision to propose. If the draft changed, nothing is sent."),
+			}, "id", "expected_revision"),
+			Annotations: sendAnnotations(),
+		}, h.send)
+	}
+}
+
+func (h *handlers) send(ctx context.Context, in sendArgs) outcome {
+	if !draft.ValidID(in.ID) || in.ExpectedRevision < 1 || in.ExpectedRevision > draft.MaxRevision {
+		return outcome{err: argumentsError(), id: in.ID}
+	}
+	local, err := h.svc.Get(ctx, in.ID)
+	if err != nil {
+		return outcome{err: err, id: in.ID}
+	}
+	if local.Revision != in.ExpectedRevision {
+		return outcome{err: &draft.Error{Category: draft.CategoryConflict, Code: draft.CodeRevisionMismatch,
+			Message: "the draft changed since the revision selected for sending; read it again before sending", CurrentRevision: local.Revision}, id: in.ID}
+	}
+	result, err := h.cfg.sender.Send(ctx, local)
+	if err != nil {
+		return outcome{err: sendError(err), id: in.ID}
+	}
+	return outcome{value: map[string]any{"send": result}, id: in.ID}
+}
+
+func sendError(err error) error {
+	switch {
+	case errors.Is(err, localclient.ErrDenied):
+		return &draft.Error{Category: draft.CategoryConflict, Code: "send_denied", Message: "the owner denied this draft send"}
+	case errors.Is(err, localclient.ErrExpired):
+		return &draft.Error{Category: draft.CategoryConflict, Code: "send_expired", Message: "the owner approval window expired; start a new send"}
+	case errors.Is(err, localclient.ErrCredentialMissing):
+		return &draft.Error{Category: draft.CategoryIO, Code: "send_not_connected", Message: "Preview sending is not connected for this account"}
+	case errors.Is(err, context.Canceled):
+		return &draft.Error{Category: draft.CategoryIO, Code: draft.CodeCanceled, Message: "the send was cancelled before completion"}
+	default:
+		return &draft.Error{Category: draft.CategoryIO, Code: "send_unavailable", Message: "Preview did not confirm this send; retry the same draft revision"}
+	}
 }
 
 func (h *handlers) create(ctx context.Context, in createArgs) outcome {
@@ -235,6 +290,10 @@ func (h *handlers) status(ctx context.Context, _ statusArgs) outcome {
 			st = storeStatus{Available: true, DraftCount: info.DraftCount, SkippedCount: info.SkippedCount, CrossProcessLock: info.CrossProcessLock}
 			exists, private = info.DataDirExists, info.PrivatePermissions
 		}
+		operations := append([]string(nil), Operations...)
+		if h.cfg.sender != nil {
+			operations = append(operations, ToolDraftSend)
+		}
 		return outcome{value: map[string]any{
 			"binary":                    ServerName,
 			"binary_version":            version.Version,
@@ -242,7 +301,7 @@ func (h *handlers) status(ctx context.Context, _ statusArgs) outcome {
 			"supported_schema_versions": draft.SupportedSchemaVersions,
 			"mode":                      "local",
 			"local_only":                true,
-			"operations":                Operations,
+			"operations":                operations,
 			"data_dir":                  map[string]any{"source": h.cfg.source, "exists": exists, "private_permissions": private},
 			"store":                     st,
 			"limits": map[string]any{

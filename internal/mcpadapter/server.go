@@ -12,6 +12,7 @@ import (
 
 	"github.com/C-Azzone416/meal-planner/internal/core/draft"
 	"github.com/C-Azzone416/meal-planner/internal/core/version"
+	"github.com/C-Azzone416/meal-planner/internal/localclient"
 )
 
 // ServerName is the MCP server name reported at initialize.
@@ -25,6 +26,7 @@ const (
 	ToolDraftUpdate   = "draft_update"
 	ToolDraftValidate = "draft_validate"
 	ToolServerStatus  = "server_status"
+	ToolDraftSend     = "draft_send"
 )
 
 // Operations lists the advertised tools in a stable order.
@@ -37,6 +39,7 @@ const CodeInvalidArguments = "invalid_arguments"
 type config struct {
 	source string
 	logger *slog.Logger
+	sender localclient.Sender
 }
 
 // Option configures New.
@@ -51,8 +54,14 @@ func WithDataDirSource(source string) Option { return func(c *config) { c.source
 // logs the tool name, outcome, duration and draft ID only, never payloads or paths.
 func WithLogger(l *slog.Logger) Option { return func(c *config) { c.logger = l } }
 
-// New returns an MCP server exposing exactly the six draft tools over svc. Only the tools
-// capability is advertised: no resources, prompts, logging, sampling or elicitation.
+// WithDraftSender enables the explicit outbound send tool. The command does
+// not use this option until the approved OS credential adapter and runtime gates
+// are hooked up, so repository builds remain local-only by default.
+func WithDraftSender(sender localclient.Sender) Option { return func(c *config) { c.sender = sender } }
+
+// New returns an MCP server exposing the six local tools, plus draft_send only
+// when an outbound sender is explicitly injected. Only the tools capability is
+// advertised: no resources, prompts, logging, sampling or elicitation.
 func New(svc *draft.Service, opts ...Option) *mcp.Server {
 	cfg := &config{source: "unknown", logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	for _, o := range opts {
