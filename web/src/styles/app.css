@@ -15,3 +15,28 @@
 @media (max-width:520px){.shopping-row{grid-template-columns:1fr auto}.shelf-future{display:none}}
 
 .sign-in-card label+label{margin-top:14px}.sign-in-card h2{font:700 24px Libre Baskerville,serif;margin:0 0 10px}
+
+/* Keep navigation close to the top without shrinking accessible hit targets.
+   Wide screens fit one row; smaller screens retain the wrapping action layout. */
+.app-shell { margin-top: 12px; }
+.app-shell > .brand-row { padding: 8px 14px; gap: 8px; min-height: 64px; }
+.app-shell > .brand-row .desktop-nav { gap: 6px; }
+.app-shell > .brand-row .nav-link {
+  min-height: 44px;
+  padding: 8px 12px;
+  gap: 5px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+@media (min-width: 1100px) {
+  .app-shell > .brand-row { flex-wrap: nowrap; }
+  .app-shell > .brand-row .desktop-nav {
+    order: 0;
+    flex-basis: auto;
+    margin-left: auto;
+  }
+  .app-shell > .brand-row .wordmark { margin-right: 0; }
+}
+@media (max-width: 900px) {
+  .app-shell { margin-top: 0; padding-top: 6px; }
+}

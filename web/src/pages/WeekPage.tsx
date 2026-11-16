@@ -72,6 +72,7 @@ function PinButton({ night, onToggle, compact = false }: {
       className={compact ? 'week-pin' : 'button button--paper'}
       aria-label={compact ? `Pin ${DAY_NAMES[night.day]} dinner` : undefined}
       aria-pressed={compact ? night.pinned : undefined}
+      aria-describedby="pin-help"
       onClick={onToggle}
     >
       <span aria-hidden="true">📌</span> {compact ? (night.pinned ? 'Pinned' : 'Pin') : (night.pinned ? 'Unpin dinner' : 'Pin dinner')}
@@ -212,8 +213,9 @@ export function WeekPage() {
                   aria-pressed={selectedDay === item.day}
                   aria-describedby={`night-info-${item.day}${warnings.length ? ` ${warningId}` : ''}`}
                   onClick={() => {
-                    if (proposal && proposal.day !== item.day) cancelProposal()
-                    setSelectedDay(item.day)
+                    const nextDay = selectedDay === item.day ? null : item.day
+                    if (proposal && proposal.day !== nextDay) cancelProposal()
+                    setSelectedDay(nextDay)
                   }}
                 >
                   <Magnet color={dayColors[item.day]}>{DAY_SHORT_NAMES[item.day]}</Magnet>
@@ -234,6 +236,7 @@ export function WeekPage() {
             )
           })}
         </ul>
+        {planned.length > 0 && <p id="pin-help" className="week-pin-help">📌 Pin keeps a dinner when planning or using Surprise me. You can still move or edit it.</p>}
         <div className={suggestion ? 'week-proposal inline-note' : 'sr-only'}>
           <p role="status">{suggestion && <>Try: <strong>{suggestion.title}</strong></>}</p>
           {suggestion && proposal && (
