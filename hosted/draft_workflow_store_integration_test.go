@@ -5,6 +5,7 @@ package hosted
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"os"
 	"sync"
@@ -106,5 +107,32 @@ CREATE TRIGGER reject_intent_accept BEFORE UPDATE ON public.draft_send_intents F
 	}
 	if submissions != 0 {
 		t.Fatalf("hosted drafts committed despite failed intent transition: %d", submissions)
+	}
+}
+
+func TestDraftWorkflowReplayRejectsUnsupportedStoredSchema(t *testing.T) {
+	store, access := workflowTestStore(t)
+	owner := RecipeOwner{Issuer: access.Issuer, Subject: "owner-a"}
+	submission := syntheticDraftSubmission()
+	intent, _, err := store.CreateIntent(context.Background(), access, "synthetic-unsupported-replay", submission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := json.Marshal(submission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestHash := sha256.Sum256(request)
+	future := `{"api_version":"future","draft":{"schema_version":2,"content_schema_version":2,"id":"44444444-4444-4444-8444-444444444444"}}`
+	_, err = store.drafts.db.Exec(`INSERT INTO public.draft_ingest_submissions(environment,owner_issuer,owner_subject,operation_key,request_hash,originating_grant_hash,request,response,retained_bytes,created_at) VALUES('preview',$1,$2,$3,$4,$5,$6,$7,1000000,clock_timestamp())`, owner.Issuer, owner.Subject, intent.ID, requestHash[:], access.TokenHash[:], string(request), future)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DecideIntent(context.Background(), owner, intent.ID, intent.Revision, intent.ContentHash, true, access); !errors.Is(err, ErrDraftUnsupported) {
+		t.Fatalf("unsupported replay approval = %v", err)
+	}
+	final, err := store.GetIntent(context.Background(), owner, intent.ID)
+	if err != nil || final.State != "pending" {
+		t.Fatalf("unsupported replay changed intent to %q: %v", final.State, err)
 	}
 }

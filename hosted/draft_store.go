@@ -237,9 +237,11 @@ func (s *PostgresDraftStore) submitTx(ctx context.Context, tx *sql.Tx, a DraftAc
 		if !bytes.Equal(hash[:], oldHash) {
 			return zero, false, ErrDraftConflict
 		}
-		if json.Unmarshal(receipt, &zero) != nil {
-			return DraftResponse{}, false, ErrDraftUnavailable
+		decoded, decodeErr := decodeHostedResponse(receipt)
+		if decodeErr != nil {
+			return DraftResponse{}, false, decodeErr
 		}
+		zero = decoded
 		return zero, true, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
