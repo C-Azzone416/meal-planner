@@ -3,6 +3,7 @@ package hosted
 import (
 	"crypto/sha256"
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 )
@@ -35,5 +36,21 @@ func TestDraftQuotaCountsReceiptsAndKeys(t *testing.T) {
 	}
 	if draftRetainedCharge(a, o, "key2", []byte("request"), []byte("response-with-receipt")) <= initial {
 		t.Fatal("receipt/key growth uncharged")
+	}
+}
+
+func TestProposalGrantRequiresMatchingMembershipEpoch(t *testing.T) {
+	now := time.Now().UTC()
+	a := DraftAccess{TokenHash: sha256.Sum256([]byte("proposal")), Environment: "preview", Issuer: "https://synthetic.invalid", AllowedEmails: []string{"owner@example.invalid"}, RequiredScope: "draft:propose", MembershipEpoch: "synthetic_epoch_1"}
+	g := draftGrant{Owner: RecipeOwner{a.Issuer, "subject"}, Email: a.AllowedEmails[0], Scope: "draft:propose", Environment: "preview", MembershipEpoch: a.MembershipEpoch, CreatedAt: now, ExpiresAt: now.Add(time.Hour)}
+	if !draftGrantAllowed(g, a, now) {
+		t.Fatal("matching proposal epoch rejected")
+	}
+	g.MembershipEpoch = "synthetic_epoch_2"
+	if draftGrantAllowed(g, a, now) {
+		t.Fatal("stale proposal epoch accepted")
+	}
+	if query, ok := draftGrantSelect(a, false); !ok || !strings.Contains(query, "public.draft_send_grants") {
+		t.Fatal("proposal grant selected the wrong authority table")
 	}
 }

@@ -20,6 +20,11 @@ import (
 	"github.com/C-Azzone416/meal-planner/internal/core/draft"
 )
 
+// Direct submission is retained only as reviewed storage machinery. The
+// browser-consent intent workflow supersedes it, and environment configuration
+// alone must never expose this older path.
+const draftIngestSourceEnabled = false
+
 // This first slice accepts immutable, unreviewed snapshots only. It has no
 // pairing, credential-issuance, read, edit, approval, or recipe/planner capability.
 // Browser session JWTs and cookies are deliberately NOT accepted as send grants.
@@ -88,6 +93,14 @@ type DraftAccess struct {
 	Environment   string
 	Issuer        string
 	AllowedEmails []string
+	// RequiredScope is selected by server wiring, never request JSON. Empty is
+	// the legacy direct-ingest scope. The review workflow uses draft:propose so
+	// the same grant cannot call the direct submission endpoint.
+	RequiredScope string
+	// MembershipEpoch is required only for draft:propose. It is server config,
+	// never caller JSON, and keeps an older proposal grant invalid after the
+	// operator rotates membership on removal or re-add.
+	MembershipEpoch string
 }
 type DraftRepository interface {
 	Authenticate(context.Context, DraftAccess) error
@@ -110,7 +123,7 @@ type DraftIngestConfig struct {
 // DraftIngestConfigFromEnvironment is evaluated per request so membership
 // removal and disabling do not wait for a warm serverless process to restart.
 func DraftIngestConfigFromEnvironment() DraftIngestConfig {
-	if os.Getenv("VERCEL_ENV") != "preview" || os.Getenv("MEAL_DRAFT_INGEST_ENABLED") != "true" {
+	if !draftIngestSourceEnabled || os.Getenv("VERCEL_ENV") != "preview" || os.Getenv("MEAL_DRAFT_INGEST_ENABLED") != "true" {
 		return DraftIngestConfig{}
 	}
 	base, members, err := normalizeAuthMembership(os.Getenv("NEON_AUTH_BASE_URL"), os.Getenv("NEON_AUTH_ENDPOINT_ID"), os.Getenv("AUTH_ALLOWED_EMAIL"), authAllowedEmailsFromEnvironment())

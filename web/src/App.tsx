@@ -25,8 +25,10 @@ import { PlannerProvider } from './planner/store'
 import type { StorageLike } from './planner/persist'
 import {
   CookPage,
+  ConnectPage,
   DraftsPage,
   HouseRulesPage,
+  HostedDraftsPage,
   PrepPage,
   RecipeDetailPage,
   RecipeFormPage,
@@ -147,6 +149,7 @@ export function AppRoutes({ plannerStorage }: { plannerStorage?: StorageLike | n
         <Route path="/sign-in" element={<SignInRoute />} />
         <Route element={<ProtectedShell storage={plannerStorage} />}>
           <Route path="/week" element={<WeekPage />} />
+          <Route path="/connect" element={<ConnectPage />} />
           <Route path="/recipes" element={<RecipesPage />} />
           <Route path="/recipes/new" element={<RecipeFormPage mode="new" />} />
           <Route path="/recipes/by-id/:recipeId" element={<RecipeDetailPage />} />
@@ -156,6 +159,8 @@ export function AppRoutes({ plannerStorage }: { plannerStorage?: StorageLike | n
           <Route path="/prep" element={<PrepPage />} />
           <Route path="/shopping" element={<ShoppingPage />} />
           <Route path="/drafts" element={<DraftsPage />} />
+          <Route path="/incoming-drafts" element={<HostedDraftsPage />} />
+          <Route path="/incoming-drafts/:intentId" element={<HostedDraftsPage />} />
           <Route path="/cook" element={<CookPage />} />
           <Route path="/house-rules" element={<HouseRulesPage />} />
         </Route>

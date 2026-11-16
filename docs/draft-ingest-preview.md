@@ -52,8 +52,9 @@ no-listener polling design. Never transfer browser sessions or DB DSNs to Codex.
 A host with shell access can directly invoke MCP, so host tool approvals alone
 are not a per-send consent boundary.
 
-The initial wrapper is locked to `VERCEL_ENV=preview`, explicit opt-in
-`MEAL_DRAFT_INGEST_ENABLED=true`, and exact
+The legacy direct-ingest wrapper now also has an independent source gate hard
+set to false. Even after a reviewed source change, it remains locked to
+`VERCEL_ENV=preview`, explicit opt-in `MEAL_DRAFT_INGEST_ENABLED=true`, and exact
 `MEAL_DRAFT_INGEST_ORIGIN=https://athome-meals-dev.vercel.app`. It uses the existing
 validated Neon issuer/endpoint and allowlist. Native calls may omit Origin;
 browser calls need that exact origin. No CORS headers or preflight are exposed.
