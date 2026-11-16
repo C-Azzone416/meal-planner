@@ -32,7 +32,7 @@ export function AppShell({ children, onSignOut }: { children: ReactNode; onSignO
   const { pathname } = useLocation()
   const { persistenceNotice, legacyNotice, retryPersistence } = usePlanner()
   return (
-    <div className="app-shell">
+    <div className={pathname === '/week' ? 'app-shell app-shell--week' : 'app-shell'}>
       <OfflineBanner />
       {!pathname.startsWith('/recipes') && <RecipeLoadNotice />}
       {persistenceNotice && <div className="reset-notice" role="alert"><span>{persistenceNotice}</span><button type="button" onClick={retryPersistence}>Retry saving</button></div>}
