@@ -7,11 +7,15 @@ or authorized.
 `tools/deploy/inspect-draft-retention-readiness.sql` is a timeout-bounded,
 read-only query for a future private clean inspector. It returns only aggregate
 counts by pairing/grant/intent/review state, owners at current retained-cap
-thresholds, and two integrity counts: accepted intents without their hosted
-submission and approved reviews without their recipe. It returns no owner,
-identifier, hash, credential, draft content or recipe content. Its `as_of` input
-must come from the trusted inspector clock. A target-provided result or public
-artifact is not evidence.
+thresholds, and two integrity counts: accepted intents without matching hashes
+and receipt/draft identifiers/revision in the hosted submission, and approved
+reviews without an approved manual recipe. The proposal submission cap reproduces the runtime's combined
+accounting of all retained submission bytes plus all retained send-grant
+metadata for the owner. It returns no owner, identifier, hash, credential, draft
+content or recipe content. Its `as_of` input must come from the trusted inspector
+clock. A target-provided result or public artifact is not evidence. Repeated
+low-cardinality snapshots can reveal activity changes, so the aggregate must
+remain private.
 
 The inspection deliberately does not decide what to delete:
 
@@ -38,6 +42,8 @@ until Caroline chooses the tombstone/content/account-deletion lifetimes. Any
 manual deletion still requires an exact migration-owner query, private before/
 after aggregates and separate action-time approval.
 
-The disposable PostgreSQL 18 test seeds expired pairing/grant/intent state and
-proves the query reports aggregate state without returning its synthetic owner or
-hash canaries. PostgreSQL 17 and live Neon remain untested.
+The disposable PostgreSQL 18 test seeds expired pairing/grant/intent state,
+exact and mismatched durable linkages, and a submission that crosses the runtime
+byte cap only after send-grant metadata is included. It proves the query reports
+aggregate state without returning its synthetic owner, identifier, hash or
+content canaries. PostgreSQL 17 and live Neon remain untested.
