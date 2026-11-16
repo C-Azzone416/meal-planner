@@ -6,9 +6,10 @@ import path from 'node:path'
 import {inventory} from './migration-readiness.mjs'
 import {spawnSync} from 'node:child_process'
 import {planFor,inspect,consume,diagnostic,psqlFailureStage} from './readiness-adapter.mjs'
-import {runtimeDigest} from './readiness-runtime-config.mjs'
+import {runtimeDigest,syntheticDraftRuntimeDigest} from './readiness-runtime-config.mjs'
 const baseline=JSON.parse(fs.readFileSync(new URL('./readiness-baseline-pg18.json',import.meta.url),'utf8'))
 const map=()=>({version:1,target:'preview',vercelProjectId:'prj_Synthetic',neonProjectId:'synthetic-project',neonBranchId:'br-synthetic',endpointHost:'ep-synthetic.us-east-1.aws.neon.tech',databaseName:'testdb',inspectorRole:'catalog_inspector',recipeRuntimeRole:'recipe_runtime',feedbackRuntimeRole:'feedback_runtime',postgresMajor:18,feedback:true,draft:false})
+const draftMap=()=>({...map(),draft:true,draftRuntimeRole:'draft_runtime'})
 const secret='postgresql://catalog_inspector:FAKE_SECRET_NOT_FOR_LOGS@ep-synthetic.us-east-1.aws.neon.tech/testdb?sslmode=verify-full'
 const input=()=>({map:map(),baseline,sourceInventory:baseline.inventory,sourceSha:'a'.repeat(40),secret,runtimeEvidence:{digest:runtimeDigest,observedAtMs:10000,projectId:'prj_Synthetic'},now:10000})
 const execute=(connection,args)=>{
@@ -24,6 +25,21 @@ test('synthetic clean observer to authenticated digest to consumer',()=>{
  const i=input(),r=inspect(i,execute)
  assert.ok(!r.record.includes('FAKE_SECRET'));assert.equal(r.sha256.length,64)
  assert.equal(consume({...i,record:r.record,expectedDigest:r.sha256,now:11000}).sourceSha,i.sourceSha)
+})
+test('synthetic draft readiness binds runtime evidence and inspects the exact draft role',()=>{
+ const i=input();i.map=draftMap();i.runtimeEvidence.digest=syntheticDraftRuntimeDigest
+ const seen=[];const r=inspect(i,(connection,args)=>{seen.push(args.find(x=>x.startsWith('component='))?.split('=')[1]??'server');return execute(connection,args)},s=>seen.push(`stage:${s}`))
+ assert.ok(!r.record.includes('FAKE_SECRET'))
+ const record=JSON.parse(r.record)
+ assert.deepEqual(Object.keys(record.snapshots).sort(),['draft','feedback','recipes'])
+ assert.equal(consume({...i,record:r.record,expectedDigest:r.sha256,now:11000}).sourceSha,i.sourceSha)
+ assert.ok(seen.includes('stage:draft'));assert.ok(seen.includes('draft'))
+})
+test('closed and synthetic draft runtime evidence are not interchangeable',()=>{
+ const closed=input();closed.runtimeEvidence.digest=syntheticDraftRuntimeDigest
+ assert.throws(()=>inspect(closed,execute))
+ const draft=input();draft.map=draftMap()
+ assert.throws(()=>inspect(draft,execute))
 })
 for(const [name,mutate] of [
  ['runtime other project',i=>i.runtimeEvidence.projectId='prj_Other'],['wrong branch',i=>i.map.neonBranchId='br-other'],['wrong host',i=>i.map.endpointHost='ep-other.us-east-1.aws.neon.tech'],['wrong project',i=>i.map.vercelProjectId='prj_Other'],['wrong source',i=>i.sourceSha='b'.repeat(40)],['expired record',i=>i.now=10000+15*60*1000],['future runtime',i=>i.runtimeEvidence.observedAtMs=10001],['wrong runtime',i=>i.runtimeEvidence.digest='0'.repeat(64)],

@@ -7,9 +7,9 @@ import {spawnSync} from 'node:child_process'
 import {fileURLToPath} from 'node:url'
 import {canonical,digest,inventory,createReadiness,verifyReadiness,parseCanonicalRecord,verifyObservation} from './migration-readiness.mjs'
 import {parseProviderMap,validateProviderMap,inspectorEnvironment,assertServerMajor} from './readiness-provider-map.mjs'
-import {runtimeDigest} from './readiness-runtime-config.mjs'
+import {runtimePolicy} from './readiness-runtime-config.mjs'
 const HERE=path.dirname(fileURLToPath(import.meta.url))
-const STAGES=new Set(['init','provider-map','runtime-evidence','inventory','dsn','db-connect','db-client','db-auth','db-tls','server-major','inspector-policy','recipes','feedback','readiness-record','output','cleanup'])
+const STAGES=new Set(['init','provider-map','runtime-evidence','inventory','dsn','db-connect','db-client','db-auth','db-tls','server-major','inspector-policy','recipes','feedback','draft','readiness-record','output','cleanup'])
 // Only these literal stage codes may leave the adapter on failure. Never accept
 // exception text, psql stderr, configuration values or credentials as a label.
 export function diagnostic(stage){
@@ -31,29 +31,28 @@ export function planFor(map,baseline,sourceInventory,sourceSha){
  assert.deepEqual(Object.keys(baseline).sort(),['components','inspector','inventory','postgresMajor','version'])
  assert.equal(baseline.version,1);assert.equal(baseline.postgresMajor,map.postgresMajor)
  assert.equal(canonical(sourceInventory),canonical(baseline.inventory),'Reviewed migration bytes changed')
- // The reviewed baseline also binds the candidate draft policy, but this
- // closed-gate adapter deliberately plans and inspects only enabled services.
- // Draft activation, including its runtime-role identity, remains a separate
- // owner decision and provider-map revision.
  assert.deepEqual(Object.keys(baseline.components).sort(),['draft','feedback','recipes'])
  const components={}
- for(const component of ['recipes','feedback']){
+ const selected=['recipes','feedback',...(map.draft?['draft']:[])]
+ for(const component of selected){
   const expected=structuredClone(baseline.components[component])
   assert.equal(expected.databaseName,'BASELINE_DATABASE');assert.equal(expected.runtimeRole,'BASELINE_ROLE')
   expected.databaseName=map.databaseName
-  expected.runtimeRole=map[component==='recipes'?'recipeRuntimeRole':'feedbackRuntimeRole']
+  const roleKey={recipes:'recipeRuntimeRole',feedback:'feedbackRuntimeRole',draft:'draftRuntimeRole'}[component]
+  expected.runtimeRole=map[roleKey]
   components[component]={databaseName:map.databaseName,runtimeRole:expected.runtimeRole,expectedSnapshotSha256:digest(canonical(expected))}
  }
- return {version:1,target:'preview',projectId:map.vercelProjectId,databaseBranchId:map.neonBranchId,sourceSha,inventorySha256:sourceInventory.sha256,policySha256:digest(canonical({baseline,map,runtimeDigest})),feedback:true,draft:false,components}
+ const {digest:runtimeDigest}=runtimePolicy(map.draft)
+ return {version:1,target:'preview',projectId:map.vercelProjectId,databaseBranchId:map.neonBranchId,sourceSha,inventorySha256:sourceInventory.sha256,policySha256:digest(canonical({baseline,map,runtimeDigest})),feedback:true,draft:map.draft,components}
 }
-export function verifyRuntimeEvidence(evidence,now){
- assert.equal(evidence.digest,runtimeDigest)
+export function verifyRuntimeEvidence(evidence,now,draft=false){
+ assert.equal(evidence.digest,runtimePolicy(draft).digest)
  assert.ok(Number.isSafeInteger(now)&&Number.isSafeInteger(evidence.observedAtMs))
  assert.ok(evidence.observedAtMs>0&&evidence.observedAtMs<=now&&now-evidence.observedAtMs<15*60*1000,'Runtime configuration observation expired')
 }
 export function inspect({map,baseline,sourceInventory,sourceSha,secret,runtimeEvidence,now=Date.now()},execute,stage=()=>{}){
  stage('runtime-evidence')
- verifyRuntimeEvidence(runtimeEvidence,now)
+ verifyRuntimeEvidence(runtimeEvidence,now,map.draft)
  assert.equal(runtimeEvidence.projectId,map.vercelProjectId,'Runtime observation is for another Vercel project')
  stage('inventory')
  const plan=planFor(map,baseline,sourceInventory,sourceSha)
@@ -71,7 +70,7 @@ export function inspect({map,baseline,sourceInventory,sourceSha,secret,runtimeEv
  assert.ok(Buffer.byteLength(inspectorRaw)<=256*1024)
  verifyObservation('recipes',JSON.parse(inspectorRaw),{databaseName:map.databaseName,runtimeRole:map.inspectorRole,expectedSnapshotSha256:digest(canonical(inspectorExpected))})
  const observations={}
- for(const component of ['recipes','feedback']){
+ for(const component of ['recipes','feedback',...(plan.draft?['draft']:[])]){
   stage(component)
   const raw=execute(connection,['-v',`component=${component}`,'-v',`runtime_role=${plan.components[component].runtimeRole}`,'-f',path.join(HERE,'inspect-migration-readiness.sql')])
   assert.ok(Buffer.byteLength(raw)<=256*1024)
@@ -83,7 +82,7 @@ export function inspect({map,baseline,sourceInventory,sourceSha,secret,runtimeEv
  return {record:canonical(record),sha256:digest(canonical(record))}
 }
 export function consume({map,baseline,sourceInventory,sourceSha,record,expectedDigest,runtimeEvidence,now=Date.now()}){
- verifyRuntimeEvidence(runtimeEvidence,now)
+ verifyRuntimeEvidence(runtimeEvidence,now,map.draft)
  assert.equal(runtimeEvidence.projectId,map.vercelProjectId,'Runtime observation is for another Vercel project')
  const plan=planFor(map,baseline,sourceInventory,sourceSha)
  return verifyReadiness(parseCanonicalRecord(record),plan,expectedDigest,sourceInventory,now)
@@ -116,7 +115,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
    fs.appendFileSync(process.env.GITHUB_OUTPUT,`record=${result.record}\nrecord_sha256=${result.sha256}\nprovider_map=${canonical(map)}\n`)
   }else{
    mark('runtime-evidence')
-   verifyRuntimeEvidence(input.runtimeEvidence,Date.now())
+   verifyRuntimeEvidence(input.runtimeEvidence,Date.now(),map.draft)
    assert.equal(input.runtimeEvidence.projectId,map.vercelProjectId)
    mark('inventory')
    planFor(map,baseline,input.sourceInventory,input.sourceSha)
