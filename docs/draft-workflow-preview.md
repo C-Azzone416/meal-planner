@@ -136,10 +136,15 @@ distributed transaction or live Preview proof.
 
 The unauthenticated pairing store calls now receive a ten-second application
 deadline, inside the proposed fifteen-second function execution ceiling. Every
-pairing body remains limited to 8 KiB and every transactional store operation
-keeps a three-second lock timeout. Pairing, intent creation and hosted-draft
-insertion use an eight-second statement timeout; the atomic browser decision
-uses twelve seconds. These source limits do not replace an edge throttle or
+pairing body remains limited to 8 KiB. Pairing poll/approval and intent-creation
+transactions set an eight-second statement timeout and three-second lock timeout.
+The atomic browser decision begins with twelve-second statement and three-second
+lock timeouts; its approval path then enters hosted-draft insertion, which
+tightens the transaction-local statement timeout to eight seconds. Pairing
+creation, grant listing/revocation/authentication, and hosted review/link are
+single database calls without their own transaction-local statement timeout;
+they rely on the ten-second pairing or twelve-second workflow handler context and
+driver cancellation. These source limits do not replace an edge throttle or
 establish an upload deadline.
 
 Before activation, the stable Preview hostname still needs three exact-path,
