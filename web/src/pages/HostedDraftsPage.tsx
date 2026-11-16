@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
 import { draftReviewClient, type CanonicalDraftContent, type HostedDraftResponse, type IncomingIntent } from '../drafts/api'
+import { ProjectionEditor } from '../drafts/ProjectionEditor'
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
+import '../styles/hosted-drafts.css'
 
 function show(value: unknown): string {
   return value === undefined || value === null || value === '' ? 'Unknown' : String(value)
@@ -30,6 +32,7 @@ export function HostedDraftsPage() {
   const [summaries, setSummaries] = useState<Array<{ id: string; title: string; revision: number; review_state: string; review_revision: number }>>([])
   const [selected, setSelected] = useState<HostedDraftResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [confirmation, setConfirmation] = useState<string | null>(null)
   const orderedIntents = useMemo(() => intentId
     ? [...intents].sort((a, b) => Number(b.id === intentId) - Number(a.id === intentId))
     : intents, [intentId, intents])
@@ -51,6 +54,7 @@ export function HostedDraftsPage() {
     <PreviewNotice />
     <FridgePanel className="content-panel">
       {error && <p role="alert">{error}</p>}
+      {confirmation && <p role="status">{confirmation}</p>}
       <button type="button" className="button button--paper" onClick={() => void reload()}>Reload</button>
       <h2>Waiting for your consent</h2>
       {intentId && intents.length > 0 && !intents.some((intent) => intent.id === intentId) && <p role="status">That proposal is no longer waiting for consent.</p>}
@@ -60,11 +64,16 @@ export function HostedDraftsPage() {
         <button type="button" className="button button--paper" onClick={() => void decide(intent, 'deny')}>Deny</button>
       </article>)}
       <h2>Unreviewed drafts</h2>
-      {summaries.map((item) => <button type="button" className="button button--paper" key={item.id} onClick={async () => { try { setSelected(await client.draft(item.id)) } catch { setError('That draft could not be opened.') } }}>{item.title} · {item.review_state} · rev {item.revision}</button>)}
+      {summaries.map((item) => <button type="button" className="button button--paper" key={item.id} onClick={async () => { try { setConfirmation(null); setSelected(await client.draft(item.id)) } catch { setError('That draft could not be opened.') } }}>{item.title} · {item.review_state} · rev {item.revision}</button>)}
       {selected && <article><CanonicalDraft content={selected.draft.content} />
         <p>{selected.validation.notice}</p>{selected.validation.warnings.map((warning) => <p key={`${warning.path}:${warning.code}`}>⚠ {warning.path}: {warning.message}</p>)}
         {selected.draft.review.state === 'not_started' && <button type="button" className="button button--green" onClick={() => void review()}>I reviewed this exact revision</button>}
-        {selected.draft.review.state === 'ready' && <p>Reviewed. Saving still requires a complete explicit manual-recipe projection; the API rejects missing values and stale revisions. This Preview UI intentionally does not guess that projection.</p>}
+        {selected.draft.review.state === 'ready' && <ProjectionEditor key={`${selected.draft.id}:${selected.draft.revision}:${selected.draft.review.revision}`} item={selected} onSave={(item, projection) => client.save(item, projection)} onSaved={() => {
+          if (!active.current) return
+          setConfirmation('Recipe saved. The reviewed draft is now approved and cannot be saved a second time.')
+          setSelected(null)
+          void reload()
+        }} />}
       </article>}
     </FridgePanel>
   </>

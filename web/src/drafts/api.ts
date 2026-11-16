@@ -38,6 +38,7 @@ export function draftReviewClient(getToken: () => Promise<string | null>, expire
     if (!response.ok) throw new DraftReviewAPIError(response.status,
       response.status === 409 ? 'This draft changed elsewhere. Reload before continuing.'
         : response.status === 401 ? 'Your session ended. Sign in again.'
+          : response.status === 400 ? 'This request was rejected without changing the draft. Correct it and try again.'
           : response.status === 403 ? 'This request was not accepted from this page.'
             : response.status === 404 ? 'This draft is no longer available.'
               : 'The draft service is unavailable. No change was confirmed.')

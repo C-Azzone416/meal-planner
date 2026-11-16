@@ -114,11 +114,12 @@ func TestProfileIsExactPreviewOnly(t *testing.T) {
 
 func TestUnavailableCredentialStoreHasNoFallback(t *testing.T) {
 	store := UnavailableCredentialStore{}
-	if _, err := store.Get(context.Background(), CredentialKey{}); err != ErrCredentialMissing {
+	key := credentialKey(testProfile(testBinding))
+	if _, err := store.Get(context.Background(), key); err != ErrCredentialMissing {
 		t.Fatalf("Get error = %v", err)
 	}
 	credential, _ := newCredential([]byte(testGrant))
-	if err := store.Put(context.Background(), CredentialKey{}, credential); err != ErrUnavailable {
+	if err := store.Put(context.Background(), key, credential); err != ErrUnavailable {
 		t.Fatalf("Put error = %v", err)
 	}
 }

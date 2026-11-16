@@ -23,12 +23,13 @@ describe('draft review client', () => {
     const fetcher = vi.fn<typeof fetch>()
     fetcher.mockResolvedValue(new Response(JSON.stringify({ draft: draft.draft, recipe: {} }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     const client = draftReviewClient(async () => 'jwt', () => undefined, fetcher)
-    await client.save(draft, { title: 'Manual', shortName: '', icon: '🍲', activeMinutes: 0, totalMinutes: 0, attention: 'low', tags: [], defaultServings: 1, ingredients: [], prepAhead: [], prepTonight: [], cookTonight: [] })
+    const projection = { title: 'Manual', shortName: '', icon: '🍲', activeMinutes: 0, totalMinutes: 0, attention: 'low' as const, tags: [], defaultServings: 1, ingredients: [], prepAhead: [], prepTonight: [], cookTonight: [] }
+    await client.save(draft, projection)
+    expect(fetcher.mock.calls[0][0]).toBe('/api/draft-review/drafts')
     const init = fetcher.mock.calls[0][1]
     const body = JSON.parse(String(init?.body))
-    expect(body.expected_draft_revision).toBe(3)
-    expect(body.expected_review_revision).toBe(4)
-    expect(body.projection.activeMinutes).toBe(0)
+    expect(init?.credentials).toBe('same-origin')
+    expect(body).toEqual({ draft_id: draft.draft.id, expected_draft_revision: 3, expected_review_revision: 4, projection })
     expect(draft.draft.content.estimates?.active_minutes.value).toBe(0)
   })
 
@@ -50,5 +51,10 @@ describe('draft review client', () => {
     const client = draftReviewClient(async () => 'jwt', expire, vi.fn(async () => new Response('{}', { status: 401 })) as typeof fetch)
     await expect(client.drafts()).rejects.toMatchObject({ status: 401 })
     expect(expire).toHaveBeenCalledOnce()
+  })
+
+  it('treats a 400 as a definitive rejection suitable for correction', async () => {
+    const client = draftReviewClient(async () => 'jwt', () => undefined, vi.fn(async () => new Response('{}', { status: 400 })) as typeof fetch)
+    await expect(client.drafts()).rejects.toMatchObject({ status: 400, message: expect.stringContaining('rejected without changing') })
   })
 })

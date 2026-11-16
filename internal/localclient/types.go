@@ -50,13 +50,13 @@ func (p Profile) Validate() error {
 type CredentialKey struct {
 	Environment string
 	APIOrigin   string
+	WebOrigin   string
 	BindingID   string
 }
 
 // CredentialStore is the only source of send grants. Implementations must not
-// use a plaintext file fallback. The repository intentionally supplies only a
-// fail-closed implementation and test fakes until macOS signing/ACL behavior is
-// independently verified.
+// use a plaintext file fallback. The native macOS implementation remains
+// explicitly unwired until signing/ACL behavior is independently verified.
 type CredentialStore interface {
 	Get(context.Context, CredentialKey) (Credential, error)
 	Put(context.Context, CredentialKey, Credential) error
