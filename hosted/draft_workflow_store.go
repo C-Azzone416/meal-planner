@@ -298,7 +298,7 @@ func (s *PostgresDraftWorkflowStore) DecideIntent(ctx context.Context, o RecipeO
 	}
 	copy(a.TokenHash[:], grantHash)
 	a.Environment = "preview"
-	result, _, err := s.drafts.Submit(ctx, a, id, i.Submission)
+	result, _, err := s.drafts.submitTx(ctx, tx, a, id, i.Submission)
 	if err != nil {
 		return DraftIntent{}, err
 	}

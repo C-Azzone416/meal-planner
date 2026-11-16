@@ -80,3 +80,31 @@ func TestDraftWorkflowConcurrentApproveDenyIsAtomic(t *testing.T) {
 		t.Fatalf("intent state %q with %d hosted submissions", final.State, submissions)
 	}
 }
+
+func TestDraftWorkflowApprovalTransitionFailureRollsBackHostedDraft(t *testing.T) {
+	store, access := workflowTestStore(t)
+	owner := RecipeOwner{Issuer: access.Issuer, Subject: "owner-a"}
+	intent, _, err := store.CreateIntent(context.Background(), access, "synthetic-transition-failure", syntheticDraftSubmission())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.drafts.db.Exec(`CREATE FUNCTION public.reject_intent_accept() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.state='accepted' THEN RAISE EXCEPTION 'synthetic transition failure'; END IF; RETURN NEW; END $$;
+CREATE TRIGGER reject_intent_accept BEFORE UPDATE ON public.draft_send_intents FOR EACH ROW EXECUTE FUNCTION public.reject_intent_accept()`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DecideIntent(context.Background(), owner, intent.ID, intent.Revision, intent.ContentHash, true, access); !errors.Is(err, ErrDraftUnavailable) {
+		t.Fatalf("approval transition failure = %v", err)
+	}
+	final, err := store.GetIntent(context.Background(), owner, intent.ID)
+	if err != nil || final.State != "pending" {
+		t.Fatalf("intent after rollback = %q, %v", final.State, err)
+	}
+	var submissions int
+	if err = store.drafts.db.QueryRow(`SELECT count(*) FROM public.draft_ingest_submissions WHERE owner_issuer=$1 AND owner_subject=$2`, owner.Issuer, owner.Subject).Scan(&submissions); err != nil {
+		t.Fatal(err)
+	}
+	if submissions != 0 {
+		t.Fatalf("hosted drafts committed despite failed intent transition: %d", submissions)
+	}
+}

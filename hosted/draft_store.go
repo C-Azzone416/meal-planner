@@ -163,8 +163,27 @@ func draftRetainedCharge(a DraftAccess, owner RecipeOwner, key string, request, 
 	return int64(len(request)+len(response)+len(key)+len(a.Environment)+len(owner.Issuer)+len(owner.Subject)+2*sha256.Size) + draftRowReserveBytes
 }
 func (s *PostgresDraftStore) Submit(ctx context.Context, a DraftAccess, key string, in DraftSubmission) (DraftResponse, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return DraftResponse{}, false, ErrDraftUnavailable
+	}
+	defer tx.Rollback()
+	response, replay, err := s.submitTx(ctx, tx, a, key, in)
+	if err != nil {
+		return DraftResponse{}, false, err
+	}
+	if tx.Commit() != nil {
+		return DraftResponse{}, false, ErrDraftUnavailable
+	}
+	return response, replay, nil
+}
+
+// submitTx performs a complete retry-safe submission inside the caller's
+// transaction. It never commits. The consent workflow uses this so the hosted
+// draft/receipt and the intent's accepted state have one commit boundary.
+func (s *PostgresDraftStore) submitTx(ctx context.Context, tx *sql.Tx, a DraftAccess, key string, in DraftSubmission) (DraftResponse, bool, error) {
 	var zero DraftResponse
-	if !validDraftAccess(a) {
+	if tx == nil || !validDraftAccess(a) {
 		return zero, false, ErrDraftUnauthorized
 	}
 	if len(key) == 0 || len(key) > 200 || in.ContentSchemaVersion != 1 || !draft.Validate(in.Content).StructurallyValid {
@@ -175,11 +194,6 @@ func (s *PostgresDraftStore) Submit(ctx context.Context, a DraftAccess, key stri
 		return zero, false, ErrDraftUnavailable
 	}
 	hash := sha256.Sum256(body)
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return zero, false, ErrDraftUnavailable
-	}
-	defer tx.Rollback()
 	if _, err = tx.ExecContext(ctx, `SET LOCAL statement_timeout='8s'; SET LOCAL lock_timeout='3s'`); err != nil {
 		return zero, false, ErrDraftUnavailable
 	}
@@ -226,9 +240,6 @@ func (s *PostgresDraftStore) Submit(ctx context.Context, a DraftAccess, key stri
 		if json.Unmarshal(receipt, &zero) != nil {
 			return DraftResponse{}, false, ErrDraftUnavailable
 		}
-		if tx.Commit() != nil {
-			return DraftResponse{}, false, ErrDraftUnavailable
-		}
 		return zero, true, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -269,9 +280,6 @@ func (s *PostgresDraftStore) Submit(ctx context.Context, a DraftAccess, key stri
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO public.draft_ingest_submissions (environment,owner_issuer,owner_subject,operation_key,request_hash,originating_grant_hash,request,response,retained_bytes,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, a.Environment, g.Owner.Issuer, g.Owner.Subject, key, hash[:], a.TokenHash[:], string(body), string(encoded), charge, now)
 	if err != nil {
-		return zero, false, ErrDraftUnavailable
-	}
-	if tx.Commit() != nil {
 		return zero, false, ErrDraftUnavailable
 	}
 	return response, false, nil
