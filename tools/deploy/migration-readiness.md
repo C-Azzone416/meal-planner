@@ -26,6 +26,10 @@ roles, connect to a live database, or authorize a deployment.
    the union required by the one shared `MEAL_DRAFTS_DATABASE_URL`. This is a
    reviewed policy candidate and disposable rehearsal, not evidence that any
    migration or grant was applied to Preview.
+   It is least-privilege for the combined draft service, not for each endpoint or
+   owner: the role can read all active draft tables, bind pairing owners, insert
+   grants and revoke grants. The readiness snapshot proves the reviewed SQL
+   privilege shape; it does not turn application owner predicates into RLS.
 2. The independently reviewed plan binds exact source SHA, Vercel project ID,
    Neon branch ID, inventory hash, schema-policy hash, Preview target, and actual
    deployed feature flags. Recipes are always required. Disabled feedback or

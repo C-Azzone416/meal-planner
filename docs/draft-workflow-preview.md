@@ -111,8 +111,21 @@ draft runtime role used by `MEAL_DRAFTS_DATABASE_URL`. It applies migrations
 approval, hosted review and the draft side of recipe save under exact
 column-level grants, and includes all seven draft relations in the immutable
 readiness snapshot. The role cannot read the legacy grant table or recipe/auth/
-unrelated tables, mutate owner or token fields, delete or truncate draft state,
-or create schemas/tables. Recipe storage remains a separate connection and role.
+unrelated tables, update immutable owner/token fields in stored grants, intents
+or submissions, delete or truncate draft state, or create schemas/tables. Recipe
+storage remains a separate connection and role.
+
+This shared role is least-privilege for the complete draft service, not an
+endpoint or tenant-isolation boundary. It can read every owner's rows in the six
+active draft tables; pairing approval can bind owner fields; redemption can
+insert send grants; and the connection-management path can revoke any grant at
+the SQL privilege layer. Application bearer/origin checks and owner predicates
+enforce the intended routes, and the integration tests exercise cross-owner
+isolation, but there is no RLS or separate endpoint role. A compromised runtime
+credential therefore has this whole-service scope. Before live Preview, Caroline
+must explicitly choose either to accept that residual for synthetic Preview data
+or require separate DSNs/roles, RLS, or narrowly owned procedures. No choice is
+made by this rehearsal, and the gate stays closed.
 
 The same rehearsal forces recipe creation to commit and the subsequent draft
 link update to fail. It verifies one recipe and one create receipt exist while
@@ -124,14 +137,23 @@ distributed transaction or live Preview proof.
 The unauthenticated pairing store calls now receive a ten-second application
 deadline, inside the proposed fifteen-second function execution ceiling. Every
 pairing body remains limited to 8 KiB and every transactional store operation
-keeps its eight-second statement and three-second lock timeouts. These source
-limits do not replace an edge throttle or establish an upload deadline.
+keeps a three-second lock timeout. Pairing, intent creation and hosted-draft
+insertion use an eight-second statement timeout; the atomic browser decision
+uses twelve seconds. These source limits do not replace an edge throttle or
+establish an upload deadline.
 
-Before activation, the stable Preview hostname still needs two exact-path,
-POST-only edge rate rules for `/api/draft-pairings`: a burst limit of 3 requests
-per source IP per minute and a sustained limit of 10 per source IP per hour,
-both returning 429 before function invocation. Do not trust a client-supplied
-forwarding header as the key, add a bypass, or scope either rule to Production.
+Before activation, the stable Preview hostname still needs three exact-path,
+POST-only edge rate rules. `/api/draft-pairings` needs a burst limit of 3
+requests per source IP per minute and a sustained limit of 10 per source IP per
+hour. `/api/draft-pairings/poll` needs 150 requests per source IP per 15 minutes,
+which covers one legitimate five-second poller for a full ten-minute pairing
+window with bounded retry headroom. Every rule returns 429 before function
+invocation. The poll store's five-second slowdown applies only after an existing
+row is found, so it is not an abuse control for random credentials. Do not trust
+a client-supplied forwarding header as the key, add a bypass, or scope any rule
+to Production. These IP rules are not a global distributed-abuse cap and can
+throttle multiple legitimate clients behind one shared address; test the intended
+single-client Preview flow before exposure.
 The proposed Go function `maxDuration` is 15 seconds, leaving time beyond the
 ten-second store deadline for a bounded response. Current Vercel documentation
 states a 4.5 MB function payload ceiling, far above the application limit, and

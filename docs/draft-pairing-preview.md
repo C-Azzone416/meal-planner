@@ -69,9 +69,17 @@ grant. Cross-owner and absent grant IDs have the same 404 behavior.
   startup never applies it. A synthetic PostgreSQL 18 rehearsal now covers the
   exact shared draft runtime role across migrations 004/005/006; no live role or
   grant exists. A retention job remains a separate reviewed hookup. The
-  unauthenticated create route additionally requires the exact Preview-only edge
-  throttle and function deadline described in `draft-workflow-preview.md` before
-  enablement; the database caps are not a global denial-of-service control.
+  unauthenticated create and poll routes additionally require the exact
+  Preview-only edge throttles and function deadline described in
+  `draft-workflow-preview.md` before enablement. Poll slowdown protects only a
+  found pairing row; random misses still reach the database without the edge
+  rule. The database caps are not a global denial-of-service control.
+- The one shared draft runtime role can bind pairing owners, insert grants and
+  revoke grants for any owner at the SQL privilege layer. Owner isolation is
+  enforced by the reviewed application predicates, not RLS or endpoint-specific
+  roles. Live Preview therefore requires Caroline's explicit decision to accept
+  that whole-service credential scope for synthetic data or require a split-role,
+  RLS, or narrow-procedure design first.
 - A bounded ad-hoc Mac canary showed that its exact observer returned no
   credential after the owner chose Deny. That is user-mediated evidence for two
   test executables, not distribution-package signing/ACL acceptance, universal
