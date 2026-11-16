@@ -46,13 +46,18 @@ or grant. Account changes and content revisions create independent operations.
 
 `mcpadapter.WithDraftSender` is the only source gate. The shipped command does
 not call it, so it continues to advertise exactly the existing six local tools.
-The only repository credential implementations are a fail-closed default and an
-in-memory test fake. There is intentionally no plaintext fallback.
+The repository now also contains an unwired native macOS adapter implemented
+directly with Security.framework. Its storage seam is injectable and all
+automated tests use a synthetic in-memory backend; no test reads or writes the
+real Keychain. Darwin builds with cgo disabled, and all non-macOS builds, fail
+closed. There is intentionally no plaintext fallback. See
+[`macos-keychain-adapter.md`](macos-keychain-adapter.md).
 
 Before enabling the option, an owner must separately approve and verify:
 
-- a native macOS Keychain adapter that never shells out or places a secret in
-  argv/env, plus signed-binary ACL behavior under a shell-capable agent;
+- real-machine proof that the native macOS Keychain adapter never exposes a
+  secret through argv/env/process tracing, plus signed-binary ACL behavior
+  under a shell-capable agent;
 - the exact Preview pairing and send-intent endpoints and their feature flags;
 - the browser intent approval page and membership/grant-revocation behavior;
 - packaging identity and code-signing continuity for Keychain access.

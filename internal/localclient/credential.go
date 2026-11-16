@@ -15,7 +15,17 @@ var bindingIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
 func safeBindingID(value string) bool { return bindingIDPattern.MatchString(value) }
 
 func credentialKey(p Profile) CredentialKey {
-	return CredentialKey{Environment: p.Environment, APIOrigin: p.APIOrigin, BindingID: p.BindingID}
+	return CredentialKey{
+		Environment: p.Environment,
+		APIOrigin:   p.APIOrigin,
+		WebOrigin:   p.WebOrigin,
+		BindingID:   p.BindingID,
+	}
+}
+
+func (key CredentialKey) valid() bool {
+	return key.Environment == PreviewEnvironment && key.APIOrigin == PreviewOrigin &&
+		key.WebOrigin == PreviewOrigin && safeBindingID(key.BindingID)
 }
 
 // Credential is an opaque send grant. Every generic representation is
@@ -60,6 +70,9 @@ func (s *MemoryCredentialStore) Get(ctx context.Context, key CredentialKey) (Cre
 	if err := ctx.Err(); err != nil {
 		return Credential{}, err
 	}
+	if !key.valid() {
+		return Credential{}, ErrCredentialMissing
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	value, ok := s.items[key]
@@ -73,11 +86,13 @@ func (s *MemoryCredentialStore) Put(ctx context.Context, key CredentialKey, valu
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !value.valid() {
+	if !key.valid() || !value.valid() {
 		return ErrUnavailable
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previous := s.items[key]
+	previous.clear()
 	s.items[key] = value.clone()
 	return nil
 }
@@ -85,6 +100,9 @@ func (s *MemoryCredentialStore) Put(ctx context.Context, key CredentialKey, valu
 func (s *MemoryCredentialStore) Delete(ctx context.Context, key CredentialKey) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if !key.valid() {
+		return ErrUnavailable
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
