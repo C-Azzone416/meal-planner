@@ -27,6 +27,7 @@ import {
   CookPage,
   DraftsPage,
   HouseRulesPage,
+  HostedDraftsPage,
   PrepPage,
   RecipeDetailPage,
   RecipeFormPage,
@@ -156,6 +157,7 @@ export function AppRoutes({ plannerStorage }: { plannerStorage?: StorageLike | n
           <Route path="/prep" element={<PrepPage />} />
           <Route path="/shopping" element={<ShoppingPage />} />
           <Route path="/drafts" element={<DraftsPage />} />
+          <Route path="/incoming-drafts" element={<HostedDraftsPage />} />
           <Route path="/cook" element={<CookPage />} />
           <Route path="/house-rules" element={<HouseRulesPage />} />
         </Route>

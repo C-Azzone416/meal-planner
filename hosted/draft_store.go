@@ -74,7 +74,14 @@ func readDraftGrant(row recipeScanner) (draftGrant, error) {
 	return g, nil
 }
 func draftGrantAllowed(g draftGrant, a DraftAccess, now time.Time) bool {
-	if g.Environment != a.Environment || g.Owner.Issuer != a.Issuer || !validRecipeOwner(g.Owner) || g.Scope != "draft:create" || g.RevokedAt.Valid || g.CreatedAt.After(now) || !g.ExpiresAt.After(g.CreatedAt) || g.ExpiresAt.Sub(g.CreatedAt) > 7*24*time.Hour || !g.ExpiresAt.After(now) {
+	requiredScope := a.RequiredScope
+	if requiredScope == "" {
+		requiredScope = "draft:create"
+	}
+	if requiredScope != "draft:create" && requiredScope != "draft:propose" {
+		return false
+	}
+	if g.Environment != a.Environment || g.Owner.Issuer != a.Issuer || !validRecipeOwner(g.Owner) || g.Scope != requiredScope || g.RevokedAt.Valid || g.CreatedAt.After(now) || !g.ExpiresAt.After(g.CreatedAt) || g.ExpiresAt.Sub(g.CreatedAt) > 7*24*time.Hour || !g.ExpiresAt.After(now) {
 		return false
 	}
 	for _, email := range a.AllowedEmails {
