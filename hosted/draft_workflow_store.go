@@ -250,9 +250,9 @@ func (s *PostgresDraftWorkflowStore) DecideIntent(ctx context.Context, o RecipeO
 	if _, err = tx.ExecContext(ctx, `SET LOCAL statement_timeout='12s'; SET LOCAL lock_timeout='3s'`); err != nil {
 		return DraftIntent{}, ErrDraftUnavailable
 	}
-	// Lock the intent through the complete decision. The hosted submission uses
-	// its own retry-safe transaction, but a concurrent deny cannot become final
-	// between that submission and this intent transition.
+	// Lock the intent through the complete decision. The hosted submission and
+	// the intent transition share this transaction, so concurrent decisions see
+	// one atomic outcome.
 	i, err := scanIntent(tx.QueryRowContext(ctx, intentSelect+` WHERE id=$1 AND owner_issuer=$2 AND owner_subject=$3 FOR UPDATE`, id, o.Issuer, o.Subject), true)
 	if err != nil {
 		return i, err
