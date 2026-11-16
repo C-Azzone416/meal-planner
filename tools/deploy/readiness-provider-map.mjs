@@ -22,6 +22,9 @@ export function validateProviderMap(map){
 }
 export function parseProviderMap(raw){
  assert.equal(typeof raw,'string');assert.ok(raw.length>0&&Buffer.byteLength(raw)<=8192)
+ // Every allowed key and value is restricted to unescaped ASCII below. Reject
+ // escapes before parsing so an escaped duplicate cannot override a visible key.
+ assert.ok(!raw.includes('\\'),'Escaped provider-map tokens are not allowed')
  const map=JSON.parse(raw);validateProviderMap(map)
  // Strict duplicate-key detection without requiring operator key ordering.
  const keys=map.draft?syntheticDraftKeys:closedKeys

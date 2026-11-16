@@ -22,5 +22,10 @@ for(const [name,bad] of [
 test('duplicate and escaped map keys rejected',()=>{
  const raw=JSON.stringify(map());assert.throws(()=>parseProviderMap(raw.replace('"version":1','"version":1,"version":1')))
  assert.throws(()=>parseProviderMap(raw.replace('version','vers\\u0069on')))
+ for(const duplicate of ['"draft":false,"dra\\u0066t":false','"dra\\u0066t":false,"draft":false']){
+  assert.throws(()=>parseProviderMap(raw.replace('"draft":false',duplicate)))
+ }
+ const draftRaw=JSON.stringify(draftMap())
+ assert.throws(()=>parseProviderMap(draftRaw.replace('"draft":true','"draft":false,"dra\\u0066t":true')))
 })
 test('actual server major cannot be asserted by connection identity',()=>assert.throws(()=>assertServerMajor('170005',map())))
