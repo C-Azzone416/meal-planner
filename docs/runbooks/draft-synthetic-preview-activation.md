@@ -16,21 +16,50 @@ roles/DSNs, RLS, or narrow owned procedures and a new security review.
 
 ## Pre-activation prerequisites
 
-### Vercel plan and throttle decision (November 16, 2026)
+### Vercel Hobby throttle decision (November 16, 2026)
+
+Caroline chose to remain on Vercel Hobby and accepted a deliberately bounded
+availability risk for this fake-data-only trial. Hobby allows one rate-limit
+rule per project and a maximum ten-minute fixed window. Its counters are per
+region, not a global distributed request cap. This design must not be described
+as sufficient for personal recipes, an open public service, paid workloads or
+traffic whose availability matters.
+
+Use the one Hobby rule as a shared budget for both unauthenticated pairing
+entrypoints. It is Preview-environment, exact-host, POST-only, keyed by the
+provider-derived source IP, and matches only `/api/draft-pairings` and
+`/api/draft-pairings/poll`. The fixed-window limit is 150 requests per ten
+minutes, with a 429 before function invocation and no bypass. A normal client
+polling every five seconds for the full ten-minute pairing lifetime uses at
+most 120 polls plus one create, leaving 29 requests for retry and timing
+headroom. Multiple clients behind one address share that budget.
+
+The shared rule intentionally cannot give creation and polling independent
+budgets. A source can spend all 150 requests on creates, and distributed or
+multi-region traffic can exceed one regional counter. Application-side pairing
+creation therefore also fails closed, per exact Preview environment and issuer,
+at 20 active open pairings, 60 pairings created in the last hour, or 500
+retained pairing rows. Creation is serialized with a transaction advisory lock
+before counting and inserting. The bounded 429 response does not disclose which
+cap was reached. The private retention inspector reports all three cap states.
+
+These caps bound persistent fake-data growth; they do not make the service
+available under attack. An attacker able to fill a cap can deny new pairing for
+at least the ten-minute expiry window, and a full retained cap requires an
+explicit operator cleanup decision. Random well-formed poll attempts still
+perform an indexed database lookup. Existing 8 KiB bodies, strict JSON and
+field validation, ten-minute pairing expiry, five-second valid-pairing poll
+slowdown, bounded handler/database deadlines, two database connections per warm
+instance, high-entropy pairing credentials and the 15-second function ceiling
+reduce work but are not a global distributed-abuse defense. Never raise a cap
+or add a bypass reactively; keep the routes closed and investigate.
 
 The setup receipt last verified this project in a personal Hobby account on
-November 1. That is historical evidence, not proof of the current plan. A
-read-only recheck on November 16 found no local `.vercel/project.json`; the
-local Vercel CLI reported logged out, and the GitHub CLI credential was not
-usable. No credential was requested or inspected, and no provider call or
-setting change was made. The current plan therefore remains **unverified**.
-
-Vercel's current published WAF limits materially change this packet. Hobby
-allows one rate-limit rule per project and a maximum ten-minute fixed window;
-Pro allows 40 rules but the same maximum window; Enterprise allows 250 rules
-and a one-hour maximum. Counters are per region, so none of these limits is a
-global request cap. The three-rule policy below is impossible on Hobby, and its
-`10/hour` rule is impossible on Hobby or Pro. Do not approximate it silently.
+November 1. A read-only recheck on November 16 found no local
+`.vercel/project.json`; the local Vercel CLI reported logged out, and the GitHub
+CLI credential was not usable. No credential was requested or inspected, and
+no provider call or setting change was made. A fresh authenticated read-only
+observation must still prove the exact project is Hobby before publication.
 
 `tools/deploy/draft-edge-plan-adapter.mjs` is a read-only, authenticated plan
 probe for a future protected job. It verifies the exact Vercel project and
@@ -38,34 +67,15 @@ account, accepts only a full team response, emits only canonical bounded
 Hobby/Pro/Enterprise capability evidence, and never emits the token or provider
 response. Its CLI accepts the token only on standard input, never through argv,
 an environment variable or a file. It has not been run against Vercel. A fresh
-result less than 15 minutes old is required before choosing an edge policy.
+result less than 15 minutes old must confirm Hobby before publishing the chosen
+edge policy.
 
-**Recommendation if the plan is Pro:** retain `3/IP/60s` for create, replace
-`10/IP/hour` with `2/IP/10min`, and replace `150/IP/15min` for poll with
-`150/IP/10min`. This preserves a complete ten-minute pairing session at the
-documented five-second polling interval. The tradeoff is explicit: the create
-average rises from 10 to 12 per hour per region and fixed-window boundaries can
-admit adjacent bursts (still constrained by the 3/minute rule), while a
-legitimate third create from one household/NAT in a ten-minute window is
-blocked. Poll protection becomes 50% weaker by elapsed rate, although valid
-credentials remain server-throttled to one poll per five seconds and pairings
-expire after ten minutes. This is acceptable only for the one-client synthetic
-trial, not wider or persistent use.
-
-**Recommendation if the plan is Hobby:** do not activate on the current design.
-One provider rule cannot independently protect create burst, create sustained
-load and polling. Protecting only create leaves unauthenticated poll lookups as
-a database/compute exhaustion path; sharing one budget would either allow too
-many creates or break the required polling cadence. Upgrade to at least Pro or
-add a separately reviewed edge with independent counters. Enterprise may keep
-the original three-rule policy unchanged, but is not required for the bounded
-trial if Caroline explicitly accepts the Pro tradeoff.
-
-No rate-limit constants have been changed by this analysis. Caroline must first
-choose either the original Enterprise policy or the recommended Pro policy;
-that decision controls the normalized verifier and authenticated firewall
-adapter. Plan verification or a plan change does not authorize publishing
-rules, deploying, enabling a source/runtime gate, or touching Production.
+The normalized verifier now accepts exactly this one-rule Hobby policy, a Hobby
+plan observation, no bypass, no intersecting rule, no Production effect and the
+two exact function limits. A future authenticated firewall adapter remains a
+prerequisite: plan verification does not authorize publishing the rule,
+deploying, enabling a source/runtime gate, cleaning retained rows or touching
+Production.
 
 The code-only function prerequisite is now prepared: `vercel.json` assigns a
 15-second `maxDuration` to exactly the create and poll entrypoints, ahead of the
@@ -137,14 +147,15 @@ plan. Approval of one packet does not authorize the next.
 
 ### 2. Preview edge and function settings
 
-- Publish only the three exact-host, POST-only, fixed-window rules: create at
-  3/source-IP/minute and 10/source-IP/hour; poll at 150/source-IP/15 minutes.
-  Provider-derived source IP is required, with 429 before function invocation.
+- Publish one Preview-only, exact-host, POST-only fixed-window rule matching
+  only `/api/draft-pairings` and `/api/draft-pairings/poll`, at 150 requests per
+  provider-derived source IP per ten minutes. It must return 429 before function
+  invocation. Do not add a bypass or another intersecting rule.
 - Set a 15-second ceiling only for the create and poll pairing functions. Verify
   no intersecting broad rule, bypass or Production effect.
 - Retrieve the resulting state through the authenticated clean adapter and
   verify its observation less than 15 minutes before deployment.
-- Restoration: remove only these exact Preview rules/function overrides and
+- Restoration: remove only this exact Preview rule and the function overrides and
   re-observe the provider state. The function ceiling is not proof of an upload
   deadline; failure to verify request-body behavior blocks activation.
 
@@ -185,7 +196,7 @@ plan. Approval of one packet does not authorize the next.
   accepted SHA whose pairing, workflow and ingest source gates are all `false`.
   Verify the deployed SHA, all three closed source gates, disabled route behavior
   and absent runtime configuration through authenticated evidence.
-- Remove the three exact Preview edge rules and the two pairing function-duration
+- Remove the one exact Preview edge rule and the two pairing function-duration
   overrides. Obtain a fresh authenticated provider observation proving their
   absence and no Production effect.
 - While the inspector still has LOGIN, rerun the closed runtime and catalog
@@ -217,7 +228,7 @@ plan. Approval of one packet does not authorize the next.
 6. The grant is revoked; the Keychain trial item is deleted; and no persistent
    MCP registration remains. The exact previously accepted closed-source SHA is
    restored with all three source gates false. Every Preview `MEAL_DRAFT_*`
-   setting and the draft DSN Secret are removed; the three edge rules and two
+   setting and the draft DSN Secret are removed; the one edge rule and two
    function overrides are absent with no Production effect; and both
    draft-specific database logins are disabled/rotated. Authenticated source,
    runtime, edge and catalog observations plus the final private aggregate are

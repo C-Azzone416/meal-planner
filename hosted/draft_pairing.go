@@ -42,6 +42,7 @@ var (
 	ErrDraftPairingPending  = errors.New("draft pairing is pending")
 	ErrDraftPairingSlowDown = errors.New("draft pairing polling is too frequent")
 	ErrDraftPairingGone     = errors.New("draft pairing is no longer redeemable")
+	ErrDraftPairingLimit    = errors.New("draft pairing capacity reached")
 	ErrDraftGrantLimit      = errors.New("draft grant limit reached")
 )
 
@@ -247,6 +248,10 @@ func DraftPairingCreateHandler(repo DraftPairingRepository, c DraftPairingConfig
 		ctx, cancel := pairingStoreContext(r)
 		defer cancel()
 		result, err := repo.CreatePairing(ctx, c, DraftPairingCreateRequest{CodeChallenge: challenge, CodeChallengeMethod: method, ClientLabel: label})
+		if errors.Is(err, ErrDraftPairingLimit) {
+			recipeError(w, 429, "pairing_limit", "Pairing capacity is temporarily full. Try again later.")
+			return
+		}
 		if err != nil {
 			recipeError(w, 503, "unavailable", "Pairing is unavailable.")
 			return

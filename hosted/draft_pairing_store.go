@@ -16,6 +16,9 @@ import (
 const (
 	pairingLifetime        = 10 * time.Minute
 	grantLifetime          = 7 * 24 * time.Hour
+	maxActiveDraftPairings = 20
+	maxHourlyDraftPairings = 60
+	maxRetainedPairings    = 500
 	maxActiveDraftGrants   = 5
 	maxRetainedDraftGrants = 50
 )
@@ -28,6 +31,18 @@ func draftGrantOwnerLockKey(environment, issuer, subject string) (string, error)
 		return "", err
 	}
 	return string(namespace), nil
+}
+
+func draftPairingCreateLockKey(environment, issuer string) (string, error) {
+	namespace, err := json.Marshal([]string{"draft-pairing-create", environment, issuer})
+	if err != nil {
+		return "", err
+	}
+	return string(namespace), nil
+}
+
+func draftPairingCapacityAvailable(active, hourly, retained int) bool {
+	return active < maxActiveDraftPairings && hourly < maxHourlyDraftPairings && retained < maxRetainedPairings
 }
 
 func OpenDraftPairingStore(_ context.Context, raw string) (*PostgresDraftPairingStore, error) {
@@ -80,6 +95,10 @@ func (s *PostgresDraftPairingStore) CreatePairing(ctx context.Context, c DraftPa
 	if !validPairingConfig(c) || in.CodeChallengeMethod != "S256" || !pairingChallengePattern.MatchString(in.CodeChallenge) || !validClientLabel(in.ClientLabel) {
 		return DraftPairingCreated{}, ErrDraftPairingInvalid
 	}
+	lockKey, err := draftPairingCreateLockKey(c.Environment, c.Issuer)
+	if err != nil {
+		return DraftPairingCreated{}, ErrDraftUnavailable
+	}
 	for attempt := 0; attempt < 3; attempt++ {
 		id, err := newRecipeUUID()
 		if err != nil {
@@ -94,14 +113,43 @@ func (s *PostgresDraftPairingStore) CreatePairing(ctx context.Context, c DraftPa
 			return DraftPairingCreated{}, ErrDraftUnavailable
 		}
 		h := sha256.Sum256([]byte(poll))
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return DraftPairingCreated{}, ErrDraftUnavailable
+		}
+		if _, err = tx.ExecContext(ctx, `SET LOCAL statement_timeout='8s'; SET LOCAL lock_timeout='3s'`); err != nil {
+			_ = tx.Rollback()
+			return DraftPairingCreated{}, ErrDraftUnavailable
+		}
+		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
+			_ = tx.Rollback()
+			return DraftPairingCreated{}, ErrDraftUnavailable
+		}
+		var active, hourly, retained int
+		err = tx.QueryRowContext(ctx, `WITH instant AS (SELECT clock_timestamp() AS now)
+ SELECT count(*) FILTER (WHERE status IN ('pending','approved') AND expires_at>instant.now),
+        count(*) FILTER (WHERE created_at>instant.now-interval '1 hour'),count(*)
+ FROM public.draft_pairings CROSS JOIN instant WHERE environment=$1 AND issuer=$2`, c.Environment, c.Issuer).Scan(&active, &hourly, &retained)
+		if err != nil {
+			_ = tx.Rollback()
+			return DraftPairingCreated{}, ErrDraftUnavailable
+		}
+		if !draftPairingCapacityAvailable(active, hourly, retained) {
+			_ = tx.Rollback()
+			return DraftPairingCreated{}, ErrDraftPairingLimit
+		}
 		var now time.Time
-		err = s.db.QueryRowContext(ctx, `WITH instant AS (SELECT clock_timestamp() AS now)
+		err = tx.QueryRowContext(ctx, `WITH instant AS (SELECT clock_timestamp() AS now)
  INSERT INTO public.draft_pairings
  (id,environment,issuer,user_code,poll_token_hash,code_challenge,challenge_fingerprint,client_label,status,created_at,expires_at)
  SELECT $1,$2,$3,$4,$5,$6,$7,$8,'pending',now,now+interval '10 minutes' FROM instant
  RETURNING created_at`, id, c.Environment, c.Issuer, code, h[:], in.CodeChallenge, challengeFingerprint(in.CodeChallenge), in.ClientLabel).Scan(&now)
 		if err != nil {
+			_ = tx.Rollback()
 			continue
+		}
+		if err = tx.Commit(); err != nil {
+			return DraftPairingCreated{}, ErrDraftUnavailable
 		}
 		return DraftPairingCreated{PairingID: id, PollToken: poll, UserCode: code, VerificationURI: c.WebOrigin + "/connect", ExpiresIn: int(pairingLifetime / time.Second), Interval: 5, ChallengeFingerprint: challengeFingerprint(in.CodeChallenge)}, nil
 	}

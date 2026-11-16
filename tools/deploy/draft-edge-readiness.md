@@ -6,14 +6,15 @@ deployment, or open either draft feature gate.
 
 The adapter must independently authenticate the exact Vercel project, reviewed
 source SHA, Preview target and stable hostname. It must return every firewall
-rule intersecting either unauthenticated path, not merely the expected rules.
+rule intersecting either unauthenticated path, every bypass, and the project
+plan, not merely the expected rule.
 `verifyDraftEdgeObservation` accepts only:
 
-- exact-host, POST-only create rules at 3/source-IP/minute and
-  10/source-IP/hour;
-- an exact-host, POST-only poll rule at 150/source-IP/15 minutes;
+- the Hobby plan and its one shared Preview-environment, exact-host, POST-only
+  rule matching exactly the create and poll paths;
+- 150 requests per provider-derived source IP per ten-minute fixed window;
 - fixed-window, provider-derived source-IP keys and 429 before invocation;
-- no other intersecting rule or Production effect;
+- no bypass, other intersecting rule or Production effect;
 - 15-second maximum duration for only the create and poll Go functions; and
 - evidence observed less than 15 minutes ago and bound to the approved source.
 
@@ -23,11 +24,15 @@ owner-approved authenticated channel and attribute the resulting digest through
 the clean readiness handoff. Reinspect after any firewall, function, project,
 hostname or deployment change.
 
-These rules bound one source address, not distributed abuse. The poll budget is
-for one five-second poller during one ten-minute pairing window; shared-address
-clients can throttle each other. The 15-second function limit is an execution
-ceiling, not proof of a request-upload deadline. Preview acceptance must exercise
-429 behavior and the intended client; Production remains out of scope.
+The rule bounds one source address per provider region, not distributed abuse.
+One five-second poller consumes at most 120 of 150 requests during the
+ten-minute pairing lifetime, plus one creation request. The application also
+fails closed at 20 active, 60 hourly or 500 retained pairing rows per Preview
+environment and issuer, accepting that cap exhaustion denies availability.
+Shared-address clients can throttle each other. The 15-second function limit is
+an execution ceiling, not proof of a request-upload deadline. Preview acceptance
+must exercise 429 behavior and the intended client; Production remains out of
+scope.
 
 Verification:
 

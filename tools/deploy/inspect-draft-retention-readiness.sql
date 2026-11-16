@@ -13,8 +13,13 @@ pairing_stats AS (
   count(*) FILTER (WHERE status='approved') AS approved,
   count(*) FILTER (WHERE status='denied') AS denied,
   count(*) FILTER (WHERE status='consumed') AS consumed,
+  count(*) FILTER (WHERE status IN ('pending','approved') AND expires_at>instant.now) AS active_open,
+  count(*) FILTER (WHERE created_at>instant.now-interval '1 hour') AS created_last_hour,
   count(*) FILTER (WHERE status IN ('pending','approved') AND expires_at<=instant.now) AS expired_open,
-  count(*) FILTER (WHERE status IN ('denied','consumed') AND user_code IS NOT NULL) AS terminal_codes
+  count(*) FILTER (WHERE status IN ('denied','consumed') AND user_code IS NOT NULL) AS terminal_codes,
+  (SELECT count(*) FROM (SELECT 1 FROM public.draft_pairings CROSS JOIN instant cap_instant WHERE status IN ('pending','approved') AND expires_at>cap_instant.now GROUP BY environment,issuer HAVING count(*)>=20) scopes) AS scopes_at_active_cap,
+  (SELECT count(*) FROM (SELECT 1 FROM public.draft_pairings CROSS JOIN instant cap_instant WHERE created_at>cap_instant.now-interval '1 hour' GROUP BY environment,issuer HAVING count(*)>=60) scopes) AS scopes_at_hourly_cap,
+  (SELECT count(*) FROM (SELECT 1 FROM public.draft_pairings GROUP BY environment,issuer HAVING count(*)>=500) scopes) AS scopes_at_retained_cap
  FROM public.draft_pairings CROSS JOIN instant
 ), grant_stats AS (
  SELECT count(*) AS total,

@@ -152,18 +152,29 @@ context, so any future caller must supply a bounded context before activation.
 These source limits do not replace an edge throttle or establish an upload
 deadline.
 
-Before activation, the stable Preview hostname still needs three exact-path,
-POST-only edge rate rules. `/api/draft-pairings` needs a burst limit of 3
-requests per source IP per minute and a sustained limit of 10 per source IP per
-hour. `/api/draft-pairings/poll` needs 150 requests per source IP per 15 minutes,
-which covers one legitimate five-second poller for a full ten-minute pairing
-window with bounded retry headroom. Every rule returns 429 before function
-invocation. The poll store's five-second slowdown applies only after an existing
-row is found, so it is not an abuse control for random credentials. Do not trust
-a client-supplied forwarding header as the key, add a bypass, or scope any rule
-to Production. These IP rules are not a global distributed-abuse cap and can
-throttle multiple legitimate clients behind one shared address; test the intended
-single-client Preview flow before exposure.
+Before activation, the stable Preview hostname needs the one rate-limit rule
+available on Vercel Hobby. The shared rule is Preview-only, exact-host,
+POST-only, matches exactly `/api/draft-pairings` and
+`/api/draft-pairings/poll`, and permits 150 requests per provider-derived source
+IP per ten-minute fixed window before returning 429 ahead of function
+invocation. A legitimate client polling every five seconds for the complete
+ten-minute pairing lifetime uses at most 120 polls plus one create, leaving 29
+requests of retry and timing headroom. Do not trust a client forwarding header,
+add a bypass, broaden either path or scope the rule to Production.
+
+One shared rule cannot independently constrain creates and polls. The pairing
+store therefore serializes creation per exact environment and issuer and fails
+closed before inserting when there are 20 active open pairings, 60 created in
+the last hour or 500 retained pairing rows. The response is a bounded 429. This
+bounds persistent fake-data growth but accepts an availability tradeoff: an
+attacker can fill a cap and block legitimate pairing until expiry or explicit
+operator cleanup. Never widen a cap under pressure. The poll store's five-second
+slowdown applies only after an existing row is found, so random well-formed
+credentials still cause an indexed database lookup. Vercel counters are per
+region rather than a global distributed-abuse cap, and multiple clients behind
+one shared address consume the same budget. This design is limited to Caroline's
+short, synthetic-only Hobby trial and is not sufficient for personal recipes,
+broader membership or durable public availability.
 The proposed Go function `maxDuration` is 15 seconds, leaving time beyond the
 ten-second store deadline for a bounded response. Current Vercel documentation
 states a 4.5 MB function payload ceiling, far above the application limit, and

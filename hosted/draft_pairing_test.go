@@ -14,6 +14,7 @@ import (
 
 type fakePairingRepo struct {
 	created     DraftPairingCreated
+	createErr   error
 	poll        DraftPairingPollResult
 	pollErr     error
 	approveErr  error
@@ -34,7 +35,7 @@ func (f *fakePairingRepo) observeDeadline(ctx context.Context) {
 func (f *fakePairingRepo) CreatePairing(ctx context.Context, _ DraftPairingConfig, in DraftPairingCreateRequest) (DraftPairingCreated, error) {
 	f.observeDeadline(ctx)
 	f.createIn = in
-	return f.created, nil
+	return f.created, f.createErr
 }
 func (f *fakePairingRepo) PollPairing(ctx context.Context, _ DraftPairingConfig, in DraftPairingPollRequest) (DraftPairingPollResult, error) {
 	f.observeDeadline(ctx)
@@ -81,6 +82,31 @@ func TestDraftGrantOwnerLockKeyIsTextSafeAndUnambiguous(t *testing.T) {
 			t.Fatalf("ambiguous lock key %q", key)
 		}
 		keys[key] = true
+	}
+}
+
+func TestDraftPairingCreateLockKeyAndCapacityAreFailClosed(t *testing.T) {
+	a, err := draftPairingCreateLockKey("preview", "ab:c")
+	if err != nil || !json.Valid([]byte(a)) || strings.ContainsRune(a, '\x00') {
+		t.Fatalf("unsafe lock key %q: %v", a, err)
+	}
+	b, err := draftPairingCreateLockKey("preview:ab", "c")
+	if err != nil || a == b {
+		t.Fatalf("ambiguous lock keys %q %q: %v", a, b, err)
+	}
+	for _, tc := range []struct {
+		active, hourly, retained int
+		want                     bool
+	}{
+		{0, 0, 0, true},
+		{maxActiveDraftPairings - 1, maxHourlyDraftPairings - 1, maxRetainedPairings - 1, true},
+		{maxActiveDraftPairings, 0, 0, false},
+		{0, maxHourlyDraftPairings, 0, false},
+		{0, 0, maxRetainedPairings, false},
+	} {
+		if got := draftPairingCapacityAvailable(tc.active, tc.hourly, tc.retained); got != tc.want {
+			t.Fatalf("capacity(%d,%d,%d)=%v want %v", tc.active, tc.hourly, tc.retained, got, tc.want)
+		}
 	}
 }
 
@@ -160,6 +186,17 @@ func TestPairingCreateRejectsAliasDuplicateAndBrowserCrossOrigin(t *testing.T) {
 				t.Fatalf("got %d", w.Code)
 			}
 		})
+	}
+}
+
+func TestPairingCreateCapacityReturnsBounded429(t *testing.T) {
+	_, challenge := testVerifier()
+	repo := &fakePairingRepo{createErr: ErrDraftPairingLimit}
+	body := `{"code_challenge":"` + challenge + `","code_challenge_method":"S256","client_label":"Synthetic Mac"}`
+	w := httptest.NewRecorder()
+	DraftPairingCreateHandler(repo, testPairingConfig()).ServeHTTP(w, jsonRequest("POST", "/api/draft-pairings", body))
+	if w.Code != 429 || !strings.Contains(w.Body.String(), `"code":"pairing_limit"`) || strings.Contains(w.Body.String(), "20") || strings.Contains(w.Body.String(), "500") {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
 }
 

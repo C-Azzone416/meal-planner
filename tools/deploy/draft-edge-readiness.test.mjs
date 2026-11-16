@@ -4,8 +4,8 @@ import fs from 'node:fs'
 import {draftEdgeRules,draftFunctionLimits,inspectDraftFunctionConfig,verifyDraftEdgeObservation} from './draft-edge-readiness.mjs'
 
 const now=1800000000000
-const approved={projectId:'prj_test',sourceSha:'a'.repeat(40)}
-const fixture=()=>({version:1,target:'preview',projectId:approved.projectId,sourceSha:approved.sourceSha,hostname:'athome-meals-dev.vercel.app',productionAffected:false,rules:structuredClone(draftEdgeRules),otherIntersectingRules:[],functions:structuredClone(draftFunctionLimits),observedAtMs:now-1})
+const approved={projectId:'prj_test',sourceSha:'a'.repeat(40),plan:'hobby'}
+const fixture=()=>({version:1,target:'preview',projectId:approved.projectId,sourceSha:approved.sourceSha,plan:'hobby',hostname:'athome-meals-dev.vercel.app',productionAffected:false,rules:structuredClone(draftEdgeRules),otherIntersectingRules:[],bypasses:[],functions:structuredClone(draftFunctionLimits),observedAtMs:now-1})
 
 test('accept exact Preview-only pairing edge observation',()=>{
  assert.match(verifyDraftEdgeObservation(fixture(),approved,now),/^[a-f0-9]{64}$/)
@@ -28,14 +28,21 @@ for(const [name,mutate] of [
  ['production target',o=>o.target='production'],
  ['wrong project',o=>o.projectId='prj_other'],
  ['wrong source',o=>o.sourceSha='b'.repeat(40)],
+ ['wrong plan',o=>o.plan='pro'],
  ['wrong hostname',o=>o.hostname='meal-planner.example.com'],
  ['Production affected',o=>o.productionAffected=true],
- ['missing create burst',o=>o.rules.shift()],
+ ['missing shared rule',o=>o.rules.shift()],
+ ['second rate rule',o=>o.rules.push(structuredClone(draftEdgeRules[0]))],
  ['extra broad rule',o=>o.otherIntersectingRules.push({path:'/api/:path*'})],
+ ['bypass',o=>o.bypasses.push({name:'trusted-source'})],
  ['client header key',o=>o.rules[0].sourceKey='x-forwarded-for'],
- ['poll path broadened',o=>o.rules[2].path='/api/:path*'],
- ['poll budget raised',o=>o.rules[2].limit=1500],
- ['poll window changed',o=>o.rules[2].windowSeconds=60],
+ ['rule hostname broadened',o=>o.rules[0].hostname='*.vercel.app'],
+ ['rule environment changed',o=>o.rules[0].environment='production'],
+ ['create path missing',o=>o.rules[0].paths.shift()],
+ ['path broadened',o=>o.rules[0].paths[1]='/api/:path*'],
+ ['extra path',o=>o.rules[0].paths.push('/api/draft-intents')],
+ ['budget raised',o=>o.rules[0].limit=1500],
+ ['window changed',o=>o.rules[0].windowSeconds=60],
  ['non-POST method',o=>o.rules[0].method='*'],
  ['non-429 action',o=>o.rules[0].action='log'],
  ['after-function throttle',o=>o.rules[0].beforeFunction=false],

@@ -8,9 +8,7 @@ const exact=(value,keys)=>{assert.ok(value&&typeof value==='object'&&!Array.isAr
 const identity=value=>{assert.equal(typeof value,'string');assert.match(value,/^[A-Za-z0-9_.-]{1,128}$/)}
 
 export const draftEdgeRules=Object.freeze([
- Object.freeze({name:'draft-pairing-create-burst',path:'/api/draft-pairings',method:'POST',sourceKey:'provider_source_ip',limit:3,windowSeconds:60,algorithm:'fixed_window',action:'rate_limit_429',beforeFunction:true}),
- Object.freeze({name:'draft-pairing-create-sustained',path:'/api/draft-pairings',method:'POST',sourceKey:'provider_source_ip',limit:10,windowSeconds:3600,algorithm:'fixed_window',action:'rate_limit_429',beforeFunction:true}),
- Object.freeze({name:'draft-pairing-poll',path:'/api/draft-pairings/poll',method:'POST',sourceKey:'provider_source_ip',limit:150,windowSeconds:900,algorithm:'fixed_window',action:'rate_limit_429',beforeFunction:true}),
+ Object.freeze({name:'draft-pairing-shared-budget',environment:'preview',hostname:'athome-meals-dev.vercel.app',paths:Object.freeze(['/api/draft-pairings','/api/draft-pairings/poll']),method:'POST',sourceKey:'provider_source_ip',limit:150,windowSeconds:600,algorithm:'fixed_window',action:'rate_limit_429',beforeFunction:true}),
 ])
 
 export const draftFunctionLimits=Object.freeze([
@@ -37,14 +35,16 @@ export function inspectDraftFunctionConfig(raw){
 }
 
 export function verifyDraftEdgeObservation(observation,approved,nowMs){
- exact(approved,['projectId','sourceSha'])
+ exact(approved,['projectId','sourceSha','plan'])
  identity(approved.projectId);assert.match(approved.sourceSha,/^[a-f0-9]{40}$/)
+ assert.equal(approved.plan,'hobby')
  assert.ok(Number.isSafeInteger(nowMs)&&nowMs>0)
- exact(observation,['version','target','projectId','sourceSha','hostname','productionAffected','rules','otherIntersectingRules','functions','observedAtMs'])
+ exact(observation,['version','target','projectId','sourceSha','plan','hostname','productionAffected','rules','otherIntersectingRules','bypasses','functions','observedAtMs'])
  assert.equal(observation.version,1);assert.equal(observation.target,'preview')
  assert.equal(observation.projectId,approved.projectId);assert.equal(observation.sourceSha,approved.sourceSha)
+ assert.equal(observation.plan,approved.plan)
  assert.equal(observation.hostname,'athome-meals-dev.vercel.app');assert.equal(observation.productionAffected,false)
- assert.deepEqual(observation.rules,draftEdgeRules);assert.deepEqual(observation.otherIntersectingRules,[])
+ assert.deepEqual(observation.rules,draftEdgeRules);assert.deepEqual(observation.otherIntersectingRules,[]);assert.deepEqual(observation.bypasses,[])
  assert.deepEqual(observation.functions,draftFunctionLimits)
  assert.ok(Number.isSafeInteger(observation.observedAtMs)&&observation.observedAtMs<=nowMs&&nowMs-observation.observedAtMs<15*60*1000,'edge observation expired/future')
  return digest(canonical(observation))
