@@ -37,6 +37,12 @@ func checkFeedbackDiagnostic(t *testing.T, err error, code string) {
 	}
 }
 func TestFeedbackDiagnosticsStaticOnly(t *testing.T) {
+	if got := (feedbackDiagnostic{fbStoreBegin, errFeedbackStorage}).Error(); got != "feedback storage unavailable" {
+		t.Fatal("safe storage error contract changed")
+	}
+	if got := (feedbackDiagnostic{fbConfigPublic, feedbackUnavailable}).Error(); got != "UNAVAILABLE" {
+		t.Fatal("safe config error contract changed")
+	}
 	for i, code := range []string{"FB_CONFIG_PROVENANCE", "FB_CONFIG_PUBLIC", "FB_CONFIG_AUTH_PROVIDER", "FB_CONFIG_KEY_RING", "FB_STORE_DSN", "FB_STORE_INPUT", "FB_STORE_BEGIN", "FB_STORE_TIMEOUTS", "FB_STORE_RANDOM", "FB_STORE_INSERT", "FB_STORE_SELECT", "FB_STORE_UPDATE", "FB_STORE_COMMIT"} {
 		checkFeedbackDiagnostic(t, feedbackDiagnostic{feedbackDiagnosticPhase(i), errors.New(diagnosticCanary)}, code)
 	}
