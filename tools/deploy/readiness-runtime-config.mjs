@@ -27,10 +27,11 @@ export function inspectRuntimeConfig(raw,{draft=false}={}){
  assert.deepEqual(selected,expected)
  assert.ok(!all.has('FRAMEBRIAR_BUILD_SHA'),'Legacy runtime SHA must be removed, not reused')
  assert.ok(!all.has('MEAL_DRAFT_INGEST_ENABLED'),'Legacy ingest must stay disabled')
- // MEAL_DRAFTS_DATABASE_URL is plural and therefore outside MEAL_DRAFT_*.
- // Check both forms so closed mode cannot silently accept the draft credential.
- const draftNames=[...all].filter(name=>name==='MEAL_DRAFTS_DATABASE_URL'||name.startsWith('MEAL_DRAFT_'))
- assert.deepEqual(draftNames.toSorted(),draft?Object.keys(expectedSyntheticDraftRuntime).filter(name=>name==='MEAL_DRAFTS_DATABASE_URL'||name.startsWith('MEAL_DRAFT_')).toSorted():[])
+ // Reserve both singular and plural draft namespaces. The database credential
+ // is plural, and future or misspelled plural settings must also fail closed.
+ const isDraftName=name=>name.startsWith('MEAL_DRAFT_')||name.startsWith('MEAL_DRAFTS_')
+ const draftNames=[...all].filter(isDraftName)
+ assert.deepEqual(draftNames.toSorted(),draft?Object.keys(expectedSyntheticDraftRuntime).filter(isDraftName).toSorted():[])
  return digest
 }
 if(process.argv[1]&&process.argv[1].endsWith('/readiness-runtime-config.mjs')){
