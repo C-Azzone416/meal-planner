@@ -29,10 +29,15 @@ must produce its own evidence, before requesting any live approval:
    target is not provider evidence.
 3. The activation runtime verifier must accept exactly Preview plus
    `MEAL_DRAFT_PAIRING_ENABLED=true`, `MEAL_DRAFT_WORKFLOW_ENABLED=true`, the
-   stable Preview origin, one bounded membership epoch, and sensitive
-   placeholders for `MEAL_DRAFTS_DATABASE_URL` and the existing recipe URL. It
-   must reject `MEAL_DRAFT_INGEST_ENABLED`, Production, any other origin, literal
-   secret values, unknown draft variables and a reused database role.
+   two exact origin settings
+   `MEAL_DRAFT_PAIRING_ORIGIN=https://athome-meals-dev.vercel.app` and
+   `MEAL_DRAFT_INGEST_ORIGIN=https://athome-meals-dev.vercel.app`, one bounded
+   `MEAL_DRAFT_MEMBERSHIP_EPOCH`, and sensitive placeholders for
+   `MEAL_DRAFTS_DATABASE_URL` and the existing `MEAL_RECIPES_DATABASE_URL`. The
+   workflow reuses the legacy-named `MEAL_DRAFT_INGEST_ORIGIN`; that setting does
+   not enable direct ingest. The verifier must reject
+   `MEAL_DRAFT_INGEST_ENABLED`, Production, any other origin, literal secret
+   values, unknown draft variables and a reused database role.
 4. The activation source change may open `draftPairingSourceEnabled` and
    `draftWorkflowSourceEnabled` only. `draftIngestSourceEnabled` and the legacy
    direct-ingest route remain closed. Runtime flags remain absent during the
@@ -60,8 +65,14 @@ plan. Approval of one packet does not authorize the next.
   or password in argv, shell history, logs, repository files or public workflow
   artifacts.
 - Keep every draft source and runtime gate closed. Run the clean catalog
-  inspection and private aggregate retention inspection; require exact policy,
-  zero integrity blockers and zero owners at retained caps.
+  inspection; its LOGIN-and-CONNECT-only identity cannot run the retention
+  query. Run `tools/deploy/inspect-draft-retention-readiness.sql` separately as
+  the migration owner in an owner-approved clean session pinned to the reviewed
+  file hash. Force `psql -X -qAt -v ON_ERROR_STOP=1`, supply `as_of` from the
+  trusted runner clock, retain no shell history or connection value, and emit
+  only the bounded aggregate. This is explicit high-impact use of the migration
+  owner, not authority for arbitrary SQL. Require zero integrity blockers and
+  zero owners at retained caps.
 - Restoration: do not drop additive tables. Keep gates closed, rotate/revoke
   issued credentials, and disable the new logins if rollback is authorized.
   Destructive schema cleanup is a separate decision.
@@ -81,11 +92,15 @@ plan. Approval of one packet does not authorize the next.
 
 ### 3. Preview secrets and inert deployment
 
-- Add Preview-only secret values for the shared draft runtime DSN and retain the
-  separate recipe DSN. Add the exact origin and a newly generated membership
-  epoch through protected configuration. Do not add any draft `*_ENABLED`
-  variable yet, and do not reuse a Production, migration-owner, catalog-inspector
-  or recipe credential.
+- Add the Preview-only `MEAL_DRAFTS_DATABASE_URL` Secret and retain the separate
+  `MEAL_RECIPES_DATABASE_URL` Secret. Add
+  `MEAL_DRAFT_PAIRING_ORIGIN=https://athome-meals-dev.vercel.app`,
+  `MEAL_DRAFT_INGEST_ORIGIN=https://athome-meals-dev.vercel.app`, and a newly
+  generated `MEAL_DRAFT_MEMBERSHIP_EPOCH` through protected configuration. The
+  legacy-named ingest origin is required by the proposal workflow; it does not
+  authorize `MEAL_DRAFT_INGEST_ENABLED`. Do not add any draft `*_ENABLED`
+  variable yet, and do not reuse a Production, migration-owner,
+  catalog-inspector or recipe credential.
 - Deploy the reviewed activation-source SHA while runtime flags remain absent.
   Confirm every draft route remains disabled and the stable alias still serves
   the accepted non-draft application.
@@ -101,8 +116,18 @@ plan. Approval of one packet does not authorize the next.
   catalog and edge observations.
 - Use only designated synthetic accounts and conspicuously synthetic recipe
   content. Do not paste personal recipes, credentials or other real data.
-- Run one bounded acceptance window, then revoke the test grant, rotate the
-  membership epoch, remove the two runtime flags and redeploy closed mode.
+- Run one bounded acceptance window. Normal teardown is mandatory: revoke the
+  test grant; remove the two runtime flags and redeploy closed mode; remove the
+  three remaining draft settings and the `MEAL_DRAFTS_DATABASE_URL` Preview
+  Secret. While the inspector still has LOGIN, rerun the closed runtime and
+  catalog observations, verify through the authenticated provider configuration
+  that no `MEAL_DRAFT_*` setting or `MEAL_DRAFTS_DATABASE_URL` Secret remains,
+  and run the private aggregate inspection once more. Then use the exact verified
+  Preview migration-owner session to disable LOGIN for the shared draft runtime
+  and catalog-inspector roles, rotate their credentials, and verify both
+  `rolcanlogin` values are false. The recipe credential is outside this trial and
+  remains unchanged. Additive tables and grants remain durable; deleting them is
+  not part of teardown.
 
 ## Required acceptance evidence
 
@@ -120,9 +145,12 @@ plan. Approval of one packet does not authorize the next.
 5. The private post-run inspection reports no integrity blocker or owner at a
    retained cap. Logs, process arguments, public artifacts and local ledgers
    contain no credential or recipe content.
-6. The grant is revoked and the gates are disabled after the window. The
-   additive schema may remain, but no active credential or runtime setting may
-   silently extend the trial.
+6. The grant is revoked, both source-served routes are runtime-disabled, every
+   Preview `MEAL_DRAFT_*` setting and the draft DSN Secret are removed, and both
+   draft-specific database logins are disabled/rotated after the window. Closed
+   runtime and catalog observations plus the final private aggregate are
+   retained as evidence. The additive schema and grants may remain, but no
+   active credential or runtime setting may silently extend the trial.
 
 Stop immediately on an unexpected owner/Keychain prompt, target ambiguity,
 Production effect, provider-evidence mismatch, role/schema drift, literal secret
