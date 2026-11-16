@@ -5,9 +5,14 @@ package hosted
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -33,6 +38,125 @@ func workflowTestStore(t *testing.T) (*PostgresDraftWorkflowStore, DraftAccess) 
 	}
 	access := DraftAccess{TokenHash: sha256.Sum256([]byte(approved.Grant)), Environment: config.Environment, Issuer: config.Issuer, AllowedEmails: []string{"owner@example.test"}, RequiredScope: "draft:propose", MembershipEpoch: config.MembershipEpoch}
 	return NewPostgresDraftWorkflowStore(NewPostgresDraftStore(recipes.db)), access
+}
+
+func addWorkflowTestOwner(t *testing.T, store *PostgresDraftWorkflowStore, config DraftPairingConfig, subject, email, verifier string) DraftAccess {
+	t.Helper()
+	pairings := &PostgresDraftPairingStore{db: store.drafts.db}
+	challenge := sha256.Sum256([]byte(verifier))
+	created, err := pairings.CreatePairing(context.Background(), config, DraftPairingCreateRequest{
+		CodeChallenge:       base64.RawURLEncoding.EncodeToString(challenge[:]),
+		CodeChallengeMethod: "S256",
+		ClientLabel:         "Synthetic isolated account",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = pairings.ApprovePairing(context.Background(), config, UserIdentity{Issuer: config.Issuer, Subject: subject, Email: email}, DraftPairingApproveRequest{UserCode: created.UserCode, ChallengeFingerprint: created.ChallengeFingerprint}); err != nil {
+		t.Fatal(err)
+	}
+	approved, err := pairings.PollPairing(context.Background(), config, DraftPairingPollRequest{PairingID: created.PairingID, PollToken: created.PollToken, CodeVerifier: verifier})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return DraftAccess{
+		TokenHash:       sha256.Sum256([]byte(approved.Grant)),
+		Environment:     config.Environment,
+		Issuer:          config.Issuer,
+		AllowedEmails:   []string{email},
+		RequiredScope:   "draft:propose",
+		MembershipEpoch: config.MembershipEpoch,
+	}
+}
+
+func TestDraftWorkflowPostgresOwnerIsolationAcrossIntentReviewAndSave(t *testing.T) {
+	store, accessA := workflowTestStore(t)
+	ctx := context.Background()
+	config := testPairingConfig()
+	ownerA := RecipeOwner{Issuer: accessA.Issuer, Subject: "owner-a"}
+	ownerB := RecipeOwner{Issuer: accessA.Issuer, Subject: "owner-b"}
+	accessB := addWorkflowTestOwner(t, store, config, ownerB.Subject, "owner-b@example.test", stringsRepeat("b", 43))
+
+	intentA, replayed, err := store.CreateIntent(ctx, accessA, "synthetic-owner-isolation", syntheticDraftSubmission())
+	if err != nil || replayed {
+		t.Fatalf("create A intent: replay=%v err=%v", replayed, err)
+	}
+	missingID := "99999999-9999-4999-8999-999999999999"
+	if _, err = store.PollIntent(ctx, accessB, intentA.ID); !errors.Is(err, ErrDraftIntentNotFound) {
+		t.Fatalf("B polled A intent: %v", err)
+	}
+	if _, err = store.PollIntent(ctx, accessB, missingID); !errors.Is(err, ErrDraftIntentNotFound) {
+		t.Fatalf("missing poll was distinguishable: %v", err)
+	}
+	if items, listErr := store.ListIntents(ctx, ownerB); listErr != nil || len(items) != 0 {
+		t.Fatalf("B listed A intent: items=%d err=%v", len(items), listErr)
+	}
+	if _, err = store.GetIntent(ctx, ownerB, intentA.ID); !errors.Is(err, ErrDraftIntentNotFound) {
+		t.Fatalf("B read A intent: %v", err)
+	}
+	if _, err = store.DecideIntent(ctx, ownerB, intentA.ID, intentA.Revision, intentA.ContentHash, true, accessB); !errors.Is(err, ErrDraftIntentNotFound) {
+		t.Fatalf("B decided A intent: %v", err)
+	}
+
+	accepted, err := store.DecideIntent(ctx, ownerA, intentA.ID, intentA.Revision, intentA.ContentHash, true, accessA)
+	if err != nil || accepted.DraftID == nil {
+		t.Fatalf("A approve: %#v %v", accepted, err)
+	}
+	draftID := *accepted.DraftID
+	draftABefore, err := store.GetHostedDraft(ctx, ownerA, draftID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if items, listErr := store.ListHostedDrafts(ctx, ownerB); listErr != nil || len(items) != 0 {
+		t.Fatalf("B listed A draft: items=%d err=%v", len(items), listErr)
+	}
+	if _, err = store.GetHostedDraft(ctx, ownerB, draftID); !errors.Is(err, ErrRecipeNotFound) {
+		t.Fatalf("B read A draft: %v", err)
+	}
+	if _, err = store.ReviewHostedDraft(ctx, ownerB, draftID, 1, 1); !errors.Is(err, ErrRecipeNotFound) {
+		t.Fatalf("B reviewed A draft: %v", err)
+	}
+	if _, err = store.MarkHostedDraftApproved(ctx, ownerB, draftID, 1, 1, "88888888-8888-4888-8888-888888888888"); !errors.Is(err, ErrRecipeNotFound) {
+		t.Fatalf("B linked A draft: %v", err)
+	}
+
+	projection, err := json.Marshal(syntheticRecipeContent())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"draft_id":                 draftID,
+		"expected_draft_revision":  1,
+		"expected_review_revision": 1,
+		"projection":               json.RawMessage(projection),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflowConfig := DraftWorkflowConfig{Enabled: true, Environment: "preview", Issuer: accessA.Issuer, Origin: draftPreviewOrigin, MembershipEpoch: accessA.MembershipEpoch, AllowedEmails: []string{"owner@example.test", "owner-b@example.test"}}
+	request := httptest.NewRequest(http.MethodPost, "/api/draft-review/drafts", strings.NewReader(string(body)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", draftPreviewOrigin)
+	request.Header.Set("Sec-Fetch-Site", "same-origin")
+	request = request.WithContext(context.WithValue(request.Context(), bearerContextKey{}, UserIdentity{Issuer: ownerB.Issuer, Subject: ownerB.Subject, Email: "owner-b@example.test"}))
+	response := httptest.NewRecorder()
+	recipes := NewPostgresRecipeStore(store.drafts.db)
+	OwnerDraftHandler(store, recipes, workflowConfig).ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"code":"not_found"`) {
+		t.Fatalf("B save response: %d %s", response.Code, response.Body.String())
+	}
+	if items, _, listErr := recipes.List(ctx, ownerB, "", 100); listErr != nil || len(items) != 0 {
+		t.Fatalf("B save created recipe: items=%d err=%v", len(items), listErr)
+	}
+	var recipeRows int
+	if err = store.drafts.db.QueryRow(`SELECT count(*) FROM meal_planner.recipes`).Scan(&recipeRows); err != nil || recipeRows != 0 {
+		t.Fatalf("B save created an orphan or cross-owner recipe: rows=%d err=%v", recipeRows, err)
+	}
+
+	draftA, err := store.GetHostedDraft(ctx, ownerA, draftID)
+	if err != nil || !reflect.DeepEqual(draftA, draftABefore) || draftA.Draft.Review.State != "not_started" || draftA.Draft.ApprovedRecipeID != nil {
+		t.Fatalf("A draft changed by B: state=%q recipe=%v err=%v", draftA.Draft.Review.State, draftA.Draft.ApprovedRecipeID, err)
+	}
 }
 
 func TestDraftWorkflowConcurrentApproveDenyIsAtomic(t *testing.T) {
