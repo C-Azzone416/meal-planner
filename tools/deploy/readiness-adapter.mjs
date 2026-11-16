@@ -31,7 +31,11 @@ export function planFor(map,baseline,sourceInventory,sourceSha){
  assert.deepEqual(Object.keys(baseline).sort(),['components','inspector','inventory','postgresMajor','version'])
  assert.equal(baseline.version,1);assert.equal(baseline.postgresMajor,map.postgresMajor)
  assert.equal(canonical(sourceInventory),canonical(baseline.inventory),'Reviewed migration bytes changed')
- assert.deepEqual(Object.keys(baseline.components).sort(),['feedback','recipes'])
+ // The reviewed baseline also binds the candidate draft policy, but this
+ // closed-gate adapter deliberately plans and inspects only enabled services.
+ // Draft activation, including its runtime-role identity, remains a separate
+ // owner decision and provider-map revision.
+ assert.deepEqual(Object.keys(baseline.components).sort(),['draft','feedback','recipes'])
  const components={}
  for(const component of ['recipes','feedback']){
   const expected=structuredClone(baseline.components[component])

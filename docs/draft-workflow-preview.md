@@ -173,6 +173,11 @@ Provider references reviewed November 16, 2026: [WAF rate limiting](https://verc
 [function duration configuration](https://vercel.com/docs/functions/configuring-functions/duration),
 and [function payload limits](https://vercel.com/docs/functions/limitations).
 
+Retention remains a decision, not an implicit cleanup policy. The read-only,
+aggregate inspection and the recommended bounded first synthetic acceptance are
+documented in [`draft-retention-preview.md`](draft-retention-preview.md). No
+destructive job or lifetime was added.
+
 ## Tomorrow's live hookup checklist
 
 1. Independently review the final exact commit and all additive SQL.

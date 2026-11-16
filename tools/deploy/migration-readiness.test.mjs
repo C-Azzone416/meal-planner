@@ -42,6 +42,7 @@ test('inventory exact, checksum bound, rejects unknown/missing/link sources',()=
 })
 test('default guard remains closed; inspector read-only and no target SQL',()=>{
  const sql=fs.readFileSync('tools/deploy/inspect-migration-readiness.sql','utf8');assert.match(sql,/BEGIN READ ONLY;/);assert.match(sql,/ROLLBACK;/);assert.doesNotMatch(sql,/^\s*(?:\\i\b|ALTER |GRANT |INSERT |UPDATE |DELETE )/m)
+ const retention=fs.readFileSync('tools/deploy/inspect-draft-retention-readiness.sql','utf8');assert.match(retention,/BEGIN READ ONLY;/);assert.match(retention,/ROLLBACK;/);assert.doesNotMatch(retention,/^\s*(?:\\i\b|ALTER |GRANT |INSERT |UPDATE |DELETE |TRUNCATE )/m)
  const guard=fs.readFileSync('tools/deploy/check-migration-readiness.sh','utf8');assert.match(guard,/do not bypass this guard/);assert.doesNotMatch(guard,/migration-readiness.mjs/)
 })
 
