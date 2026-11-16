@@ -451,3 +451,33 @@ test('Week uses two connected doors with decorative handles and the notice outsi
   expect(fridge.querySelector('.preview-notice')).toBeNull()
   expect(container.querySelector('.preview-notice')).not.toBeNull()
 })
+
+
+test('explains pin controls without changing their toggle behavior', () => {
+  renderPlanner()
+  const help = screen.getByText(/Pin prevents Surprise me from replacing this dinner/)
+  expect(help.id).toBe('pin-help')
+  const pin = screen.getByRole('button', { name: 'Pin Monday dinner', pressed: false })
+  expect(pin.getAttribute('aria-describedby')).toBe(help.id)
+  fireEvent.click(pin)
+  expect(screen.getByRole('button', { name: 'Pin Monday dinner', pressed: true })).toBeTruthy()
+  fireEvent.click(pin)
+  expect(screen.getByRole('button', { name: 'Pin Monday dinner', pressed: false })).toBeTruthy()
+})
+
+
+test('clicking a selected weekday again collapses its detail and cancels a proposal', () => {
+  renderPlanner()
+  click('Monday')
+  expect(night('Monday').getAttribute('aria-pressed')).toBe('true')
+  expect(screen.getByRole('button', { name: 'Pin dinner' })).toBeTruthy()
+  click('Surprise me')
+  expect(screen.getByRole('button', { name: 'Keep it' })).toBeTruthy()
+  click('Monday')
+  expect(night('Monday').getAttribute('aria-pressed')).toBe('false')
+  expect(screen.queryByRole('button', { name: 'Pin dinner' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Keep it' })).toBeNull()
+  expect(screen.getByText('Pick a night first')).toBeTruthy()
+  click('Wednesday')
+  expect(night('Wednesday').getAttribute('aria-pressed')).toBe('true')
+})

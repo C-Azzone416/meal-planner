@@ -370,3 +370,10 @@
     width: 12px;
   }
 }
+
+.week-pin-help {
+  margin: 10px 0 0;
+  color: #485047;
+  font-size: .875rem;
+  line-height: 1.4;
+}
