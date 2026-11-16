@@ -45,6 +45,7 @@ func (s *PostgresDraftStore) Close() error                 { return s.db.Close()
 type draftGrant struct {
 	Owner                     RecipeOwner
 	Email, Scope, Environment string
+	MembershipEpoch           string
 	CreatedAt, ExpiresAt      time.Time
 	RevokedAt                 sql.NullTime
 }
@@ -73,12 +74,46 @@ func readDraftGrant(row recipeScanner) (draftGrant, error) {
 	}
 	return g, nil
 }
+func readDraftGrantForAccess(row recipeScanner, a DraftAccess) (draftGrant, error) {
+	if a.RequiredScope != "draft:propose" {
+		return readDraftGrant(row)
+	}
+	var g draftGrant
+	err := row.Scan(&g.Owner.Issuer, &g.Owner.Subject, &g.Email, &g.Scope, &g.Environment, &g.CreatedAt, &g.ExpiresAt, &g.RevokedAt, &g.MembershipEpoch)
+	if errors.Is(err, sql.ErrNoRows) {
+		return g, ErrDraftUnauthorized
+	}
+	if err != nil {
+		return g, ErrDraftUnavailable
+	}
+	return g, nil
+}
+
+// draftGrantSelect returns one of two fixed statements. Table selection is
+// exclusively server policy; no request value is interpolated into SQL.
+func draftGrantSelect(a DraftAccess, lock bool) (string, bool) {
+	suffix := ""
+	if lock {
+		suffix = " FOR SHARE"
+	}
+	switch a.RequiredScope {
+	case "", "draft:create":
+		return `SELECT ` + draftGrantColumns + ` FROM public.draft_ingest_grants WHERE token_hash=$1` + suffix, true
+	case "draft:propose":
+		return `SELECT ` + draftGrantColumns + `,membership_epoch FROM public.draft_send_grants WHERE token_hash=$1` + suffix, true
+	default:
+		return "", false
+	}
+}
 func draftGrantAllowed(g draftGrant, a DraftAccess, now time.Time) bool {
 	requiredScope := a.RequiredScope
 	if requiredScope == "" {
 		requiredScope = "draft:create"
 	}
 	if requiredScope != "draft:create" && requiredScope != "draft:propose" {
+		return false
+	}
+	if requiredScope == "draft:propose" && (!membershipEpochPattern.MatchString(a.MembershipEpoch) || g.MembershipEpoch != a.MembershipEpoch) {
 		return false
 	}
 	if g.Environment != a.Environment || g.Owner.Issuer != a.Issuer || !validRecipeOwner(g.Owner) || g.Scope != requiredScope || g.RevokedAt.Valid || g.CreatedAt.After(now) || !g.ExpiresAt.After(g.CreatedAt) || g.ExpiresAt.Sub(g.CreatedAt) > 7*24*time.Hour || !g.ExpiresAt.After(now) {
@@ -95,7 +130,11 @@ func (s *PostgresDraftStore) Authenticate(ctx context.Context, a DraftAccess) er
 	if !validDraftAccess(a) {
 		return ErrDraftUnauthorized
 	}
-	g, err := readDraftGrant(s.db.QueryRowContext(ctx, `SELECT `+draftGrantColumns+` FROM public.draft_ingest_grants WHERE token_hash=$1`, a.TokenHash[:]))
+	query, ok := draftGrantSelect(a, false)
+	if !ok {
+		return ErrDraftUnauthorized
+	}
+	g, err := readDraftGrantForAccess(s.db.QueryRowContext(ctx, query, a.TokenHash[:]), a)
 	if err != nil {
 		return err
 	}
@@ -147,7 +186,11 @@ func (s *PostgresDraftStore) Submit(ctx context.Context, a DraftAccess, key stri
 	// SHARE conflicts with UPDATE/DELETE by the administrative revoker. Keep this
 	// lock through commit; a revocation committed first cannot be bypassed. Runtime
 	// needs UPDATE(last_used_at) solely for this row-lock privilege, not grant edits.
-	g, err := readDraftGrant(tx.QueryRowContext(ctx, `SELECT `+draftGrantColumns+` FROM public.draft_ingest_grants WHERE token_hash=$1 FOR SHARE`, a.TokenHash[:]))
+	grantQuery, ok := draftGrantSelect(a, true)
+	if !ok {
+		return zero, false, ErrDraftUnauthorized
+	}
+	g, err := readDraftGrantForAccess(tx.QueryRowContext(ctx, grantQuery, a.TokenHash[:]), a)
 	if err != nil {
 		return zero, false, err
 	}
@@ -209,7 +252,11 @@ func (s *PostgresDraftStore) Submit(ctx context.Context, a DraftAccess, key stri
 	// Include retained grant metadata (also revoked/expired records). Issuance is
 	// not implemented here and must independently enforce its own grant cap.
 	var grantBytes int64
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE(sum(octet_length(token_hash)+octet_length(environment)+octet_length(owner_issuer)+octet_length(owner_subject)+octet_length(email_at_approval)+octet_length(scope)+1024),0) FROM public.draft_ingest_grants WHERE environment=$1 AND owner_issuer=$2 AND owner_subject=$3`, a.Environment, g.Owner.Issuer, g.Owner.Subject).Scan(&grantBytes)
+	grantQuotaQuery := `SELECT COALESCE(sum(octet_length(token_hash)+octet_length(environment)+octet_length(owner_issuer)+octet_length(owner_subject)+octet_length(email_at_approval)+octet_length(scope)+1024),0) FROM public.draft_ingest_grants WHERE environment=$1 AND owner_issuer=$2 AND owner_subject=$3`
+	if a.RequiredScope == "draft:propose" {
+		grantQuotaQuery = `SELECT COALESCE(sum(octet_length(token_hash)+octet_length(environment)+octet_length(owner_issuer)+octet_length(owner_subject)+octet_length(email_at_approval)+octet_length(scope)+octet_length(membership_epoch)+octet_length(client_label)+1024),0) FROM public.draft_send_grants WHERE environment=$1 AND owner_issuer=$2 AND owner_subject=$3`
+	}
+	err = tx.QueryRowContext(ctx, grantQuotaQuery, a.Environment, g.Owner.Issuer, g.Owner.Subject).Scan(&grantBytes)
 	if err != nil {
 		return zero, false, ErrDraftUnavailable
 	}

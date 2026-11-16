@@ -37,6 +37,10 @@
       "destination": "/index.html"
     },
     {
+      "source": "/incoming-drafts",
+      "destination": "/index.html"
+    },
+    {
       "source": "/cook",
       "destination": "/index.html"
     },

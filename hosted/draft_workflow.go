@@ -28,9 +28,9 @@ import (
 const draftWorkflowSourceEnabled = false
 
 type DraftWorkflowConfig struct {
-	Enabled                     bool
-	Environment, Issuer, Origin string
-	AllowedEmails               []string
+	Enabled                                      bool
+	Environment, Issuer, Origin, MembershipEpoch string
+	AllowedEmails                                []string
 }
 
 func DraftWorkflowConfigFromEnvironment() DraftWorkflowConfig {
@@ -45,7 +45,11 @@ func DraftWorkflowConfigFromEnvironment() DraftWorkflowConfig {
 	for email := range members {
 		emails = append(emails, email)
 	}
-	return DraftWorkflowConfig{Enabled: true, Environment: "preview", Issuer: base, Origin: "https://athome-meals-dev.vercel.app", AllowedEmails: emails}
+	epoch := os.Getenv("MEAL_DRAFT_MEMBERSHIP_EPOCH")
+	if !membershipEpochPattern.MatchString(epoch) {
+		return DraftWorkflowConfig{}
+	}
+	return DraftWorkflowConfig{Enabled: true, Environment: "preview", Issuer: base, Origin: "https://athome-meals-dev.vercel.app", MembershipEpoch: epoch, AllowedEmails: emails}
 }
 
 type DraftIntent struct {
@@ -100,7 +104,7 @@ type DraftWorkflowRepository interface {
 }
 
 func workflowEnabled(c DraftWorkflowConfig) bool {
-	return c.Enabled && c.Environment == "preview" && c.Issuer != "" && c.Origin == "https://athome-meals-dev.vercel.app" && len(c.AllowedEmails) > 0
+	return c.Enabled && c.Environment == "preview" && c.Issuer != "" && c.Origin == "https://athome-meals-dev.vercel.app" && membershipEpochPattern.MatchString(c.MembershipEpoch) && len(c.AllowedEmails) > 0
 }
 
 func workflowAccess(r *http.Request, c DraftWorkflowConfig) (DraftAccess, bool) {
@@ -113,12 +117,14 @@ func workflowAccess(r *http.Request, c DraftWorkflowConfig) (DraftAccess, bool) 
 	if err != nil || len(b) != 32 {
 		return DraftAccess{}, false
 	}
-	return DraftAccess{TokenHash: sha256.Sum256([]byte(raw)), Environment: c.Environment, Issuer: c.Issuer, AllowedEmails: append([]string(nil), c.AllowedEmails...), RequiredScope: "draft:propose"}, true
+	return DraftAccess{TokenHash: sha256.Sum256([]byte(raw)), Environment: c.Environment, Issuer: c.Issuer, AllowedEmails: append([]string(nil), c.AllowedEmails...), RequiredScope: "draft:propose", MembershipEpoch: c.MembershipEpoch}, true
 }
 
 func validWorkflowRequest(w http.ResponseWriter, r *http.Request, c DraftWorkflowConfig) bool {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+	w.Header().Set("X-Frame-Options", "DENY")
 	if !workflowEnabled(c) {
 		recipeError(w, 404, "not_found", "Not found.")
 		return false
@@ -342,7 +348,7 @@ func OwnerIntentHandler(repo DraftWorkflowRepository, c DraftWorkflowConfig) htt
 				recipeError(w, 400, "invalid_request", "Invalid decision.")
 				return
 			}
-			access := DraftAccess{Environment: c.Environment, Issuer: c.Issuer, AllowedEmails: append([]string(nil), c.AllowedEmails...), RequiredScope: "draft:propose"}
+			access := DraftAccess{Environment: c.Environment, Issuer: c.Issuer, AllowedEmails: append([]string(nil), c.AllowedEmails...), RequiredScope: "draft:propose", MembershipEpoch: c.MembershipEpoch}
 			item, err := repo.DecideIntent(ctx, owner, in.IntentID, in.ExpectedRevision, in.ContentHash, in.Decision == "approve", access)
 			if err != nil {
 				workflowError(w, err)

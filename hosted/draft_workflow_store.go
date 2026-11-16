@@ -32,17 +32,17 @@ func (s *PostgresDraftWorkflowStore) grant(ctx context.Context, a DraftAccess) (
 	if err := s.drafts.Authenticate(ctx, a); err != nil {
 		return draftGrant{}, err
 	}
-	return readDraftGrant(s.drafts.db.QueryRowContext(ctx, `SELECT `+draftGrantColumns+` FROM public.draft_ingest_grants WHERE token_hash=$1`, a.TokenHash[:]))
+	query, ok := draftGrantSelect(a, false)
+	if !ok {
+		return draftGrant{}, ErrDraftUnauthorized
+	}
+	return readDraftGrantForAccess(s.drafts.db.QueryRowContext(ctx, query, a.TokenHash[:]), a)
 }
 
 func (s *PostgresDraftWorkflowStore) CreateIntent(ctx context.Context, a DraftAccess, key string, in DraftSubmission) (DraftIntent, bool, error) {
 	var zero DraftIntent
 	if !validDraftAccess(a) || !draftKeyPattern.MatchString(key) || in.ContentSchemaVersion != 1 || !draft.Validate(in.Content).StructurallyValid {
 		return zero, false, ErrDraftUnavailable
-	}
-	g, err := s.grant(ctx, a)
-	if err != nil {
-		return zero, false, err
 	}
 	body, err := json.Marshal(in)
 	if err != nil {
@@ -57,9 +57,32 @@ func (s *PostgresDraftWorkflowStore) CreateIntent(ctx context.Context, a DraftAc
 	if _, err = tx.ExecContext(ctx, `SET LOCAL statement_timeout='8s'; SET LOCAL lock_timeout='3s'`); err != nil {
 		return zero, false, ErrDraftUnavailable
 	}
+	grantQuery, ok := draftGrantSelect(a, true)
+	if !ok {
+		return zero, false, ErrDraftUnauthorized
+	}
+	g, err := readDraftGrantForAccess(tx.QueryRowContext(ctx, grantQuery, a.TokenHash[:]), a)
+	if err != nil {
+		return zero, false, err
+	}
+	var now time.Time
+	if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return zero, false, ErrDraftUnavailable
+	}
+	if !draftGrantAllowed(g, a, now) {
+		return zero, false, ErrDraftUnauthorized
+	}
 	namespace, _ := json.Marshal([]string{"draft-intent", a.Environment, g.Owner.Issuer, g.Owner.Subject})
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, string(namespace)); err != nil {
 		return zero, false, ErrDraftUnavailable
+	}
+	// Expiry can pass while waiting for the owner lock. The SHARE row lock also
+	// serializes this transaction against administrative revocation.
+	if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return zero, false, ErrDraftUnavailable
+	}
+	if !draftGrantAllowed(g, a, now) {
+		return zero, false, ErrDraftUnauthorized
 	}
 	var oldHash, oldGrant []byte
 	var raw []byte
@@ -87,7 +110,7 @@ func (s *PostgresDraftWorkflowStore) CreateIntent(ctx context.Context, a DraftAc
 	if err != nil {
 		return zero, false, ErrDraftUnavailable
 	}
-	now := time.Now().UTC().Truncate(time.Second)
+	now = now.UTC().Truncate(time.Second)
 	expires := now.Add(30 * time.Minute)
 	charge := int64(len(body) + len(key) + len(a.Environment) + len(g.Owner.Issuer) + len(g.Owner.Subject) + 64 + 4096)
 	var retained int64

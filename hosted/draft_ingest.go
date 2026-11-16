@@ -92,6 +92,10 @@ type DraftAccess struct {
 	// the legacy direct-ingest scope. The review workflow uses draft:propose so
 	// the same grant cannot call the direct submission endpoint.
 	RequiredScope string
+	// MembershipEpoch is required only for draft:propose. It is server config,
+	// never caller JSON, and keeps an older proposal grant invalid after the
+	// operator rotates membership on removal or re-add.
+	MembershipEpoch string
 }
 type DraftRepository interface {
 	Authenticate(context.Context, DraftAccess) error

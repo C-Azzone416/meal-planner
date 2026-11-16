@@ -139,6 +139,8 @@ type DraftPairingRepository interface {
 func pairingHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+	w.Header().Set("X-Frame-Options", "DENY")
 }
 
 func pairingDisabled(w http.ResponseWriter, c DraftPairingConfig) bool {

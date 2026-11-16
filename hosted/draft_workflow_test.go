@@ -62,7 +62,7 @@ func (f *workflowFake) MarkHostedDraftApproved(_ context.Context, o RecipeOwner,
 }
 
 func testWorkflowConfig() DraftWorkflowConfig {
-	return DraftWorkflowConfig{Enabled: true, Environment: "preview", Issuer: "https://auth.example.invalid", Origin: "https://athome-meals-dev.vercel.app", AllowedEmails: []string{"owner@example.invalid"}}
+	return DraftWorkflowConfig{Enabled: true, Environment: "preview", Issuer: "https://auth.example.invalid", Origin: "https://athome-meals-dev.vercel.app", MembershipEpoch: "synthetic_epoch_1", AllowedEmails: []string{"owner@example.invalid"}}
 }
 func testGrant() string {
 	return "mp_lc1_pv_" + base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))

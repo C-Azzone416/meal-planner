@@ -21,8 +21,10 @@ server directly.
 
 Provider sign-out and password reset do not revoke app grants. The application
 does not claim otherwise. Explicit grant revocation, absolute expiry and the
-membership epoch are the supported revocation boundaries. Removing and later
-re-adding a member advances the epoch, so an older grant remains invalid.
+membership epoch are the supported revocation boundaries. The application has
+no provider removal event: an operator must rotate the epoch whenever membership
+is removed or re-added, and the workflow must stay disabled if that cannot be
+guaranteed. A rotated epoch keeps every older grant invalid.
 
 ## Frozen Preview interfaces
 
@@ -74,10 +76,12 @@ review and save. Unknown values remain absent/Unknown; present zero remains zero
 Canonical content and provenance remain attached after recipe save.
 
 Saving requires an explicit, complete owner-supplied projection into the existing
-manual recipe model. It reuses the existing recipe repository and a stable
-idempotency key. It never silently converts strings to numbers, assigns phases,
-invents pantry/aisle/timer/storage values, or drops provenance. Stale revisions
-conflict, and a double save resolves to the same recipe.
+manual recipe model. The owner API reuses the existing recipe repository and a
+stable idempotency key. It never silently converts strings to numbers, assigns
+phases, invents pantry/aisle/timer/storage values, or drops provenance. Stale
+revisions conflict, and a double save resolves to the same recipe. The current
+Preview page deliberately stops at reviewed/ready because no lossless projection
+editor exists yet; that UI is a tomorrow hookup rather than an unsafe guess.
 
 ## Local durability
 
@@ -105,4 +109,3 @@ or account uses a different namespace.
    acceptance with synthetic recipes.
 7. Disable again and inspect receipts/logs/quotas before considering a longer
    Preview trial. Production and `main` require a separate decision and review.
-

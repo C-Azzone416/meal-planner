@@ -1,8 +1,6 @@
 -- Additive, reviewed migration-owner operation only. Never run at startup.
 -- Source and environment feature gates remain closed after this migration.
 BEGIN;
-ALTER TABLE public.draft_ingest_grants DROP CONSTRAINT draft_ingest_grants_scope_check;
-ALTER TABLE public.draft_ingest_grants ADD CONSTRAINT draft_ingest_grants_scope_check CHECK (scope IN ('draft:create','draft:propose'));
 CREATE TABLE public.draft_send_intents (
  environment text NOT NULL CHECK (environment='preview'),
  owner_issuer text NOT NULL CHECK (length(owner_issuer) BETWEEN 1 AND 2048),
