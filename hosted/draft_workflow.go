@@ -512,6 +512,9 @@ func workflowError(w http.ResponseWriter, err error) {
 		recipeError(w, 404, "not_found", "Draft not found.")
 	case errors.Is(err, ErrDraftConflict):
 		recipeError(w, 409, "idempotency_conflict", "This operation key was already used with different content.")
+	case errors.Is(err, ErrDraftQuota):
+		w.Header().Set("Retry-After", "3600")
+		recipeError(w, 429, "quota_exceeded", "Draft proposal capacity is full. No work was deleted.")
 	case errors.Is(err, ErrDraftRevision):
 		recipeError(w, 409, "revision_mismatch", "The draft changed. Reload it before continuing.")
 	case errors.Is(err, ErrDraftIntentExpired):

@@ -12,6 +12,7 @@ CREATE TABLE public.draft_send_intents (
  originating_grant_hash bytea NOT NULL CHECK (octet_length(originating_grant_hash)=32),
  request_hash bytea NOT NULL CHECK (octet_length(request_hash)=32),
  submission jsonb NOT NULL CHECK (jsonb_typeof(submission)='object'),
+ retained_bytes bigint NOT NULL CHECK (retained_bytes BETWEEN 4096 AND 16777216),
  state text NOT NULL CHECK (state IN ('pending','denied','accepted')),
  revision bigint NOT NULL CHECK (revision BETWEEN 1 AND 9007199254740991),
  created_at timestamptz NOT NULL,
@@ -19,12 +20,15 @@ CREATE TABLE public.draft_send_intents (
  decided_at timestamptz,
  draft_id uuid,
  receipt_id uuid,
+ accepted_revision bigint CHECK (accepted_revision BETWEEN 1 AND 9007199254740991),
+ submitted_at timestamptz,
  PRIMARY KEY(environment,owner_issuer,owner_subject,id),
  UNIQUE(environment,owner_issuer,owner_subject,operation_key),
  CHECK (expires_at>created_at AND expires_at<=created_at+interval '30 minutes'),
- CHECK ((state='pending' AND decided_at IS NULL AND draft_id IS NULL AND receipt_id IS NULL)
-     OR (state='denied' AND decided_at IS NOT NULL AND draft_id IS NULL AND receipt_id IS NULL)
-     OR (state='accepted' AND decided_at IS NOT NULL AND draft_id IS NOT NULL AND receipt_id IS NOT NULL))
+ CHECK (retained_bytes>=octet_length(submission::text)+octet_length(operation_key)+octet_length(environment)+octet_length(owner_issuer)+octet_length(owner_subject)+64+4096),
+ CHECK ((state='pending' AND decided_at IS NULL AND draft_id IS NULL AND receipt_id IS NULL AND accepted_revision IS NULL AND submitted_at IS NULL)
+     OR (state='denied' AND decided_at IS NOT NULL AND draft_id IS NULL AND receipt_id IS NULL AND accepted_revision IS NULL AND submitted_at IS NULL)
+     OR (state='accepted' AND decided_at IS NOT NULL AND draft_id IS NOT NULL AND receipt_id IS NOT NULL AND accepted_revision IS NOT NULL AND submitted_at IS NOT NULL))
 );
 CREATE INDEX draft_send_intents_owner_pending ON public.draft_send_intents(environment,owner_issuer,owner_subject,id) WHERE state='pending';
 

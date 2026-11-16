@@ -89,7 +89,17 @@ func (s *PostgresDraftWorkflowStore) CreateIntent(ctx context.Context, a DraftAc
 	}
 	now := time.Now().UTC().Truncate(time.Second)
 	expires := now.Add(30 * time.Minute)
-	_, err = tx.ExecContext(ctx, `INSERT INTO public.draft_send_intents(environment,owner_issuer,owner_subject,id,operation_key,originating_grant_hash,request_hash,submission,state,revision,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'pending',1,$9,$10)`, a.Environment, g.Owner.Issuer, g.Owner.Subject, id, key, a.TokenHash[:], h[:], string(body), now, expires)
+	charge := int64(len(body) + len(key) + len(a.Environment) + len(g.Owner.Issuer) + len(g.Owner.Subject) + 64 + 4096)
+	var retained int64
+	var count, pending, hourly int
+	err = tx.QueryRowContext(ctx, `SELECT count(*),count(*) FILTER (WHERE state='pending' AND expires_at>$4),count(*) FILTER (WHERE created_at>$4-interval '1 hour'),COALESCE(sum(retained_bytes),0) FROM public.draft_send_intents WHERE environment=$1 AND owner_issuer=$2 AND owner_subject=$3`, a.Environment, g.Owner.Issuer, g.Owner.Subject, now).Scan(&count, &pending, &hourly, &retained)
+	if err != nil {
+		return zero, false, ErrDraftUnavailable
+	}
+	if count >= 100 || pending >= 20 || hourly >= 20 || charge > 16*1024*1024-retained {
+		return zero, false, ErrDraftQuota
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO public.draft_send_intents(environment,owner_issuer,owner_subject,id,operation_key,originating_grant_hash,request_hash,submission,retained_bytes,state,revision,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',1,$10,$11)`, a.Environment, g.Owner.Issuer, g.Owner.Subject, id, key, a.TokenHash[:], h[:], string(body), charge, now, expires)
 	if err != nil {
 		return zero, false, ErrDraftUnavailable
 	}
@@ -101,16 +111,17 @@ func (s *PostgresDraftWorkflowStore) CreateIntent(ctx context.Context, a DraftAc
 
 func decodeIntentRowJSON(raw []byte, include bool) (DraftIntent, error) {
 	var row struct {
-		ID          string          `json:"id"`
-		Revision    int64           `json:"revision"`
-		State       string          `json:"state"`
-		RequestHash string          `json:"request_hash"`
-		Submission  json.RawMessage `json:"submission"`
-		CreatedAt   time.Time       `json:"created_at"`
-		ExpiresAt   time.Time       `json:"expires_at"`
-		DraftID     *string         `json:"draft_id"`
-		ReceiptID   *string         `json:"receipt_id"`
-		DecidedAt   *time.Time      `json:"decided_at"`
+		ID               string          `json:"id"`
+		Revision         int64           `json:"revision"`
+		State            string          `json:"state"`
+		RequestHash      string          `json:"request_hash"`
+		Submission       json.RawMessage `json:"submission"`
+		CreatedAt        time.Time       `json:"created_at"`
+		ExpiresAt        time.Time       `json:"expires_at"`
+		DraftID          *string         `json:"draft_id"`
+		ReceiptID        *string         `json:"receipt_id"`
+		AcceptedRevision *int64          `json:"accepted_revision"`
+		SubmittedAt      *time.Time      `json:"submitted_at"`
 	}
 	if json.Unmarshal(raw, &row) != nil {
 		return DraftIntent{}, ErrDraftUnavailable
@@ -121,10 +132,9 @@ func decodeIntentRowJSON(raw []byte, include bool) (DraftIntent, error) {
 		h = h[2:]
 	}
 	i := DraftIntent{ID: row.ID, Revision: row.Revision, State: row.State, ContentHash: h, CreatedAt: row.CreatedAt.UTC(), ExpiresAt: row.ExpiresAt.UTC(), DraftID: row.DraftID, ReceiptID: row.ReceiptID}
-	if row.State == "accepted" && row.DecidedAt != nil {
-		one := int64(1)
-		at := row.DecidedAt.UTC()
-		i.AcceptedRevision = &one
+	if row.State == "accepted" && row.AcceptedRevision != nil && row.SubmittedAt != nil {
+		i.AcceptedRevision = row.AcceptedRevision
+		at := row.SubmittedAt.UTC()
 		i.SubmittedAt = &at
 	}
 	if include && json.Unmarshal(row.Submission, &i.Submission) != nil {
@@ -133,13 +143,14 @@ func decodeIntentRowJSON(raw []byte, include bool) (DraftIntent, error) {
 	return i, nil
 }
 
-const intentSelect = `SELECT id::text,revision,state,request_hash,submission,created_at,expires_at,draft_id::text,receipt_id::text,decided_at FROM public.draft_send_intents`
+const intentSelect = `SELECT id::text,revision,state,request_hash,submission,created_at,expires_at,draft_id::text,receipt_id::text,accepted_revision,submitted_at FROM public.draft_send_intents`
 
 func scanIntent(row recipeScanner, include bool) (DraftIntent, error) {
 	var i DraftIntent
 	var hash, sub []byte
-	var decided sql.NullTime
-	err := row.Scan(&i.ID, &i.Revision, &i.State, &hash, &sub, &i.CreatedAt, &i.ExpiresAt, &i.DraftID, &i.ReceiptID, &decided)
+	var accepted sql.NullInt64
+	var submitted sql.NullTime
+	err := row.Scan(&i.ID, &i.Revision, &i.State, &hash, &sub, &i.CreatedAt, &i.ExpiresAt, &i.DraftID, &i.ReceiptID, &accepted, &submitted)
 	if errors.Is(err, sql.ErrNoRows) {
 		return i, ErrDraftIntentNotFound
 	}
@@ -149,10 +160,10 @@ func scanIntent(row recipeScanner, include bool) (DraftIntent, error) {
 	i.ContentHash = hex.EncodeToString(hash)
 	i.CreatedAt = i.CreatedAt.UTC()
 	i.ExpiresAt = i.ExpiresAt.UTC()
-	if i.State == "accepted" && decided.Valid {
-		one := int64(1)
-		at := decided.Time.UTC()
-		i.AcceptedRevision = &one
+	if i.State == "accepted" && accepted.Valid && submitted.Valid {
+		value := accepted.Int64
+		at := submitted.Time.UTC()
+		i.AcceptedRevision = &value
 		i.SubmittedAt = &at
 	}
 	if include && json.Unmarshal(sub, &i.Submission) != nil {
@@ -247,7 +258,7 @@ func (s *PostgresDraftWorkflowStore) DecideIntent(ctx context.Context, o RecipeO
 	if err != nil {
 		return DraftIntent{}, err
 	}
-	res, err := s.drafts.db.ExecContext(ctx, `UPDATE public.draft_send_intents SET state='accepted',revision=revision+1,decided_at=clock_timestamp(),draft_id=$5,receipt_id=$6 WHERE id=$1 AND owner_issuer=$2 AND owner_subject=$3 AND state='pending' AND revision=$4`, id, o.Issuer, o.Subject, expected, result.Draft.ID, result.Receipt.ID)
+	res, err := s.drafts.db.ExecContext(ctx, `UPDATE public.draft_send_intents SET state='accepted',revision=revision+1,decided_at=clock_timestamp(),draft_id=$5,receipt_id=$6,accepted_revision=$7,submitted_at=$8 WHERE id=$1 AND owner_issuer=$2 AND owner_subject=$3 AND state='pending' AND revision=$4`, id, o.Issuer, o.Subject, expected, result.Draft.ID, result.Receipt.ID, result.Receipt.AcceptedRevision, result.Receipt.SubmittedAt)
 	if err != nil {
 		return DraftIntent{}, ErrDraftUnavailable
 	}
