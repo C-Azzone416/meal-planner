@@ -156,12 +156,12 @@ func TestSendCreatesIntentThenPollsAndPersistsReceipt(t *testing.T) {
 		t.Fatalf("canonical submission hash = %s, want %s", hash, goldenHash)
 	}
 	doer.responses = []*http.Response{
-		jsonResponse(201, `{"api_version":"draft-intent-v1","intent":{"id":"`+testIntent+`","state":"pending","revision":1,"content_hash":"`+hash+`","expires_at":"`+expires+`"},"approval":{"path":"/drafts/incoming/`+testIntent+`"}}`),
+		jsonResponse(201, `{"api_version":"draft-intent-v1","intent":{"id":"`+testIntent+`","state":"pending","revision":1,"content_hash":"`+hash+`","expires_at":"`+expires+`"},"approval":{"path":"/incoming-drafts/`+testIntent+`"}}`),
 		jsonResponse(200, `{"api_version":"draft-intent-v1","state":"approved","receipt":{"receipt_id":"`+testReceipt+`","draft_id":"`+testHosted+`","accepted_revision":1,"submitted_at":"`+submitted+`"}}`),
 	}
 
 	first, err := client.Send(context.Background(), local)
-	if err != nil || first.State != SendPending || first.IntentID != testIntent || !strings.HasSuffix(first.ApprovalURL, "/drafts/incoming/"+testIntent) {
+	if err != nil || first.State != SendPending || first.IntentID != testIntent || !strings.HasSuffix(first.ApprovalURL, "/incoming-drafts/"+testIntent) {
 		t.Fatalf("first = %+v, %v", first, err)
 	}
 	second, err := client.Send(context.Background(), local)

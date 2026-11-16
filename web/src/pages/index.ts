@@ -1,6 +1,7 @@
 import '../styles/app.css'
 
 export { CookPage } from './CookPage'
+export { ConnectPage } from './ConnectPage'
 export { DraftsPage } from './DraftsPage'
 export { HouseRulesPage } from './HouseRulesPage'
 export { HostedDraftsPage } from './HostedDraftsPage'

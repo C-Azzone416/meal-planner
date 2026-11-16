@@ -266,7 +266,7 @@ func responseError(response *http.Response) error {
 func validApprovalPath(path, id string) bool {
 	parsed, err := url.Parse(path)
 	return err == nil && !parsed.IsAbs() && parsed.RawQuery == "" && parsed.Fragment == "" &&
-		parsed.Path == "/drafts/incoming/"+id
+		parsed.Path == "/incoming-drafts/"+id
 }
 
 func pendingResult(profile Profile, record ledgerRecord) SendResult {

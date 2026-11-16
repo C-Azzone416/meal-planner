@@ -28,7 +28,7 @@ func (s *fakeSender) Send(_ context.Context, value draft.Draft) (localclient.Sen
 func TestDraftSendIsInjectionGatedAndRevisionBound(t *testing.T) {
 	sender := &fakeSender{result: localclient.SendResult{
 		State: localclient.SendPending, IntentID: "11111111-1111-4111-8111-111111111111",
-		ApprovalURL: "https://athome-meals-dev.vercel.app/drafts/incoming/11111111-1111-4111-8111-111111111111",
+		ApprovalURL: "https://athome-meals-dev.vercel.app/incoming-drafts/11111111-1111-4111-8111-111111111111",
 		Message:     "Waiting for owner approval.",
 	}}
 	e := setup(t, mcpadapter.WithDraftSender(sender))

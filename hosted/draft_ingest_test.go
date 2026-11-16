@@ -223,8 +223,8 @@ func TestDraftIngestEnvironmentLocked(t *testing.T) {
 		}
 	}
 	t.Setenv("VERCEL_ENV", "preview")
-	if !DraftIngestConfigFromEnvironment().Enabled {
-		t.Fatal("valid Preview config rejected")
+	if DraftIngestConfigFromEnvironment().Enabled {
+		t.Fatal("environment opened the closed source gate")
 	}
 	t.Setenv("AUTH_ALLOWED_EMAILS", `[]`)
 	if DraftIngestConfigFromEnvironment().Enabled {

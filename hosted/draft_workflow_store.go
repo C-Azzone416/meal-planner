@@ -239,7 +239,21 @@ func (s *PostgresDraftWorkflowStore) GetIntent(ctx context.Context, o RecipeOwne
 	return scanIntent(s.drafts.db.QueryRowContext(ctx, intentSelect+` WHERE id=$1 AND owner_issuer=$2 AND owner_subject=$3`, id, o.Issuer, o.Subject), true)
 }
 func (s *PostgresDraftWorkflowStore) DecideIntent(ctx context.Context, o RecipeOwner, id string, expected int64, hash string, approve bool, a DraftAccess) (DraftIntent, error) {
-	i, err := s.GetIntent(ctx, o, id)
+	if !validRecipeOwner(o) || !validRecipeUUID(id) {
+		return DraftIntent{}, ErrDraftIntentNotFound
+	}
+	tx, err := s.drafts.db.BeginTx(ctx, nil)
+	if err != nil {
+		return DraftIntent{}, ErrDraftUnavailable
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `SET LOCAL statement_timeout='12s'; SET LOCAL lock_timeout='3s'`); err != nil {
+		return DraftIntent{}, ErrDraftUnavailable
+	}
+	// Lock the intent through the complete decision. The hosted submission uses
+	// its own retry-safe transaction, but a concurrent deny cannot become final
+	// between that submission and this intent transition.
+	i, err := scanIntent(tx.QueryRowContext(ctx, intentSelect+` WHERE id=$1 AND owner_issuer=$2 AND owner_subject=$3 FOR UPDATE`, id, o.Issuer, o.Subject), true)
 	if err != nil {
 		return i, err
 	}
@@ -255,11 +269,15 @@ func (s *PostgresDraftWorkflowStore) DecideIntent(ctx context.Context, o RecipeO
 	if i.Revision != expected {
 		return DraftIntent{}, ErrDraftRevision
 	}
-	if !i.ExpiresAt.After(time.Now()) {
+	var now time.Time
+	if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		return DraftIntent{}, ErrDraftUnavailable
+	}
+	if !i.ExpiresAt.After(now) {
 		return DraftIntent{}, ErrDraftIntentExpired
 	}
 	if !approve {
-		res, err := s.drafts.db.ExecContext(ctx, `UPDATE public.draft_send_intents SET state='denied',revision=revision+1,decided_at=clock_timestamp() WHERE id=$1 AND owner_issuer=$2 AND owner_subject=$3 AND state='pending' AND revision=$4`, id, o.Issuer, o.Subject, expected)
+		res, err := tx.ExecContext(ctx, `UPDATE public.draft_send_intents SET state='denied',revision=revision+1,decided_at=clock_timestamp() WHERE id=$1 AND owner_issuer=$2 AND owner_subject=$3 AND state='pending' AND revision=$4`, id, o.Issuer, o.Subject, expected)
 		if err != nil {
 			return DraftIntent{}, ErrDraftUnavailable
 		}
@@ -267,11 +285,14 @@ func (s *PostgresDraftWorkflowStore) DecideIntent(ctx context.Context, o RecipeO
 		if n != 1 {
 			return DraftIntent{}, ErrDraftRevision
 		}
+		if err = tx.Commit(); err != nil {
+			return DraftIntent{}, ErrDraftUnavailable
+		}
 		return s.GetIntent(ctx, o, id)
 	}
 	// The stored grant hash, not browser input, selects the exact proposal grant.
 	var grantHash []byte
-	err = s.drafts.db.QueryRowContext(ctx, `SELECT originating_grant_hash FROM public.draft_send_intents WHERE id=$1 AND owner_issuer=$2 AND owner_subject=$3`, id, o.Issuer, o.Subject).Scan(&grantHash)
+	err = tx.QueryRowContext(ctx, `SELECT originating_grant_hash FROM public.draft_send_intents WHERE id=$1 AND owner_issuer=$2 AND owner_subject=$3`, id, o.Issuer, o.Subject).Scan(&grantHash)
 	if err != nil || len(grantHash) != 32 {
 		return DraftIntent{}, ErrDraftUnavailable
 	}
@@ -281,17 +302,16 @@ func (s *PostgresDraftWorkflowStore) DecideIntent(ctx context.Context, o RecipeO
 	if err != nil {
 		return DraftIntent{}, err
 	}
-	res, err := s.drafts.db.ExecContext(ctx, `UPDATE public.draft_send_intents SET state='accepted',revision=revision+1,decided_at=clock_timestamp(),draft_id=$5,receipt_id=$6,accepted_revision=$7,submitted_at=$8 WHERE id=$1 AND owner_issuer=$2 AND owner_subject=$3 AND state='pending' AND revision=$4`, id, o.Issuer, o.Subject, expected, result.Draft.ID, result.Receipt.ID, result.Receipt.AcceptedRevision, result.Receipt.SubmittedAt)
+	res, err := tx.ExecContext(ctx, `UPDATE public.draft_send_intents SET state='accepted',revision=revision+1,decided_at=clock_timestamp(),draft_id=$5,receipt_id=$6,accepted_revision=$7,submitted_at=$8 WHERE id=$1 AND owner_issuer=$2 AND owner_subject=$3 AND state='pending' AND revision=$4`, id, o.Issuer, o.Subject, expected, result.Draft.ID, result.Receipt.ID, result.Receipt.AcceptedRevision, result.Receipt.SubmittedAt)
 	if err != nil {
 		return DraftIntent{}, ErrDraftUnavailable
 	}
 	n, _ := res.RowsAffected()
 	if n != 1 {
-		latest, e := s.GetIntent(ctx, o, id)
-		if e == nil && latest.State == "accepted" {
-			return latest, nil
-		}
 		return DraftIntent{}, ErrDraftRevision
+	}
+	if err = tx.Commit(); err != nil {
+		return DraftIntent{}, ErrDraftUnavailable
 	}
 	return s.GetIntent(ctx, o, id)
 }
@@ -320,9 +340,9 @@ func scanHosted(row recipeScanner) (DraftResponse, error) {
 	if err != nil {
 		return DraftResponse{}, ErrDraftUnavailable
 	}
-	var r DraftResponse
-	if json.Unmarshal(raw, &r) != nil {
-		return r, ErrDraftUnavailable
+	r, err := decodeHostedResponse(raw)
+	if err != nil {
+		return r, err
 	}
 	var p *string
 	if recipeID.Valid {
@@ -332,6 +352,26 @@ func scanHosted(row recipeScanner) (DraftResponse, error) {
 		r = overlayReview(r, review.Int64, state.String, p)
 	}
 	return r, nil
+}
+
+func decodeHostedResponse(raw []byte) (DraftResponse, error) {
+	var versions struct {
+		Draft struct {
+			SchemaVersion        json.RawMessage `json:"schema_version"`
+			ContentSchemaVersion json.RawMessage `json:"content_schema_version"`
+		} `json:"draft"`
+	}
+	if json.Unmarshal(raw, &versions) != nil {
+		return DraftResponse{}, ErrDraftUnavailable
+	}
+	if !bytes.Equal(bytes.TrimSpace(versions.Draft.SchemaVersion), []byte("1")) || !bytes.Equal(bytes.TrimSpace(versions.Draft.ContentSchemaVersion), []byte("1")) {
+		return DraftResponse{}, ErrDraftUnsupported
+	}
+	var response DraftResponse
+	if json.Unmarshal(raw, &response) != nil {
+		return DraftResponse{}, ErrDraftUnavailable
+	}
+	return response, nil
 }
 func (s *PostgresDraftWorkflowStore) hostedQuery(ctx context.Context, o RecipeOwner, id string) (DraftResponse, error) {
 	return scanHosted(s.drafts.db.QueryRowContext(ctx, `SELECT s.response,rv.revision,rv.state,rv.approved_recipe_id::text FROM public.draft_ingest_submissions s LEFT JOIN public.draft_reviews rv ON rv.environment=s.environment AND rv.owner_issuer=s.owner_issuer AND rv.owner_subject=s.owner_subject AND rv.draft_id=(s.response->'draft'->>'id')::uuid WHERE s.environment='preview' AND s.owner_issuer=$1 AND s.owner_subject=$2 AND s.response->'draft'->>'id'=$3`, o.Issuer, o.Subject, id))

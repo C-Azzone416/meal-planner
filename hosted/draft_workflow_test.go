@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -98,7 +99,7 @@ func TestDraftIntentCreateIsProposalOnlyAndUsesProposeScope(t *testing.T) {
 	if strings.Contains(w.Body.String(), "Unknown stays unknown") || strings.Contains(w.Body.String(), "submission") {
 		t.Fatal("proposal content leaked in grant response")
 	}
-	if !strings.Contains(w.Body.String(), `"api_version":"draft-intent-v1"`) || !strings.Contains(w.Body.String(), `"path":"/drafts/incoming/11111111-1111-4111-8111-111111111111"`) {
+	if !strings.Contains(w.Body.String(), `"api_version":"draft-intent-v1"`) || !strings.Contains(w.Body.String(), `"path":"/incoming-drafts/11111111-1111-4111-8111-111111111111"`) {
 		t.Fatal("locked interface missing")
 	}
 }
@@ -114,6 +115,36 @@ func TestDraftIntentPollPendingIs202AndSecretFree(t *testing.T) {
 	}
 	if strings.Contains(w.Body.String(), testGrant()) {
 		t.Fatal("grant leaked")
+	}
+}
+
+func TestDraftIntentPollApprovedMatchesLocalReceiptContract(t *testing.T) {
+	receiptID := "22222222-2222-4222-8222-222222222222"
+	draftID := "33333333-3333-4333-8333-333333333333"
+	revision := int64(1)
+	submitted := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	intent := testIntent()
+	intent.State, intent.ReceiptID, intent.DraftID, intent.AcceptedRevision, intent.SubmittedAt = "accepted", &receiptID, &draftID, &revision, &submitted
+	r := httptest.NewRequest(http.MethodPost, "/api/draft-send-intents/poll", strings.NewReader(`{"intent_id":"11111111-1111-4111-8111-111111111111"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer "+testGrant())
+	w := httptest.NewRecorder()
+	DraftIntentPollHandler(&workflowFake{intent: intent}, testWorkflowConfig()).ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"state":"approved"`) || !strings.Contains(w.Body.String(), `"receipt":{"accepted_revision":1,"draft_id":"33333333-3333-4333-8333-333333333333","receipt_id":"22222222-2222-4222-8222-222222222222"`) || strings.Contains(w.Body.String(), `"submission"`) {
+		t.Fatalf("unexpected approved contract: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDraftIntentPollDeniedUsesStableErrorContract(t *testing.T) {
+	intent := testIntent()
+	intent.State = "denied"
+	r := httptest.NewRequest(http.MethodPost, "/api/draft-send-intents/poll", strings.NewReader(`{"intent_id":"11111111-1111-4111-8111-111111111111"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer "+testGrant())
+	w := httptest.NewRecorder()
+	DraftIntentPollHandler(&workflowFake{intent: intent}, testWorkflowConfig()).ServeHTTP(w, r)
+	if w.Code != http.StatusGone || !strings.Contains(w.Body.String(), `"code":"intent_denied"`) {
+		t.Fatalf("unexpected denied contract: %d %s", w.Code, w.Body.String())
 	}
 }
 func TestOwnerDraftRequiresVerifiedIdentityBeforeLookup(t *testing.T) {
@@ -167,5 +198,12 @@ func TestCanonicalUnknownAndExplicitZeroRemainDistinct(t *testing.T) {
 	}
 	if bytes.Contains(b, []byte("active_minutes")) {
 		t.Fatal("unknown estimate was fabricated")
+	}
+}
+
+func TestUnsupportedStoredSchemaFailsBeforeInterpretation(t *testing.T) {
+	_, err := decodeHostedResponse([]byte(`{"draft":{"schema_version":1,"content_schema_version":2,"content":{"title":"must not be interpreted","future_field":"must not be dropped"}}}`))
+	if !errors.Is(err, ErrDraftUnsupported) {
+		t.Fatalf("unsupported schema was interpreted: %v", err)
 	}
 }

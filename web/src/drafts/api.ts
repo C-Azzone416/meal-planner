@@ -44,6 +44,7 @@ export function draftReviewClient(getToken: () => Promise<string | null>, expire
     return response.json() as Promise<unknown>
   }
   return {
+    async approvePairing(userCode: string, challengeFingerprint: string) { return request('/api/draft-pairings/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_code: userCode, challenge_fingerprint: challengeFingerprint }) }) },
     async intents() { return (await request('/api/draft-review/intents') as { intents: IncomingIntent[] }).intents },
     async decide(intent: IncomingIntent, decision: 'approve' | 'deny') { return request('/api/draft-review/intents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ intent_id: intent.id, expected_revision: intent.revision, content_hash: intent.content_hash, decision }) }) },
     async drafts() { return (await request('/api/draft-review/drafts') as { drafts: Array<{ id: string; title: string; revision: number; review_state: string; review_revision: number }> }).drafts },

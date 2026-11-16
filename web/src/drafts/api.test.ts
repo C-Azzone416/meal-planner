@@ -8,6 +8,17 @@ const draft: HostedDraftResponse = {
 }
 
 describe('draft review client', () => {
+  it('approves pairing only through the owner bearer route with the typed code and fingerprint', async () => {
+    const fetcher = vi.fn<typeof fetch>()
+    fetcher.mockResolvedValue(new Response(JSON.stringify({ api_version: 'local-client-v1', state: 'approved' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    const client = draftReviewClient(async () => 'owner-jwt', () => undefined, fetcher)
+    await client.approvePairing('23456789', '0123abcd')
+    expect(fetcher).toHaveBeenCalledWith('/api/draft-pairings/approve', expect.objectContaining({ method: 'POST', credentials: 'same-origin' }))
+    const init = fetcher.mock.calls[0][1]
+    expect(init?.headers).toMatchObject({ Authorization: 'Bearer owner-jwt', 'Content-Type': 'application/json' })
+    expect(JSON.parse(String(init?.body))).toEqual({ user_code: '23456789', challenge_fingerprint: '0123abcd' })
+  })
+
   it('binds mutations to exact draft and review revisions without converting zero', async () => {
     const fetcher = vi.fn<typeof fetch>()
     fetcher.mockResolvedValue(new Response(JSON.stringify({ draft: draft.draft, recipe: {} }), { status: 200, headers: { 'Content-Type': 'application/json' } }))

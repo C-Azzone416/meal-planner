@@ -62,6 +62,8 @@ is a conflict. The grant can create and poll only its own intents.
 `POST /api/draft-send-intents/poll` accepts only an intent ID in JSON. Pending,
 denied and expired states contain no draft content. An approved response contains
 only the receipt ID, hosted draft ID, accepted revision and submission time.
+The safe browser path is `/incoming-drafts/{intent_id}`; it contains no grant,
+poll secret, operation key or recipe content.
 
 Browser approval binds the owner, intent revision and canonical content hash.
 Approval is single-use and retry-safe. It creates an unreviewed hosted draft and

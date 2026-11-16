@@ -89,6 +89,7 @@ var (
 	ErrDraftIntentNotFound = errors.New("draft intent not found")
 	ErrDraftRevision       = errors.New("draft workflow revision mismatch")
 	ErrDraftIntentExpired  = errors.New("draft intent expired")
+	ErrDraftUnsupported    = errors.New("draft content schema is unsupported")
 )
 
 type DraftWorkflowRepository interface {
@@ -217,7 +218,7 @@ func DraftIntentCreateHandler(repo DraftWorkflowRepository, c DraftWorkflowConfi
 		} else {
 			status = 201
 		}
-		recipeJSON(w, status, map[string]any{"api_version": "draft-intent-v1", "intent": safeIntent(intent), "approval": map[string]string{"path": "/drafts/incoming/" + intent.ID}})
+		recipeJSON(w, status, map[string]any{"api_version": "draft-intent-v1", "intent": safeIntent(intent), "approval": map[string]string{"path": "/incoming-drafts/" + intent.ID}})
 	})
 }
 
@@ -260,11 +261,20 @@ func DraftIntentPollHandler(repo DraftWorkflowRepository, c DraftWorkflowConfig)
 			workflowError(w, err)
 			return
 		}
-		status := http.StatusOK
-		if intent.State == "pending" {
-			status = http.StatusAccepted
+		switch intent.State {
+		case "pending":
+			recipeJSON(w, http.StatusAccepted, map[string]any{"api_version": "draft-intent-v1", "state": "pending", "intent": map[string]string{"id": intent.ID, "state": "pending"}})
+		case "denied":
+			recipeError(w, http.StatusGone, "intent_denied", "The owner denied this draft proposal.")
+		case "accepted":
+			if intent.ReceiptID == nil || intent.DraftID == nil || intent.AcceptedRevision == nil || intent.SubmittedAt == nil {
+				workflowError(w, ErrDraftUnavailable)
+				return
+			}
+			recipeJSON(w, http.StatusOK, map[string]any{"api_version": "draft-intent-v1", "state": "approved", "receipt": map[string]any{"receipt_id": *intent.ReceiptID, "draft_id": *intent.DraftID, "accepted_revision": *intent.AcceptedRevision, "submitted_at": *intent.SubmittedAt}})
+		default:
+			workflowError(w, ErrDraftUnavailable)
 		}
-		recipeJSON(w, status, map[string]any{"api_version": "draft-intent-v1", "intent": safeIntent(intent)})
 	})
 }
 
@@ -525,6 +535,8 @@ func workflowError(w http.ResponseWriter, err error) {
 		recipeError(w, 409, "revision_mismatch", "The draft changed. Reload it before continuing.")
 	case errors.Is(err, ErrDraftIntentExpired):
 		recipeError(w, 410, "intent_expired", "This proposal expired without being saved.")
+	case errors.Is(err, ErrDraftUnsupported):
+		recipeError(w, 422, "unsupported_content_schema", "This stored draft uses an unsupported schema and cannot be reviewed or saved.")
 	default:
 		recipeError(w, 503, "unavailable", "Draft workflow is unavailable. No change was confirmed.")
 	}

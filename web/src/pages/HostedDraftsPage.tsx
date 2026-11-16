@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
 import { draftReviewClient, type CanonicalDraftContent, type HostedDraftResponse, type IncomingIntent } from '../drafts/api'
 import { FridgePanel, PaperTitle, PreviewNotice } from '../components/FridgePanel'
@@ -22,12 +23,16 @@ function CanonicalDraft({ content }: { content: CanonicalDraftContent }) {
 
 export function HostedDraftsPage() {
   const auth = useAuth()
+  const { intentId } = useParams<{ intentId?: string }>()
   const accountId = auth.user?.id ?? ''
   const active = useRef(true)
   const [intents, setIntents] = useState<IncomingIntent[]>([])
   const [summaries, setSummaries] = useState<Array<{ id: string; title: string; revision: number; review_state: string; review_revision: number }>>([])
   const [selected, setSelected] = useState<HostedDraftResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const orderedIntents = useMemo(() => intentId
+    ? [...intents].sort((a, b) => Number(b.id === intentId) - Number(a.id === intentId))
+    : intents, [intentId, intents])
   // The client invokes this guard only while handling asynchronous requests.
   // eslint-disable-next-line react-hooks/refs
   const client = useMemo(() => draftReviewClient(() => auth.getAccessToken(accountId), auth.expireSession, fetch, () => active.current), [accountId, auth])
@@ -48,7 +53,8 @@ export function HostedDraftsPage() {
       {error && <p role="alert">{error}</p>}
       <button type="button" className="button button--paper" onClick={() => void reload()}>Reload</button>
       <h2>Waiting for your consent</h2>
-      {intents.length === 0 ? <p>No proposals are waiting.</p> : intents.map((intent) => <article className="paper-card" key={intent.id}>
+      {intentId && intents.length > 0 && !intents.some((intent) => intent.id === intentId) && <p role="status">That proposal is no longer waiting for consent.</p>}
+      {intents.length === 0 ? <p>No proposals are waiting.</p> : orderedIntents.map((intent) => <article className="paper-card" key={intent.id}>
         <p>Proposal expires {new Date(intent.expires_at).toLocaleString()} · revision {intent.revision}</p><CanonicalDraft content={intent.submission.content} />
         <button type="button" className="button button--green" onClick={() => void decide(intent, 'approve')}>Accept as unreviewed draft</button>
         <button type="button" className="button button--paper" onClick={() => void decide(intent, 'deny')}>Deny</button>
