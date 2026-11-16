@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import assert from 'node:assert/strict'
+import {draftRuntimeRelations} from './draft-runtime-policy.mjs'
 export const migrations = Object.freeze({
  recipes: 'hosted/migrations/001_recipes.sql',
  feedback: 'migrations/002_framebriar.sql',
@@ -17,7 +18,7 @@ export const migrationFiles = Object.freeze([
 export const relations = Object.freeze({
  recipes: ['meal_planner.recipe_creates','meal_planner.recipe_updates','meal_planner.recipes','meal_planner.schema_migrations'],
  feedback: ['public.framebriar_enrollments'],
- draft: ['public.draft_ingest_grants','public.draft_ingest_submissions'],
+ draft: draftRuntimeRelations,
 })
 const exact = (o, keys) => { assert.ok(o && typeof o === 'object' && !Array.isArray(o)); assert.deepEqual(Object.keys(o).sort(), [...keys].sort()) }
 export function canonical(value) {

@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import {spawnSync} from 'node:child_process'
 import {fileURLToPath} from 'node:url'
 import {inventory,canonical,digest,verifyObservation} from './migration-readiness.mjs'
+import {draftRuntimeGrantSQL} from './draft-runtime-policy.mjs'
 const HERE=path.dirname(fileURLToPath(import.meta.url))
 const [source,bin,out]=process.argv.slice(2)
 assert.equal(process.argv.length,5);assert.ok(path.isAbsolute(source)&&path.isAbsolute(bin)&&path.isAbsolute(out))
@@ -26,9 +27,10 @@ try{
  GRANT SELECT,INSERT ON meal_planner.recipe_creates,meal_planner.recipe_updates TO recipe_runtime;
  CREATE ROLE feedback_runtime LOGIN; GRANT USAGE ON SCHEMA public TO feedback_runtime;
  GRANT SELECT,INSERT,UPDATE ON public.framebriar_enrollments TO feedback_runtime;
+ CREATE ROLE draft_runtime LOGIN; ${draftRuntimeGrantSQL('draft_runtime')}
  CREATE ROLE catalog_inspector LOGIN; GRANT CONNECT ON DATABASE postgres TO catalog_inspector;`)
  const components={}
- for(const [component,role] of [['recipes','recipe_runtime'],['feedback','feedback_runtime']]){
+ for(const [component,role] of [['recipes','recipe_runtime'],['feedback','feedback_runtime'],['draft','draft_runtime']]){
   const snapshot=JSON.parse(run('psql',['-X','-qAt','-U','catalog_inspector','-v','ON_ERROR_STOP=1','-v',`component=${component}`,'-v',`runtime_role=${role}`,'-f',path.join(HERE,'inspect-migration-readiness.sql')]))
   verifyObservation(component,snapshot,{databaseName:'postgres',runtimeRole:role,expectedSnapshotSha256:digest(canonical(snapshot))})
   snapshot.databaseName='BASELINE_DATABASE';snapshot.runtimeRole='BASELINE_ROLE';components[component]=snapshot

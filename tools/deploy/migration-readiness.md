@@ -19,10 +19,13 @@ roles, connect to a live database, or authorize a deployment.
    005, and draft-review 006). Unknown/missing files, links, and nonregular files
    fail. All checksums bind even disabled features. `inventory(root)` computes
    the digest from exact source bytes; the caller must bind the root to the
-   authenticated reviewed Git commit. Pairing 005 and review 006 are currently
-   checksum-bound only: this does not claim they were applied or that a runtime
-   role policy was approved. Their schema/grant observations stay unavailable
-   until the separate pairing/workflow role design is reviewed.
+   authenticated reviewed Git commit. The draft component now inspects all seven
+   relations from 004/005/006 against the column-level policy in
+   `draft-runtime-grants.sql`. The legacy `draft_ingest_grants` table is included
+   in the snapshot with no runtime rights; the active proposal workflow has only
+   the union required by the one shared `MEAL_DRAFTS_DATABASE_URL`. This is a
+   reviewed policy candidate and disposable rehearsal, not evidence that any
+   migration or grant was applied to Preview.
 2. The independently reviewed plan binds exact source SHA, Vercel project ID,
    Neon branch ID, inventory hash, schema-policy hash, Preview target, and actual
    deployed feature flags. Recipes are always required. Disabled feedback or
@@ -86,7 +89,10 @@ roles, connect to a live database, or authorize a deployment.
 
 - An independently reviewed expected snapshot policy generated from the exact
   migrations and intended least-privilege grants, including effective column
-  privileges. The library enforces exact policy snapshots; it does not choose grants.
+  privileges. Recipe and feedback policy still require their normal target review.
+  The draft candidate is generated from `draft-runtime-grants.sql` and included
+  in the PostgreSQL 18 baseline; the library enforces the exact snapshot but does
+  not authorize applying it to a live role.
 - Authenticated provider/secret adapter and clean inspector job; no new DB access
   or GitHub/Vercel security settings are created here.
 - Authenticated receipt attribution to clean inspector, exact source/config
@@ -106,3 +112,8 @@ The second command creates and destroys only its own temporary Unix-socket-only
 PostgreSQL cluster, ignores ambient connection variables, applies synthetic local
 migrations, and tests schema drift, extra rights, table/column/schema/database grant options,
 role ADMIN OPTION, write-suppressing rewrite rules, and catalog-only inspection. It never uses a provided external DSN.
+
+The draft-role rehearsal additionally applies migrations 004/005/006 in that
+cluster, grants only the reviewed draft policy to a synthetic login, and proves
+the clean catalog inspector sees the same seven-relation snapshot. Granting the
+legacy grant table `SELECT`, or granting review `DELETE`, fails verification.

@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {spawnSync} from 'node:child_process'
 import {canonical,digest,migrationFiles,verifyObservation} from './migration-readiness.mjs'
+import {draftRuntimeGrantSQL} from './draft-runtime-policy.mjs'
 // Opt-in, disposable local cluster only. Never consumes PGHOST/DATABASE_URL.
 test('real PostgreSQL inspection detects schema and effective privilege drift',{skip:!process.env.READINESS_PG_BIN},()=>{
  const bin=process.env.READINESS_PG_BIN;assert.ok(path.isAbsolute(bin))
@@ -16,13 +17,17 @@ test('real PostgreSQL inspection detects schema and effective privilege drift',{
  try {
  run('initdb',['-D',data,'-A','trust','--no-locale']);run('pg_ctl',['-D',data,'-l',path.join(root,'server.log'),'-o',`-k ${socket} -c listen_addresses=''`,'-w','start']);started=true
  for(const file of migrationFiles) run('psql',['-X','-qAt','-v','ON_ERROR_STOP=1','-f',file])
- sql('CREATE ROLE readiness_runtime LOGIN; GRANT USAGE ON SCHEMA meal_planner TO readiness_runtime; GRANT SELECT, INSERT, UPDATE ON meal_planner.recipes TO readiness_runtime; GRANT SELECT, INSERT ON meal_planner.recipe_creates, meal_planner.recipe_updates TO readiness_runtime;')
- const observe=(user=env.PGUSER)=>JSON.parse(run('psql',['-U',user,'-X','-qAt','-v','ON_ERROR_STOP=1','-v','component=recipes','-v','runtime_role=readiness_runtime','-f','tools/deploy/inspect-migration-readiness.sql']))
+ sql('CREATE ROLE readiness_runtime LOGIN; GRANT USAGE ON SCHEMA meal_planner TO readiness_runtime; GRANT SELECT, INSERT, UPDATE ON meal_planner.recipes TO readiness_runtime; GRANT SELECT, INSERT ON meal_planner.recipe_creates, meal_planner.recipe_updates TO readiness_runtime; CREATE ROLE draft_runtime LOGIN;'+draftRuntimeGrantSQL('draft_runtime'))
+ const observe=(component='recipes',role='readiness_runtime',user=env.PGUSER)=>JSON.parse(run('psql',['-U',user,'-X','-qAt','-v','ON_ERROR_STOP=1','-v',`component=${component}`,'-v',`runtime_role=${role}`,'-f','tools/deploy/inspect-migration-readiness.sql']))
  const first=observe();assert.equal(first.relations.length,4)
  const expected={databaseName:'postgres',runtimeRole:'readiness_runtime',expectedSnapshotSha256:digest(canonical(first))}
  verifyObservation('recipes',first,expected)
+ const draft=observe('draft','draft_runtime');assert.equal(draft.relations.length,7)
+ const expectedDraft={databaseName:'postgres',runtimeRole:'draft_runtime',expectedSnapshotSha256:digest(canonical(draft))}
+ verifyObservation('draft',draft,expectedDraft)
  sql('CREATE ROLE catalog_inspector LOGIN; GRANT CONNECT ON DATABASE postgres TO catalog_inspector;')
- assert.deepEqual(observe('catalog_inspector'),first,'catalog-only inspector yields identical snapshot')
+ assert.deepEqual(observe('recipes','readiness_runtime','catalog_inspector'),first,'catalog-only inspector yields identical snapshot')
+ assert.deepEqual(observe('draft','draft_runtime','catalog_inspector'),draft,'catalog-only inspector yields identical draft snapshot')
  assert.equal(sql("SELECT has_table_privilege('catalog_inspector','meal_planner.recipes','SELECT')"),'f')
  const failures=[
  ['GRANT MAINTAIN ON meal_planner.recipes TO readiness_runtime','REVOKE MAINTAIN ON meal_planner.recipes FROM readiness_runtime',/forbidden MAINTAIN/],
@@ -38,8 +43,10 @@ test('real PostgreSQL inspection detects schema and effective privilege drift',{
  ['CREATE RULE suppress_recipe AS ON INSERT TO meal_planner.recipes DO INSTEAD NOTHING','DROP RULE suppress_recipe ON meal_planner.recipes',/rewrite rule/],
  ['CREATE ROLE admin_group; GRANT admin_group TO readiness_runtime WITH ADMIN OPTION','REVOKE admin_group FROM readiness_runtime; DROP ROLE admin_group',/ADMIN OPTION/],
  ]
- for(const [grant,revoke,pattern] of failures){sql(grant);const changed=observe('catalog_inspector');assert.notEqual(digest(canonical(changed)),expected.expectedSnapshotSha256);assert.throws(()=>verifyObservation('recipes',changed,expected),pattern);sql(revoke);verifyObservation('recipes',observe('catalog_inspector'),expected)}
+ for(const [grant,revoke,pattern] of failures){sql(grant);const changed=observe('recipes','readiness_runtime','catalog_inspector');assert.notEqual(digest(canonical(changed)),expected.expectedSnapshotSha256);assert.throws(()=>verifyObservation('recipes',changed,expected),pattern);sql(revoke);verifyObservation('recipes',observe('recipes','readiness_runtime','catalog_inspector'),expected)}
  sql('GRANT DELETE ON meal_planner.recipes TO readiness_runtime');assert.throws(()=>verifyObservation('recipes',observe(),expected),/forbidden DELETE/);sql('REVOKE DELETE ON meal_planner.recipes FROM readiness_runtime')
+ sql('GRANT SELECT ON public.draft_ingest_grants TO draft_runtime');assert.throws(()=>verifyObservation('draft',observe('draft','draft_runtime'),expectedDraft),/differ/);sql('REVOKE SELECT ON public.draft_ingest_grants FROM draft_runtime');verifyObservation('draft',observe('draft','draft_runtime'),expectedDraft)
+ sql('GRANT DELETE ON public.draft_reviews TO draft_runtime');assert.throws(()=>verifyObservation('draft',observe('draft','draft_runtime'),expectedDraft),/forbidden DELETE/);sql('REVOKE DELETE ON public.draft_reviews FROM draft_runtime')
  sql('ALTER TABLE meal_planner.recipes ADD COLUMN unexpected text');assert.throws(()=>verifyObservation('recipes',observe(),expected),/differ/)
  sql('ALTER TABLE meal_planner.recipes DROP COLUMN unexpected');verifyObservation('recipes',observe(),expected)
  sql('CREATE ROLE privileged_group; GRANT privileged_group TO readiness_runtime');assert.throws(()=>verifyObservation('recipes',observe(),expected),/inherit/)

@@ -12,7 +12,7 @@ WITH selected AS (
  SELECT unnest(CASE :'component'
  WHEN 'recipes' THEN ARRAY['meal_planner.recipe_creates','meal_planner.recipe_updates','meal_planner.recipes','meal_planner.schema_migrations']
  WHEN 'feedback' THEN ARRAY['public.framebriar_enrollments']
- WHEN 'draft' THEN ARRAY['public.draft_ingest_grants','public.draft_ingest_submissions']
+ WHEN 'draft' THEN ARRAY['public.draft_ingest_grants','public.draft_ingest_submissions','public.draft_membership_epochs','public.draft_pairings','public.draft_reviews','public.draft_send_grants','public.draft_send_intents']
  ELSE ARRAY[]::text[] END) AS name
 ), runtime AS (SELECT * FROM pg_roles WHERE rolname=:'runtime_role'), objects AS (
  SELECT s.name,c.*,n.nspname,n.nspacl,n.nspowner FROM selected s

@@ -13,6 +13,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -22,6 +23,7 @@ const (
 	draftPairingAPIVersion = "local-client-v1"
 	draftPreviewOrigin     = "https://athome-meals-dev.vercel.app"
 	draftPairingBodyLimit  = 8 * 1024
+	draftPairingStoreLimit = 10 * time.Second
 	// Source authorization is intentionally separate from runtime configuration.
 	// Tomorrow's reviewed hookup must change this constant as its own approval.
 	draftPairingSourceEnabled = false
@@ -204,6 +206,10 @@ func validClientLabel(s string) bool {
 	return true
 }
 
+func pairingStoreContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(r.Context(), draftPairingStoreLimit)
+}
+
 func DraftPairingCreateHandler(repo DraftPairingRepository, c DraftPairingConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if pairingDisabled(w, c) {
@@ -238,7 +244,9 @@ func DraftPairingCreateHandler(repo DraftPairingRepository, c DraftPairingConfig
 			recipeError(w, 503, "unavailable", "Pairing is unavailable.")
 			return
 		}
-		result, err := repo.CreatePairing(r.Context(), c, DraftPairingCreateRequest{CodeChallenge: challenge, CodeChallengeMethod: method, ClientLabel: label})
+		ctx, cancel := pairingStoreContext(r)
+		defer cancel()
+		result, err := repo.CreatePairing(ctx, c, DraftPairingCreateRequest{CodeChallenge: challenge, CodeChallengeMethod: method, ClientLabel: label})
 		if err != nil {
 			recipeError(w, 503, "unavailable", "Pairing is unavailable.")
 			return
@@ -277,7 +285,9 @@ func DraftPairingPollHandler(repo DraftPairingRepository, c DraftPairingConfig) 
 			recipeError(w, 503, "unavailable", "Pairing is unavailable.")
 			return
 		}
-		result, err := repo.PollPairing(r.Context(), c, DraftPairingPollRequest{PairingID: id, PollToken: token, CodeVerifier: verifier})
+		ctx, cancel := pairingStoreContext(r)
+		defer cancel()
+		result, err := repo.PollPairing(ctx, c, DraftPairingPollRequest{PairingID: id, PollToken: token, CodeVerifier: verifier})
 		result.APIVersion = draftPairingAPIVersion
 		switch {
 		case err == nil:
@@ -333,7 +343,9 @@ func DraftPairingApproveHandler(repo DraftPairingRepository, c DraftPairingConfi
 			recipeError(w, 503, "unavailable", "Pairing is unavailable.")
 			return
 		}
-		err := repo.ApprovePairing(r.Context(), c, identity, DraftPairingApproveRequest{UserCode: code, ChallengeFingerprint: fingerprint})
+		ctx, cancel := pairingStoreContext(r)
+		defer cancel()
+		err := repo.ApprovePairing(ctx, c, identity, DraftPairingApproveRequest{UserCode: code, ChallengeFingerprint: fingerprint})
 		switch {
 		case err == nil:
 			recipeJSON(w, 200, map[string]any{"api_version": draftPairingAPIVersion, "state": "approved"})
@@ -372,7 +384,9 @@ func DraftGrantsHandler(repo DraftPairingRepository, c DraftPairingConfig) http.
 				recipeError(w, 400, "invalid_request", "Query parameters are not supported.")
 				return
 			}
-			items, err := repo.ListDraftGrants(r.Context(), c, owner)
+			ctx, cancel := pairingStoreContext(r)
+			defer cancel()
+			items, err := repo.ListDraftGrants(ctx, c, owner)
 			if err != nil {
 				recipeError(w, 503, "unavailable", "Connections are unavailable.")
 				return
@@ -395,7 +409,9 @@ func DraftGrantsHandler(repo DraftPairingRepository, c DraftPairingConfig) http.
 				recipeError(w, 400, "invalid_request", "Invalid connection.")
 				return
 			}
-			err := repo.RevokeDraftGrant(r.Context(), c, owner, id)
+			ctx, cancel := pairingStoreContext(r)
+			defer cancel()
+			err := repo.RevokeDraftGrant(ctx, c, owner, id)
 			if errors.Is(err, ErrDraftPairingMissing) {
 				recipeError(w, 404, "not_found", "Connection not found.")
 				return

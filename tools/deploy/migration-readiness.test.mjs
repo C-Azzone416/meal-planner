@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {canonical,digest,inventory,migrationFiles,migrations,relations,createReadiness,verifyReadiness,verifyObservation,parseCanonicalRecord} from './migration-readiness.mjs'
+import {draftRuntimeGrantSQL,draftRuntimeRelations} from './draft-runtime-policy.mjs'
 const clone=x=>JSON.parse(JSON.stringify(x))
 const now=1800000000000
 function fixture(){
@@ -42,6 +43,16 @@ test('inventory exact, checksum bound, rejects unknown/missing/link sources',()=
 test('default guard remains closed; inspector read-only and no target SQL',()=>{
  const sql=fs.readFileSync('tools/deploy/inspect-migration-readiness.sql','utf8');assert.match(sql,/BEGIN READ ONLY;/);assert.match(sql,/ROLLBACK;/);assert.doesNotMatch(sql,/^\s*(?:\\i\b|ALTER |GRANT |INSERT |UPDATE |DELETE )/m)
  const guard=fs.readFileSync('tools/deploy/check-migration-readiness.sh','utf8');assert.match(guard,/do not bypass this guard/);assert.doesNotMatch(guard,/migration-readiness.mjs/)
+})
+
+test('draft runtime grant policy is exact and role-name injection safe',()=>{
+ assert.deepEqual(relations.draft,draftRuntimeRelations)
+ const sql=draftRuntimeGrantSQL('draft_runtime')
+ assert.match(sql,/TO "draft_runtime";/)
+ assert.doesNotMatch(sql,/:"runtime_role"/)
+ assert.match(sql,/GRANT UPDATE \(revoked_at,last_used_at\) ON public\.draft_send_grants/)
+ assert.doesNotMatch(sql,/\b(?:DELETE|TRUNCATE|CREATE ROLE|ALTER ROLE|PASSWORD)\b/)
+ for(const role of ['DraftRuntime','draft-runtime','draft_runtime;DROP ROLE owner','',`draft_runtime"`]) assert.throws(()=>draftRuntimeGrantSQL(role))
 })
 
 test('canonical record parsing rejects ambiguity and oversize',()=>{assert.deepEqual(parseCanonicalRecord('{"a":1}'),{a:1});for(const raw of ['{"a":1,"a":1}','{ "a":1}','{"a":1}x','x'.repeat(131073)])assert.throws(()=>parseCanonicalRecord(raw))})

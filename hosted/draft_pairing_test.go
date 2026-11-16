@@ -9,39 +9,50 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakePairingRepo struct {
-	created    DraftPairingCreated
-	poll       DraftPairingPollResult
-	pollErr    error
-	approveErr error
-	grants     []DraftGrantSummary
-	revokeErr  error
-	createIn   DraftPairingCreateRequest
-	pollIn     DraftPairingPollRequest
-	approveIn  DraftPairingApproveRequest
-	owner      RecipeOwner
-	revoked    string
+	created     DraftPairingCreated
+	poll        DraftPairingPollResult
+	pollErr     error
+	approveErr  error
+	grants      []DraftGrantSummary
+	revokeErr   error
+	createIn    DraftPairingCreateRequest
+	pollIn      DraftPairingPollRequest
+	approveIn   DraftPairingApproveRequest
+	owner       RecipeOwner
+	revoked     string
+	deadline    time.Time
+	hasDeadline bool
 }
 
-func (f *fakePairingRepo) CreatePairing(_ context.Context, _ DraftPairingConfig, in DraftPairingCreateRequest) (DraftPairingCreated, error) {
+func (f *fakePairingRepo) observeDeadline(ctx context.Context) {
+	f.deadline, f.hasDeadline = ctx.Deadline()
+}
+func (f *fakePairingRepo) CreatePairing(ctx context.Context, _ DraftPairingConfig, in DraftPairingCreateRequest) (DraftPairingCreated, error) {
+	f.observeDeadline(ctx)
 	f.createIn = in
 	return f.created, nil
 }
-func (f *fakePairingRepo) PollPairing(_ context.Context, _ DraftPairingConfig, in DraftPairingPollRequest) (DraftPairingPollResult, error) {
+func (f *fakePairingRepo) PollPairing(ctx context.Context, _ DraftPairingConfig, in DraftPairingPollRequest) (DraftPairingPollResult, error) {
+	f.observeDeadline(ctx)
 	f.pollIn = in
 	return f.poll, f.pollErr
 }
-func (f *fakePairingRepo) ApprovePairing(_ context.Context, _ DraftPairingConfig, _ UserIdentity, in DraftPairingApproveRequest) error {
+func (f *fakePairingRepo) ApprovePairing(ctx context.Context, _ DraftPairingConfig, _ UserIdentity, in DraftPairingApproveRequest) error {
+	f.observeDeadline(ctx)
 	f.approveIn = in
 	return f.approveErr
 }
-func (f *fakePairingRepo) ListDraftGrants(_ context.Context, _ DraftPairingConfig, owner RecipeOwner) ([]DraftGrantSummary, error) {
+func (f *fakePairingRepo) ListDraftGrants(ctx context.Context, _ DraftPairingConfig, owner RecipeOwner) ([]DraftGrantSummary, error) {
+	f.observeDeadline(ctx)
 	f.owner = owner
 	return f.grants, nil
 }
-func (f *fakePairingRepo) RevokeDraftGrant(_ context.Context, _ DraftPairingConfig, owner RecipeOwner, id string) error {
+func (f *fakePairingRepo) RevokeDraftGrant(ctx context.Context, _ DraftPairingConfig, owner RecipeOwner, id string) error {
+	f.observeDeadline(ctx)
 	f.owner, f.revoked = owner, id
 	return f.revokeErr
 }
@@ -112,6 +123,9 @@ func TestPairingCreateContractAndClosedGates(t *testing.T) {
 	}
 	if repo.createIn.CodeChallenge != challenge || repo.createIn.CodeChallengeMethod != "S256" || repo.createIn.ClientLabel != "Caroline's Mac" {
 		t.Fatalf("wrong input: %#v", repo.createIn)
+	}
+	if !repo.hasDeadline || time.Until(repo.deadline) <= 0 || time.Until(repo.deadline) > draftPairingStoreLimit {
+		t.Fatalf("repository call deadline: present=%v remaining=%v", repo.hasDeadline, time.Until(repo.deadline))
 	}
 	var got DraftPairingCreated
 	if json.Unmarshal(w.Body.Bytes(), &got) != nil || got.APIVersion != "local-client-v1" || got.VerificationURI != draftPreviewOrigin+"/connect" || strings.Contains(got.VerificationURI, "?") {

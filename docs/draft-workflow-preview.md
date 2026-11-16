@@ -93,21 +93,66 @@ the closed workflow gates, not evidence of authenticated Preview operation.
 
 The credential-store interface has no plaintext or environment fallback. An
 unwired Darwin+cgo Security.framework adapter exists and non-cgo/non-macOS builds
-fail closed. Automated tests inject a synthetic backend and make no real Keychain
-calls; packaged-binary signing, ACL and other-process behavior remain final hookup
-gates. The receipt ledger contains no recipe content or credentials. Its namespace
-includes exact environment, API origin, account binding, local draft ID, local
-revision and canonical content hash. The compiled Preview profile pins the web
-origin to that same exact origin. An ambiguous retry reuses the same operation
-key. A changed revision or account uses a different namespace.
+fail closed. Automated adapter tests still inject a synthetic backend. A separate
+ad-hoc Mac canary showed that its exact observer returned no credential after the
+owner chose Deny, but that is user-mediated evidence for two test executables,
+not distribution-package signing/ACL acceptance or universal other-process
+behavior. The receipt ledger contains no recipe content or credentials. Its
+namespace includes exact environment, API origin, account binding, local draft
+ID, local revision and canonical content hash. The compiled Preview profile pins
+the web origin to that same exact origin. An ambiguous retry reuses the same
+operation key. A changed revision or account uses a different namespace.
+
+## Completed synthetic Preview prerequisites
+
+The source now includes a disposable PostgreSQL 18 rehearsal for the one shared
+draft runtime role used by `MEAL_DRAFTS_DATABASE_URL`. It applies migrations
+004/005/006, exercises pairing, grant redemption, intent creation, browser
+approval, hosted review and the draft side of recipe save under exact
+column-level grants, and includes all seven draft relations in the immutable
+readiness snapshot. The role cannot read the legacy grant table or recipe/auth/
+unrelated tables, mutate owner or token fields, delete or truncate draft state,
+or create schemas/tables. Recipe storage remains a separate connection and role.
+
+The same rehearsal forces recipe creation to commit and the subsequent draft
+link update to fail. It verifies one recipe and one create receipt exist while
+the draft stays `ready`; a changed projection conflicts; an identical retry
+links the existing recipe; and another identical retry remains a single recipe
+and receipt. This is synthetic local evidence for the retry-safe saga, not a
+distributed transaction or live Preview proof.
+
+The unauthenticated pairing store calls now receive a ten-second application
+deadline, inside the proposed fifteen-second function execution ceiling. Every
+pairing body remains limited to 8 KiB and every transactional store operation
+keeps its eight-second statement and three-second lock timeouts. These source
+limits do not replace an edge throttle or establish an upload deadline.
+
+Before activation, the stable Preview hostname still needs two exact-path,
+POST-only edge rate rules for `/api/draft-pairings`: a burst limit of 3 requests
+per source IP per minute and a sustained limit of 10 per source IP per hour,
+both returning 429 before function invocation. Do not trust a client-supplied
+forwarding header as the key, add a bypass, or scope either rule to Production.
+The proposed Go function `maxDuration` is 15 seconds, leaving time beyond the
+ten-second store deadline for a bounded response. Current Vercel documentation
+states a 4.5 MB function payload ceiling, far above the application limit, and
+does not establish a configurable per-route upload deadline; that exact provider
+behavior must be verified on Preview before enabling the public route. Firewall
+publication, function configuration and any paid usage are owner-approved live
+provider changes and were not performed here.
+
+Provider references reviewed November 16, 2026: [WAF rate limiting](https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting),
+[function duration configuration](https://vercel.com/docs/functions/configuring-functions/duration),
+and [function payload limits](https://vercel.com/docs/functions/limitations).
 
 ## Tomorrow's live hookup checklist
 
 1. Independently review the final exact commit and all additive SQL.
-2. Prove real macOS Keychain Security-framework behavior, signing and ACL prompts;
-   run argv/environment/process canaries. Do not add a plaintext fallback.
-3. Create least-privilege Preview-only database roles and apply reviewed
-   migrations manually to a disposable rehearsal before the protected Preview.
+2. Complete distribution-signed package Keychain acceptance, including lock and
+   cancellation behavior; the bounded ad-hoc Deny pass is not final package
+   evidence. Do not add a plaintext fallback.
+3. Review the completed disposable PostgreSQL 18 role/migration rehearsal, then
+   separately authorize creating the equivalent Preview-only role and applying
+   the reviewed migrations to the protected Preview branch.
 4. Add exact Preview origins and server secrets through the protected owner
    workflow; keep both source and environment feature gates off while verifying.
 5. Verify membership-epoch rotation/removal, grant revocation and old deployment

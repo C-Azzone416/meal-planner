@@ -18,8 +18,13 @@ import (
 )
 
 func workflowTestStore(t *testing.T) (*PostgresDraftWorkflowStore, DraftAccess) {
+	store, access, _ := workflowTestStoreWithDSN(t)
+	return store, access
+}
+
+func workflowTestStoreWithDSN(t *testing.T) (*PostgresDraftWorkflowStore, DraftAccess, string) {
 	t.Helper()
-	recipes, _ := recipeTestDatabase(t)
+	recipes, dsn := recipeTestDatabase(t)
 	for _, name := range []string{"004_draft_ingest.sql", "005_draft_pairing.sql", "006_draft_review_workflow.sql"} {
 		migration, err := os.ReadFile("migrations/" + name)
 		if err != nil {
@@ -37,7 +42,7 @@ func workflowTestStore(t *testing.T) (*PostgresDraftWorkflowStore, DraftAccess) 
 		t.Fatal(err)
 	}
 	access := DraftAccess{TokenHash: sha256.Sum256([]byte(approved.Grant)), Environment: config.Environment, Issuer: config.Issuer, AllowedEmails: []string{"owner@example.test"}, RequiredScope: "draft:propose", MembershipEpoch: config.MembershipEpoch}
-	return NewPostgresDraftWorkflowStore(NewPostgresDraftStore(recipes.db)), access
+	return NewPostgresDraftWorkflowStore(NewPostgresDraftStore(recipes.db)), access, dsn
 }
 
 func addWorkflowTestOwner(t *testing.T, store *PostgresDraftWorkflowStore, config DraftPairingConfig, subject, email, verifier string) DraftAccess {
