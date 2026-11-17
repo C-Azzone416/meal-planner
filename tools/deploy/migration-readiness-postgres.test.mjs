@@ -8,14 +8,17 @@ import {canonical,digest,migrationFiles,verifyObservation} from './migration-rea
 // Opt-in, disposable local cluster only. Never consumes PGHOST/DATABASE_URL.
 test('real PostgreSQL inspection detects schema and effective privilege drift',{skip:!process.env.READINESS_PG_BIN},()=>{
  const bin=process.env.READINESS_PG_BIN;assert.ok(path.isAbsolute(bin))
- const root=fs.mkdtempSync(path.join(os.tmpdir(),'readiness-pg-')),data=path.join(root,'data'),socket=path.join(root,'sock');fs.mkdirSync(socket)
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'readiness-pg-')),data=path.join(root,'data'),socket=path.join(root,'sock'),source=path.join(root,'source');fs.mkdirSync(socket)
  const env={PATH:process.env.PATH,HOME:process.env.HOME,LANG:'C',PGHOST:socket,PGPORT:'5432',PGDATABASE:'postgres',PGUSER:os.userInfo().username}
  const run=(cmd,args)=>{const r=spawnSync(path.join(bin,cmd),args,{env,encoding:'utf8',timeout:30000});assert.equal(r.status,0,r.stderr||r.stdout);return r.stdout.trim()}
  const sql=s=>run('psql',['-X','-qAt','-v','ON_ERROR_STOP=1','-c',s])
  let started=false
  try {
+ const fixture=JSON.parse(fs.readFileSync(new URL('./fixtures/readiness-cli-inventory.json',import.meta.url),'utf8'))
+ assert.deepEqual(Object.keys(fixture.files).sort(),[...migrationFiles].sort())
+ for(const file of migrationFiles){const target=path.join(source,file);fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,fixture.files[file])}
  run('initdb',['-D',data,'-A','trust','--no-locale']);run('pg_ctl',['-D',data,'-l',path.join(root,'server.log'),'-o',`-k ${socket} -c listen_addresses=''`,'-w','start']);started=true
- for(const file of migrationFiles) run('psql',['-X','-qAt','-v','ON_ERROR_STOP=1','-f',file])
+ for(const file of migrationFiles) run('psql',['-X','-qAt','-v','ON_ERROR_STOP=1','-f',path.join(source,file)])
  sql('CREATE ROLE readiness_runtime LOGIN; GRANT USAGE ON SCHEMA meal_planner TO readiness_runtime; GRANT SELECT, INSERT, UPDATE ON meal_planner.recipes TO readiness_runtime; GRANT SELECT, INSERT ON meal_planner.recipe_creates, meal_planner.recipe_updates TO readiness_runtime;')
  const observe=(user=env.PGUSER)=>JSON.parse(run('psql',['-U',user,'-X','-qAt','-v','ON_ERROR_STOP=1','-v','component=recipes','-v','runtime_role=readiness_runtime','-f','tools/deploy/inspect-migration-readiness.sql']))
  const first=observe();assert.equal(first.relations.length,4)
