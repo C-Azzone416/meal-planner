@@ -20,7 +20,7 @@ const requestFor=({rule=expectedRule(),rules=[],conditional={rules:[]},system=[{
  let page=0
  return async url=>{
   if(url.includes('/v9/projects/'))return response({id:approved.projectId,accountId:approved.accountId,...project})
-  if(url.includes('/config/active?'))return response({ownerId:approved.accountId,projectKey:approved.projectId,firewallEnabled:enabled,rules:[rule,...rules]})
+  if(url.includes('/config/active?'))return response({ownerId:approved.accountId,projectKey:approved.projectId,firewallEnabled:enabled,ips:[],rulesets:[],rules:[rule,...rules]})
   if(url.includes('/bypass/rules?'))return response(conditional)
   if(url.includes('/bypass?'))return response(system[page++]??assert.fail('unexpected system bypass page'))
   assert.fail(`unexpected URL ${url}`)
@@ -63,6 +63,63 @@ test('malformed condition group is conservatively intersecting',async()=>{
  const rule={...expectedRule(),id:'other',name:'other-bypass',action:{mitigate:{action:'bypass'}},conditionGroup:[{conditions:[{type:'environment',op:'eq',value:'production'}],futureMeaning:'or'}]}
  const result=await inspectDraftEdgeFirewall(approved,requestFor({rules:[rule]}),now)
  assert.deepEqual(JSON.parse(result.evidence).otherIntersectingRules,[{action:'bypass'}])
+ assert.throws(()=>verifyDraftEdgeFirewallEvidence(result.evidence,result.sha256,approved,now+1))
+})
+
+test('active Preview bypass ruleset is an intersecting rule',async()=>{
+ const request=async url=>{
+  if(url.includes('/v9/projects/'))return response({id:approved.projectId,accountId:approved.accountId})
+  if(url.includes('/config/active?'))return response({ownerId:approved.accountId,projectKey:approved.projectId,firewallEnabled:true,ips:[],rules:[expectedRule()],rulesets:[{id:'private-ruleset-id',name:'private name',active:true,conditionGroup:[{conditions:[{type:'environment',op:'eq',value:'preview'}]}],action:{mitigate:{action:'bypass'}}}]})
+  if(url.includes('/bypass/rules?'))return response({rules:[]})
+  if(url.includes('/bypass?'))return response({result:[]})
+  assert.fail(`unexpected URL ${url}`)
+ }
+ const result=await inspectDraftEdgeFirewall(approved,request,now)
+ assert.deepEqual(JSON.parse(result.evidence).otherIntersectingRules,[{action:'bypass'}])
+ assert.doesNotMatch(result.evidence,/private-ruleset-id|private name/)
+ assert.throws(()=>verifyDraftEdgeFirewallEvidence(result.evidence,result.sha256,approved,now+1))
+})
+
+test('inactive and Production-only rulesets do not intersect Preview pairing',async()=>{
+ const request=async url=>{
+  if(url.includes('/v9/projects/'))return response({id:approved.projectId,accountId:approved.accountId})
+  if(url.includes('/config/active?'))return response({ownerId:approved.accountId,projectKey:approved.projectId,firewallEnabled:true,ips:[],rules:[expectedRule()],rulesets:[
+   {id:'inactive',name:'inactive',active:false,conditionGroup:[],action:{mitigate:{action:'bypass'}}},
+   {id:'production',name:'production',active:true,conditionGroup:[{conditions:[{type:'environment',op:'eq',value:'production'}]}],action:{mitigate:{action:'bypass'}}},
+  ]})
+  if(url.includes('/bypass/rules?'))return response({rules:[]})
+  if(url.includes('/bypass?'))return response({result:[]})
+  assert.fail(`unexpected URL ${url}`)
+ }
+ const result=await inspectDraftEdgeFirewall(approved,request,now)
+ assert.deepEqual(JSON.parse(result.evidence).otherIntersectingRules,[])
+})
+
+test('nonempty record-form rulesets fail closed without emitting keys',async()=>{
+ const request=async url=>{
+  if(url.includes('/v9/projects/'))return response({id:approved.projectId,accountId:approved.accountId})
+  if(url.includes('/config/active?'))return response({ownerId:approved.accountId,projectKey:approved.projectId,firewallEnabled:true,ips:[],rules:[expectedRule()],rulesets:{privateRuleset:{action:'bypass'}}})
+  if(url.includes('/bypass/rules?'))return response({rules:[]})
+  if(url.includes('/bypass?'))return response({result:[]})
+  assert.fail(`unexpected URL ${url}`)
+ }
+ const result=await inspectDraftEdgeFirewall(approved,request,now)
+ assert.deepEqual(JSON.parse(result.evidence).otherIntersectingRules,[{action:'ruleset_unknown'}])
+ assert.doesNotMatch(result.evidence,/privateRuleset/)
+ assert.throws(()=>verifyDraftEdgeFirewallEvidence(result.evidence,result.sha256,approved,now+1))
+})
+
+test('IP bypass is reported without IP, hostname, ID or notes',async()=>{
+ const request=async url=>{
+  if(url.includes('/v9/projects/'))return response({id:approved.projectId,accountId:approved.accountId})
+  if(url.includes('/config/active?'))return response({ownerId:approved.accountId,projectKey:approved.projectId,firewallEnabled:true,ips:[{action:'bypass',hostname:'private.example',id:'private-ip-rule',ip:'192.0.2.1',notes:'private note'}],rulesets:[],rules:[expectedRule()]})
+  if(url.includes('/bypass/rules?'))return response({rules:[]})
+  if(url.includes('/bypass?'))return response({result:[]})
+  assert.fail(`unexpected URL ${url}`)
+ }
+ const result=await inspectDraftEdgeFirewall(approved,request,now)
+ assert.deepEqual(JSON.parse(result.evidence).bypasses,[{kind:'ip'}])
+ assert.doesNotMatch(result.evidence,/private|192\.0\.2\.1/)
  assert.throws(()=>verifyDraftEdgeFirewallEvidence(result.evidence,result.sha256,approved,now+1))
 })
 
@@ -125,11 +182,14 @@ test('system-bypass pagination has a hard page bound',async()=>{
 
 for(const [name,request] of [
  ['wrong project',requestFor({project:{id:'prj_Other'}})],
- ['wrong firewall owner',async url=>response(url.includes('/v9/projects/')?{id:approved.projectId,accountId:approved.accountId}:{ownerId:'team_Other',projectKey:approved.projectId,firewallEnabled:true,rules:[]})],
+ ['wrong firewall owner',async url=>response(url.includes('/v9/projects/')?{id:approved.projectId,accountId:approved.accountId}:{ownerId:'team_Other',projectKey:approved.projectId,firewallEnabled:true,ips:[],rules:[]})],
  ['provider failure',async()=>({status:403,text:async()=>'FAKE_SECRET_PROVIDER_RESPONSE'})],
  ['oversize response',async()=>({status:200,text:async()=>'{'.repeat(1024*1024+1)})],
  ['malformed custom-rule activity',requestFor({rules:[{...expectedRule(),name:'schema-drift',active:undefined}]})],
  ['malformed custom-rule validity',requestFor({rules:[{...expectedRule(),name:'schema-drift',valid:undefined}]})],
+ ['missing IP-rule inventory',async url=>response(url.includes('/v9/projects/')?{id:approved.projectId,accountId:approved.accountId}:{ownerId:approved.accountId,projectKey:approved.projectId,firewallEnabled:true,rules:[expectedRule()]})],
+ ['malformed IP-rule inventory',async url=>response(url.includes('/v9/projects/')?{id:approved.projectId,accountId:approved.accountId}:{ownerId:approved.accountId,projectKey:approved.projectId,firewallEnabled:true,ips:[{action:'bypass'}],rules:[expectedRule()]})],
+ ['malformed rulesets inventory',async url=>response(url.includes('/v9/projects/')?{id:approved.projectId,accountId:approved.accountId}:{ownerId:approved.accountId,projectKey:approved.projectId,firewallEnabled:true,ips:[],rulesets:'unknown',rules:[expectedRule()]})],
 ])test(`adapter rejects ${name}`,async()=>assert.rejects(()=>inspectDraftEdgeFirewall(approved,request,now)))
 
 test('consumer rejects stale, future, altered and cross-project evidence',async()=>{

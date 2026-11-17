@@ -95,8 +95,9 @@ edge policy.
 
 `tools/deploy/draft-edge-firewall-adapter.mjs` is the corresponding read-only
 firewall-state adapter. It uses the exact project and team identities to read
-the active firewall configuration, conditional bypasses and every page of
-project-scoped system bypasses. It follows no redirects, bounds every response,
+the active firewall configuration (including IP rules and custom rulesets),
+conditional bypasses and every page of project-scoped system bypasses. It
+follows no redirects, bounds every response,
 uses GET only, and reduces the provider response to the expected normalized
 rule, coarse intersecting-rule actions and bypass kinds. It emits no provider
 rule IDs, IPs, domains, notes, actors or raw responses. Unknown condition

@@ -12,6 +12,8 @@ const conditionTypes=new Set(['bot_category','bot_name','bot_protection','bot_st
 const actionKeys=new Set(['mitigate'])
 const mitigateKeys=new Set(['action','actionDuration','bypassSystem','logHeaders','rateLimit','redirect'])
 const rateLimitKeys=new Set(['action','algo','keys','limit','window'])
+const ipRuleKeys=new Set(['action','hostname','id','ip','notes'])
+const ipActions=new Set(['bypass','challenge','deny','log'])
 const boundedJSON=async response=>{
  assert.equal(response.status,200)
  const raw=await response.text();assert.ok(Buffer.byteLength(raw)>0&&Buffer.byteLength(raw)<=1024*1024)
@@ -113,7 +115,14 @@ export async function inspectDraftEdgeFirewall(approved,request,nowMs){
  assert.equal(project.id,approved.projectId);assert.equal(project.accountId,approved.accountId)
  const config=await boundedJSON(await request(`https://api.vercel.com/v1/security/firewall/config/active?${query}`))
  assert.equal(config.ownerId,approved.accountId);assert.equal(config.projectKey,approved.projectId)
- assert.equal(typeof config.firewallEnabled,'boolean');assert.ok(Array.isArray(config.rules))
+ assert.equal(typeof config.firewallEnabled,'boolean');assert.ok(Array.isArray(config.rules));assert.ok(Array.isArray(config.ips))
+ let ipBypass=false
+ for(const rule of config.ips){
+  exactKeys(rule,ipRuleKeys);assert.ok(ipActions.has(rule.action))
+  assert.equal(typeof rule.hostname,'string');assert.equal(typeof rule.id,'string');assert.equal(typeof rule.ip,'string')
+  assert.ok(rule.notes===undefined||typeof rule.notes==='string')
+  if(rule.action==='bypass')ipBypass=true
+ }
  for(const rule of config.rules){
   assert.equal(typeof rule?.active,'boolean','Malformed custom-rule activity state')
   assert.equal(typeof rule?.valid,'boolean','Malformed custom-rule validity state')
@@ -122,10 +131,21 @@ export async function inspectDraftEdgeFirewall(approved,request,nowMs){
  const compliant=named.length===1&&expectedRule(named[0])
  const otherActions=new Set(config.rules.filter(rule=>rule!==named[0]&&mayIntersect(rule)).map(safeAction))
  if(named.length!==1||!compliant)otherActions.add('named_rule_mismatch')
+ if(config.rulesets!==undefined){
+  if(Array.isArray(config.rulesets)){
+   for(const ruleset of config.rulesets){
+    assert.equal(typeof ruleset?.active,'boolean','Malformed ruleset activity state')
+    if(mayIntersect(ruleset))otherActions.add(safeAction(ruleset))
+   }
+  }else{
+   assert.ok(config.rulesets&&typeof config.rulesets==='object')
+   if(Object.keys(config.rulesets).length)otherActions.add('ruleset_unknown')
+  }
+ }
  const other=[...otherActions].sort().map(action=>({action}))
 
  const conditional=conditionalRules(await boundedJSON(await request(`https://api.vercel.com/v1/security/firewall/bypass/rules?${query}`)))
- const bypassKinds=new Set(conditional.length?['conditional']:[])
+ const bypassKinds=new Set([...(ipBypass?['ip']:[]),...(conditional.length?['conditional']:[])])
  let offset='';let pages=0
  do{
   assert.ok(++pages<=100,'System bypass pagination exceeded bound')
