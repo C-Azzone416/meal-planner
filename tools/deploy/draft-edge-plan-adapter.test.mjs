@@ -16,7 +16,18 @@ for(const [plan,rules,window] of [['hobby',1,600],['pro',40,600],['enterprise',2
  const evidence=JSON.parse(result.evidence)
  assert.equal(evidence.plan,plan);assert.equal(evidence.rateLimitRuleCapacity,rules);assert.equal(evidence.maxWindowSeconds,window)
  assert.match(result.sha256,/^[a-f0-9]{64}$/)
- assert.deepEqual(verifyDraftEdgePlanEvidence(result.evidence,result.sha256,approved,1800000000001),{plan,rateLimitRuleCapacity:rules,maxWindowSeconds:window})
+ assert.equal(evidence.gitIntegration,'disconnected')
+ assert.deepEqual(verifyDraftEdgePlanEvidence(result.evidence,result.sha256,approved,1800000000001),{plan,rateLimitRuleCapacity:rules,maxWindowSeconds:window,gitIntegration:'disconnected'})
+})
+
+test('authenticated project evidence reports a connected Git integration without exposing repository metadata',async()=>{
+ const request=async url=>{
+  if(url.includes('/v9/projects/'))return response({id:approved.projectId,accountId:approved.accountId,link:{type:'github',org:'private-owner',repo:'private-repo'}})
+  return response({id:approved.accountId,limited:false,billing:{plan:'hobby'}})
+ }
+ const result=await inspectDraftEdgePlan(approved,request,1800000000000)
+ assert.equal(JSON.parse(result.evidence).gitIntegration,'connected')
+ assert.doesNotMatch(result.evidence,/private-owner|private-repo|github/)
 })
 
 for(const [name,request] of [
@@ -26,6 +37,7 @@ for(const [name,request] of [
  ['unknown plan',requestFor('future-plan')],
  ['provider failure',async()=>({status:403,text:async()=>'{"token":"FAKE_SECRET"}'})],
  ['oversize response',async()=>({status:200,text:async()=>'{'.repeat(1024*1024+1)})],
+ ['malformed Git link',async url=>response(url.includes('/v9/projects/')?{id:approved.projectId,accountId:approved.accountId,link:null}:{id:approved.accountId,limited:false,billing:{plan:'pro'}})],
 ])test(`plan adapter rejects ${name}`,async()=>assert.rejects(()=>inspectDraftEdgePlan(approved,request,1800000000000)))
 
 test('CLI failure is fixed and never emits token or provider response',()=>{

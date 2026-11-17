@@ -86,18 +86,52 @@ observation must still prove the exact project is Hobby before publication.
 `tools/deploy/draft-edge-plan-adapter.mjs` is a read-only, authenticated plan
 probe for a future protected job. It verifies the exact Vercel project and
 account, accepts only a full team response, emits only canonical bounded
-Hobby/Pro/Enterprise capability evidence, and never emits the token or provider
-response. Its CLI accepts the token only on standard input, never through argv,
-an environment variable or a file. It has not been run against Vercel. A fresh
+Hobby/Pro/Enterprise capability evidence and whether a Git integration is
+present, and never emits the token, repository metadata or provider response.
+Its CLI accepts the token only on standard input, never through argv, an
+environment variable or a file. It has not been run against Vercel. A fresh
 result less than 15 minutes old must confirm Hobby before publishing the chosen
 edge policy.
 
+`tools/deploy/draft-edge-firewall-adapter.mjs` is the corresponding read-only
+firewall-state adapter. It uses the exact project and team identities to read
+the active firewall configuration, conditional bypasses and every page of
+project-scoped system bypasses. It follows no redirects, bounds every response,
+uses GET only, and reduces the provider response to the expected normalized
+rule, coarse intersecting-rule actions and bypass kinds. It emits no provider
+rule IDs, IPs, domains, notes, actors or raw responses. Unknown condition
+semantics are treated as potentially intersecting. Its consumer accepts only
+the exact active 429 rule, an enabled firewall, no other intersecting rule and
+no bypass, with evidence less than 15 minutes old. Synthetic tests use the
+current public Vercel REST/SDK response schema; the adapter has not been run
+against this project and does not publish or change a rule.
+
 The normalized verifier now accepts exactly this one-rule Hobby policy, a Hobby
 plan observation, no bypass, no intersecting rule, no Production effect and the
-two exact function limits. A future authenticated firewall adapter remains a
-prerequisite: plan verification does not authorize publishing the rule,
-deploying, enabling a source/runtime gate, cleaning retained rows or touching
-Production.
+two exact function limits. The provider adapters supply separate authenticated
+plan/project and firewall observations; a later clean readiness handoff must
+still bind those observations to the deployed source and function state. Plan
+or firewall verification does not authorize publishing the rule, deploying,
+enabling a source/runtime gate, cleaning retained rows or touching Production.
+
+### No-deploy CI admission
+
+The ordinary pull-request workflow is the source-only CI path. Its Preview job
+requires both a `push` event and `refs/heads/develop`; the classifier independently
+sets Preview trust only for that same event/ref pair. Pull requests therefore do
+not call the deploy workflow or receive its inherited Vercel secrets. The
+workflow now runs all `draft-*.test.mjs` contracts, including a fail-closed
+source inspection of those selectors.
+
+GitHub workflow selection cannot prevent Vercel's separate Git integration from
+deploying the branch push. Before the first push of this branch, a fresh
+owner-approved run of the plan adapter must report `gitIntegration` as
+`disconnected`. `verifyDraftNoDeployAdmission` combines that authenticated,
+less-than-15-minute observation with the exact local source SHA and the workflow
+source contract. A connected, malformed, stale, altered or cross-project
+observation blocks the push. The historical November 1 note that Git integration
+was disconnected is not current evidence. Do not push merely to discover the
+state, and do not disable or reconnect Git integration under this preparation.
 
 Vercel recommends testing a custom rule with a Log action first. If Caroline
 later authorizes that provider change, use the exact final conditions and
@@ -131,9 +165,10 @@ must produce its own evidence, before requesting any live approval:
    `draftRuntimeRole`, current recipe role, all five migration hashes and all
    seven draft relation/grant snapshots. The existing closed mode must continue
    to reject every `MEAL_DRAFT_*` setting.
-2. Add a clean authenticated provider adapter for the exact edge observation in
-   `tools/deploy/draft-edge-readiness.mjs`. A JSON file or digest supplied by the
-   target is not provider evidence.
+2. Run the clean authenticated provider adapters and carry their exact fresh
+   receipts into the edge observation in `tools/deploy/draft-edge-readiness.mjs`.
+   A JSON file or digest supplied by the target is not provider evidence, and
+   the source-only synthetic adapter tests are not a live observation.
 3. The activation runtime verifier must accept exactly Preview plus
    `MEAL_DRAFT_PAIRING_ENABLED=true`, `MEAL_DRAFT_WORKFLOW_ENABLED=true`, the
    two exact origin settings

@@ -1,8 +1,9 @@
 # Draft edge-readiness evidence contract
 
-This is a normalized, source-only contract for a future clean provider adapter.
-It does not contact Vercel, publish WAF rules, set function duration, authorize a
-deployment, or open either draft feature gate.
+This is a normalized, source-only contract for the clean provider adapters and
+their eventual readiness handoff. It does not contact Vercel, publish WAF rules,
+set function duration, authorize a deployment, or open either draft feature
+gate.
 
 The adapter must independently authenticate the exact Vercel project, reviewed
 source SHA, Preview target and stable alias. It must return every firewall
@@ -20,10 +21,14 @@ plan, not merely the expected rule.
 - evidence observed less than 15 minutes ago and bound to the approved source.
 
 The normalized object is not self-authenticating. A target-supplied JSON file or
-digest is not evidence. A future adapter must retrieve provider state through an
-owner-approved authenticated channel and attribute the resulting digest through
-the clean readiness handoff. Reinspect after any firewall, function, project,
-alias or deployment change. A rule limited to the stable alias is rejected
+digest is not evidence. `draft-edge-firewall-adapter.mjs` now retrieves the
+active rule and both conditional and system bypass classes through a read-only,
+owner-approved authenticated channel; it emits only a bounded normalized
+receipt. It has synthetic schema coverage but has not been run against the
+project. The clean readiness handoff must attribute its fresh receipt and the
+separate plan/project receipt to the reviewed source and deployed function
+state. Reinspect after any firewall, function, project, alias or deployment
+change. A rule limited to the stable alias is rejected
 because each generated Preview deployment URL would otherwise be an
 edge-throttle bypass. The Go handlers also reject alternate hosts and non-exact
 paths before repository access; this is defense in depth, not a substitute for
@@ -55,4 +60,4 @@ header, which the current provider documentation does not promise.
 
 Verification:
 
-`node --test tools/deploy/draft-edge-readiness.test.mjs`
+`node --test tools/deploy/draft-*.test.mjs`
