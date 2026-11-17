@@ -66,12 +66,29 @@ test('malformed condition group is conservatively intersecting',async()=>{
  assert.throws(()=>verifyDraftEdgeFirewallEvidence(result.evidence,result.sha256,approved,now+1))
 })
 
+for(const [name,condition] of [
+ ['uppercase Preview',{type:'environment',op:'eq',value:'PREVIEW'}],
+ ['lowercase POST',{type:'method',op:'eq',value:'post'}],
+ ['uppercase target path',{type:'path',op:'inc',value:['/API/DRAFT-PAIRINGS']}],
+ ['array passed to eq',{type:'environment',op:'eq',value:['production']}],
+ ['scalar passed to inc',{type:'environment',op:'inc',value:'production'}],
+ ['array passed to neq',{type:'path',op:'neq',value:['/api/draft-pairings','/api/draft-pairings/poll']}],
+])test(`case or shape cannot falsely prove disjoint: ${name}`,async()=>{
+ const rule={...expectedRule(),id:'other',name:'other-bypass',action:{mitigate:{action:'bypass'}},conditionGroup:[{conditions:[condition]}]}
+ const result=await inspectDraftEdgeFirewall(approved,requestFor({rules:[rule]}),now)
+ assert.deepEqual(JSON.parse(result.evidence).otherIntersectingRules,[{action:'bypass'}])
+ assert.throws(()=>verifyDraftEdgeFirewallEvidence(result.evidence,result.sha256,approved,now+1))
+})
+
 for(const [name,mutate] of [
  ['missing rule',()=>({rule:{...expectedRule(),name:'other'}})],
  ['disabled firewall',()=>({enabled:false})],
  ['log-only limit',()=>{const rule=expectedRule();rule.action.mitigate.rateLimit.action='log';return {rule}}],
  ['stable-host-only rule',()=>{const rule=expectedRule();rule.conditionGroup[0].conditions.push({type:'host',op:'eq',value:'athome-meals-dev.vercel.app'});return {rule}}],
  ['wrong window',()=>{const rule=expectedRule();rule.action.mitigate.rateLimit.window=60;return {rule}}],
+ ['unknown action field',()=>{const rule=expectedRule();rule.action.futureAction=true;return {rule}}],
+ ['unknown mitigate field',()=>{const rule=expectedRule();rule.action.mitigate.futureAction=true;return {rule}}],
+ ['unknown rate-limit field',()=>{const rule=expectedRule();rule.action.mitigate.rateLimit.futureAction=true;return {rule}}],
  ['system bypass',()=>({system:[{result:[{Id:'bypass-sensitive-id'}]}]})],
  ['conditional bypass',()=>({conditional:{rules:[{id:'conditional-sensitive-id'}]}})],
  ['intersecting bypass rule',()=>({rules:[{...expectedRule(),id:'other',name:'other-bypass',action:{mitigate:{action:'bypass'}},conditionGroup:[{conditions:[{type:'method',op:'eq',value:'POST'}]}]}]})],

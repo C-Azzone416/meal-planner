@@ -9,6 +9,9 @@ const paths=Object.freeze(['/api/draft-pairings','/api/draft-pairings/poll'])
 const allowedConditionKeys=new Set(['key','neg','op','type','value'])
 const conditionOps=new Set(['eq','ex','gt','gte','inc','list','lt','lte','neq','nex','ninc','pre','re','sub','suf'])
 const conditionTypes=new Set(['bot_category','bot_name','bot_protection','bot_status','cookie','domain_environment','environment','geo_as_number','geo_city','geo_continent','geo_country','geo_country_region','header','host','ip_address','ja3_digest','ja4_digest','method','path','protocol','query','rate_limit_api_id','raw_path','region','response_code','response_header','route','ruleset','scheme','server_action','shared_condition','target_path','traffic_source','trusted_source','user_agent'])
+const actionKeys=new Set(['mitigate'])
+const mitigateKeys=new Set(['action','actionDuration','bypassSystem','logHeaders','rateLimit','redirect'])
+const rateLimitKeys=new Set(['action','algo','keys','limit','window'])
 const boundedJSON=async response=>{
  assert.equal(response.status,200)
  const raw=await response.text();assert.ok(Buffer.byteLength(raw)>0&&Buffer.byteLength(raw)<=1024*1024)
@@ -33,7 +36,6 @@ const validProviderCondition=condition=>{
  return value===undefined||typeof value==='string'||(typeof value==='number'&&Number.isFinite(value))||
   (Array.isArray(value)&&value.every(item=>typeof item==='string'))
 }
-const values=value=>Array.isArray(value)?value:[value]
 const conditionToken=condition=>{
  exactKeys(condition,allowedConditionKeys)
  assert.ok(condition.key===undefined||condition.key==='')
@@ -52,30 +54,37 @@ const expectedRule=rule=>{
   const group=rule.conditionGroup[0];assert.deepEqual(Object.keys(group),['conditions'])
   assert.ok(Array.isArray(group.conditions)&&group.conditions.length===3)
   assert.deepEqual(group.conditions.map(conditionToken).sort(),['environment','method','paths'])
-  const mitigate=rule.action?.mitigate;assert.ok(mitigate&&typeof mitigate==='object'&&!Array.isArray(mitigate))
+  exactKeys(rule.action,actionKeys)
+  const mitigate=rule.action.mitigate;exactKeys(mitigate,mitigateKeys)
   assert.equal(mitigate.action,'rate_limit');assert.ok(mitigate.bypassSystem===undefined||mitigate.bypassSystem===null||mitigate.bypassSystem===false)
+  assert.ok(mitigate.actionDuration===undefined||mitigate.actionDuration===null||typeof mitigate.actionDuration==='string')
   assert.ok(mitigate.redirect===undefined||mitigate.redirect===null)
   assert.ok(mitigate.logHeaders===undefined||(Array.isArray(mitigate.logHeaders)&&mitigate.logHeaders.length===0))
-  const rate=mitigate.rateLimit;assert.ok(rate&&typeof rate==='object'&&!Array.isArray(rate))
+  const rate=mitigate.rateLimit;exactKeys(rate,rateLimitKeys)
   assert.equal(rate.action,'rate_limit');assert.equal(rate.algo,'fixed_window')
   assert.deepEqual(rate.keys,['ip']);assert.equal(rate.limit,150);assert.equal(rate.window,600)
   return true
  }catch{return false}
 }
+const fold=value=>value.toLowerCase()
+const comparableValues=condition=>{
+ if(condition.op==='eq'||condition.op==='neq')return typeof condition.value==='string'?[fold(condition.value)]:null
+ if(condition.op==='inc'||condition.op==='ninc')return Array.isArray(condition.value)&&condition.value.every(item=>typeof item==='string')?condition.value.map(fold):null
+ return null
+}
 const disjointScalar=(condition,type,target)=>{
  if(condition.type!==type||condition.neg===true||!(condition.key===undefined||condition.key===''))return false
- const list=values(condition.value)
- if(condition.op==='eq')return list.length===1&&!list.includes(target)
- if(condition.op==='inc')return !list.includes(target)
- if(condition.op==='neq')return list.includes(target)
- if(condition.op==='ninc')return list.includes(target)
+ const list=comparableValues(condition);if(!list)return false
+ const folded=fold(target)
+ if(condition.op==='eq'||condition.op==='inc')return !list.includes(folded)
+ if(condition.op==='neq'||condition.op==='ninc')return list.includes(folded)
  return false
 }
 const disjointPaths=condition=>{
  if(condition.type!=='path'||condition.neg===true||!(condition.key===undefined||condition.key===''))return false
- const list=values(condition.value)
- if(condition.op==='eq'||condition.op==='inc')return paths.every(path=>!list.includes(path))
- if(condition.op==='neq'||condition.op==='ninc')return paths.every(path=>list.includes(path))
+ const list=comparableValues(condition);if(!list)return false
+ if(condition.op==='eq'||condition.op==='inc')return paths.every(path=>!list.includes(fold(path)))
+ if(condition.op==='neq'||condition.op==='ninc')return paths.every(path=>list.includes(fold(path)))
  return false
 }
 const mayIntersect=rule=>{
