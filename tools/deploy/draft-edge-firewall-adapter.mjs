@@ -92,6 +92,7 @@ export async function inspectDraftEdgeFirewall(approved,request,nowMs){
  const config=await boundedJSON(await request(`https://api.vercel.com/v1/security/firewall/config/active?${query}`))
  assert.equal(config.ownerId,approved.accountId);assert.equal(config.projectKey,approved.projectId)
  assert.equal(typeof config.firewallEnabled,'boolean');assert.ok(Array.isArray(config.rules))
+ for(const rule of config.rules)assert.equal(typeof rule?.active,'boolean','Malformed custom-rule activity state')
  const named=config.rules.filter(rule=>rule?.name===draftEdgeRules[0].name)
  const compliant=named.length===1&&expectedRule(named[0])
  const otherActions=new Set(config.rules.filter(rule=>rule!==named[0]&&mayIntersect(rule)).map(safeAction))
@@ -106,9 +107,14 @@ export async function inspectDraftEdgeFirewall(approved,request,nowMs){
   const suffix=offset?`&offset=${encodeURIComponent(offset)}`:''
   const page=await boundedJSON(await request(`https://api.vercel.com/v1/security/firewall/bypass?${query}&projectScope=true&limit=100${suffix}`))
   assert.ok(Array.isArray(page.result));if(page.result.length)bypassKinds.add('system')
-  const next=page.result.length===100?page.pagination?.Id:undefined
-  if(next!==undefined){assert.equal(typeof next,'string');assert.ok(next&&next!==offset)}
-  offset=next??''
+  let next=''
+  if(Object.hasOwn(page,'pagination')){
+   assert.ok(page.pagination&&typeof page.pagination==='object'&&!Array.isArray(page.pagination))
+   assert.equal(page.pagination.OwnerId,approved.accountId)
+   assert.equal(typeof page.pagination.Id,'string');assert.ok(page.pagination.Id&&page.pagination.Id!==offset)
+   next=page.pagination.Id
+  }
+  offset=next
  }while(offset)
 
  const bypasses=[...bypassKinds].sort().map(kind=>({kind}))

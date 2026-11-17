@@ -61,9 +61,27 @@ for(const [name,mutate] of [
 
 test('system bypass pagination is bounded and redacts bypass counts and identifiers',async()=>{
  const first=Array.from({length:100},(_,i)=>({Id:`b${i}`}))
- const result=await inspectDraftEdgeFirewall(approved,requestFor({system:[{result:first,pagination:{Id:'next'}},{result:[{Id:'last'}]}]}),now)
+ const result=await inspectDraftEdgeFirewall(approved,requestFor({system:[{result:first,pagination:{Id:'next',OwnerId:approved.accountId}},{result:[{Id:'last'}]}]}),now)
  assert.deepEqual(JSON.parse(result.evidence).bypasses,[{kind:'system'}])
  assert.doesNotMatch(result.evidence,/b99|last|next/)
+})
+
+test('short system-bypass page follows its authenticated continuation cursor',async()=>{
+ const result=await inspectDraftEdgeFirewall(approved,requestFor({system:[{result:[],pagination:{Id:'next',OwnerId:approved.accountId}},{result:[{Id:'hidden'}]}]}),now)
+ assert.deepEqual(JSON.parse(result.evidence).bypasses,[{kind:'system'}])
+ assert.throws(()=>verifyDraftEdgeFirewallEvidence(result.evidence,result.sha256,approved,now+1))
+})
+
+for(const [name,system] of [
+ ['repeated cursor',[{result:[],pagination:{Id:'same',OwnerId:approved.accountId}},{result:[],pagination:{Id:'same',OwnerId:approved.accountId}}]],
+ ['null pagination',[{result:[],pagination:null}]],
+ ['wrong pagination owner',[{result:[],pagination:{Id:'next',OwnerId:'team_Other'}}]],
+ ['empty cursor',[{result:[],pagination:{Id:'',OwnerId:approved.accountId}}]],
+])test(`adapter rejects ${name}`,async()=>assert.rejects(()=>inspectDraftEdgeFirewall(approved,requestFor({system}),now)))
+
+test('system-bypass pagination has a hard page bound',async()=>{
+ const system=Array.from({length:100},(_,i)=>({result:[],pagination:{Id:`page-${i+1}`,OwnerId:approved.accountId}}))
+ await assert.rejects(()=>inspectDraftEdgeFirewall(approved,requestFor({system}),now),/pagination exceeded bound/)
 })
 
 for(const [name,request] of [
@@ -71,6 +89,7 @@ for(const [name,request] of [
  ['wrong firewall owner',async url=>response(url.includes('/v9/projects/')?{id:approved.projectId,accountId:approved.accountId}:{ownerId:'team_Other',projectKey:approved.projectId,firewallEnabled:true,rules:[]})],
  ['provider failure',async()=>({status:403,text:async()=>'FAKE_SECRET_PROVIDER_RESPONSE'})],
  ['oversize response',async()=>({status:200,text:async()=>'{'.repeat(1024*1024+1)})],
+ ['malformed custom-rule activity',requestFor({rules:[{...expectedRule(),name:'schema-drift',active:undefined}]})],
 ])test(`adapter rejects ${name}`,async()=>assert.rejects(()=>inspectDraftEdgeFirewall(approved,request,now)))
 
 test('consumer rejects stale, future, altered and cross-project evidence',async()=>{
