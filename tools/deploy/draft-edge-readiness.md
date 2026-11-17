@@ -11,7 +11,8 @@ plan, not merely the expected rule.
 `verifyDraftEdgeObservation` accepts only:
 
 - the Hobby plan and its one shared Preview-environment, exact-host, POST-only
-  rule matching exactly the create and poll paths;
+  rule using the `Is any of` operator to match exactly the create and poll
+  paths, with hostname, method and environment combined by AND;
 - 150 requests per provider-derived source IP per ten-minute fixed window;
 - fixed-window, provider-derived source-IP keys and 429 before invocation;
 - no bypass, other intersecting rule or Production effect;
@@ -33,6 +34,19 @@ Shared-address clients can throttle each other. The 15-second function limit is
 an execution ceiling, not proof of a request-upload deadline. Preview acceptance
 must exercise 429 behavior and the intended client; Production remains out of
 scope.
+
+IP rotation and cross-region traffic can multiply the allowed rate. At 150 per
+ten minutes, one stable IP can be allowed 21,600 matching requests per day in
+each region. The application creation caps bound durable row growth but not
+random poll compute, so this is an availability and free-allowance tradeoff,
+not a global spend cap.
+
+Vercel recommends first observing a custom rule with a non-blocking Log action.
+That phase may use the exact conditions only while every draft gate remains
+closed. It is not accepted by `verifyDraftEdgeObservation`; the final 429 action
+must be independently observed after conversion. A 429 ends the current
+polling attempt with no immediate retry. Do not depend on a `Retry-After`
+header, which the current provider documentation does not promise.
 
 Verification:
 

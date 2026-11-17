@@ -34,6 +34,12 @@ polling every five seconds for the full ten-minute pairing lifetime uses at
 most 120 polls plus one create, leaving 29 requests for retry and timing
 headroom. Multiple clients behind one address share that budget.
 
+Vercel's rule reference supports `Environment`, `Hostname`, `Method` and
+`Request Path` conditions, and the exact-value `Is any of` path operator. Use
+that operator for the two paths, with the other conditions combined by AND;
+do not substitute a prefix or regular expression. Both paths consequently
+consume the same threshold and counter key.
+
 The shared rule intentionally cannot give creation and polling independent
 budgets. A source can spend all 150 requests on creates, and distributed or
 multi-region traffic can exceed one regional counter. Application-side pairing
@@ -53,6 +59,16 @@ slowdown, bounded handler/database deadlines, two database connections per warm
 instance, high-entropy pairing credentials and the 15-second function ceiling
 reduce work but are not a global distributed-abuse defense. Never raise a cap
 or add a bypass reactively; keep the routes closed and investigate.
+
+IP rotation evades an IP-keyed threshold, and traffic reaching more than one
+Vercel region receives a separate counter in each region. At the configured
+rate a single stable IP can be allowed up to 21,600 matching requests per day
+per region; about 47 such IPs can collectively exceed Hobby's included one
+million allowed requests. The WAF is therefore not a spend cap. The creation
+caps bound pairing-row storage, but random poll traffic can still consume
+function and database allowance without creating a row. For this fake-data
+trial the accepted failure is temporary unavailability or exhausted free
+allowance, not silent expansion to real data or a paid plan.
 
 The setup receipt last verified this project in a personal Hobby account on
 November 1. A read-only recheck on November 16 found no local
@@ -76,6 +92,21 @@ two exact function limits. A future authenticated firewall adapter remains a
 prerequisite: plan verification does not authorize publishing the rule,
 deploying, enabling a source/runtime gate, cleaning retained rows or touching
 Production.
+
+Vercel recommends testing a custom rule with a Log action first. If Caroline
+later authorizes that provider change, use the exact final conditions and
+threshold in Log mode only while all source/runtime gates remain closed. Send a
+bounded synthetic request sequence, observe one ten-minute window, then replace
+the same rule's follow-up action with 429 and obtain fresh authenticated
+evidence. Log mode does not block and is never activation evidence. A 429 is a
+stop condition: the client must stop polling rather than retry aggressively,
+retain no new credential, and begin a fresh pairing only after the fixed window
+has cleared. Vercel's current rate-limit documentation does not promise a
+`Retry-After` header, so the client and runbook must not depend on one.
+
+Provider references verified November 16, 2026: [WAF rate limiting](https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting),
+[rule configuration](https://vercel.com/docs/vercel-firewall/vercel-waf/rule-configuration),
+and [custom-rule Log guidance](https://vercel.com/docs/vercel-firewall/vercel-waf/custom-rules).
 
 The code-only function prerequisite is now prepared: `vercel.json` assigns a
 15-second `maxDuration` to exactly the create and poll entrypoints, ahead of the
@@ -147,10 +178,17 @@ plan. Approval of one packet does not authorize the next.
 
 ### 2. Preview edge and function settings
 
-- Publish one Preview-only, exact-host, POST-only fixed-window rule matching
+- With every draft gate closed, optionally publish the exact rule first with a
+  non-blocking Log follow-up, run only the bounded synthetic match rehearsal,
+  and review one ten-minute observation. This is a separate live-setting
+  approval and does not authorize activation.
+- Publish (or convert that same rule to) one Preview-only, exact-host, POST-only
+  fixed-window rule matching
   only `/api/draft-pairings` and `/api/draft-pairings/poll`, at 150 requests per
   provider-derived source IP per ten minutes. It must return 429 before function
   invocation. Do not add a bypass or another intersecting rule.
+- Exercise one controlled 429, verify the client stops without immediate retry,
+  and wait for the window to clear before starting a new synthetic pairing.
 - Set a 15-second ceiling only for the create and poll pairing functions. Verify
   no intersecting broad rule, bypass or Production effect.
 - Retrieve the resulting state through the authenticated clean adapter and

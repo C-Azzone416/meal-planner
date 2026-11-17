@@ -184,6 +184,8 @@ publication, function configuration and any paid usage are owner-approved live
 provider changes and were not performed here.
 
 Provider references reviewed November 16, 2026: [WAF rate limiting](https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting),
+[rule configuration](https://vercel.com/docs/vercel-firewall/vercel-waf/rule-configuration),
+[custom-rule Log guidance](https://vercel.com/docs/vercel-firewall/vercel-waf/custom-rules),
 [function duration configuration](https://vercel.com/docs/functions/configuring-functions/duration),
 and [function payload limits](https://vercel.com/docs/functions/limitations).
 
