@@ -3,11 +3,11 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import {canonical,digest,inventory,migrations,relations,createReadiness,verifyReadiness,verifyObservation,parseCanonicalRecord} from './migration-readiness.mjs'
+import {canonical,digest,inventory,migrationFiles,migrations,relations,createReadiness,verifyReadiness,verifyObservation,parseCanonicalRecord} from './migration-readiness.mjs'
 const clone=x=>JSON.parse(JSON.stringify(x))
 const now=1800000000000
 function fixture(){
- const files=Object.values(migrations).sort().map(p=>({path:p,sha256:'a'.repeat(64)})), inv={files,sha256:digest(canonical(files))}
+ const files=[...migrationFiles].sort().map(p=>({path:p,sha256:'a'.repeat(64)})), inv={files,sha256:digest(canonical(files))}
  const observations={}
  for(const c of Object.keys(migrations)) observations[c]={serverMajor:18,databaseName:'preview',runtimeRole:c+'_runtime',databasePrivileges:{CONNECT:true,CREATE:false,TEMPORARY:true},databaseGrantOptions:{CONNECT:false,CREATE:false,TEMPORARY:false},unrelatedAccess:[],securityDefinerAccess:[],schemaCreateAccess:[],role:{superuser:false,createRole:false,createDatabase:false,replication:false,bypassRls:false,login:true,memberships:[],adminOptions:[]},relations:relations[c].map(name=>({name,kind:'r',ownerIsRuntime:false,rowSecurity:false,forceRowSecurity:false,triggers:[],rules:[],policies:[],columns:[{name:'id',type:'text',grantOptions:{SELECT:false,INSERT:false,UPDATE:false,REFERENCES:false},privileges:{SELECT:true,INSERT:true,UPDATE:true,REFERENCES:false},publicPrivileges:{SELECT:false,INSERT:false,UPDATE:false,REFERENCES:false}}],constraints:[],indexes:[],privileges:{SELECT:true,INSERT:true,UPDATE:true,DELETE:false,TRUNCATE:false,REFERENCES:false,TRIGGER:false,MAINTAIN:false},grantOptions:{SELECT:false,INSERT:false,UPDATE:false,DELETE:false,TRUNCATE:false,REFERENCES:false,TRIGGER:false,MAINTAIN:false},schemaGrantOptions:{USAGE:false,CREATE:false},schemaPrivileges:{USAGE:true,CREATE:false},publicPrivileges:{SELECT:false,INSERT:false,UPDATE:false,DELETE:false,TRUNCATE:false,REFERENCES:false,TRIGGER:false,MAINTAIN:false},schemaPublicPrivileges:{CREATE:false}}))}
  const plan={version:1,target:'preview',projectId:'prj_test',databaseBranchId:'br_test',sourceSha:'b'.repeat(40),inventorySha256:inv.sha256,policySha256:'c'.repeat(64),feedback:true,draft:true,components:{}}
@@ -33,7 +33,7 @@ test('reject untrusted digest, expiry, wrong provider',()=>{const f=fixture();co
 test('inventory exact, checksum bound, rejects unknown/missing/link sources',()=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'readiness-'))
  try {
- for(const p of Object.values(migrations)){fs.mkdirSync(path.dirname(path.join(root,p)),{recursive:true});fs.writeFileSync(path.join(root,p),'-- synthetic\n')}
+ for(const p of migrationFiles){fs.mkdirSync(path.dirname(path.join(root,p)),{recursive:true});fs.writeFileSync(path.join(root,p),'-- synthetic\n')}
  const first=inventory(root);fs.appendFileSync(path.join(root,migrations.feedback),'-- changed\n');assert.notEqual(inventory(root).sha256,first.sha256)
  fs.writeFileSync(path.join(root,'migrations/999_unknown.sql'),'x');assert.throws(()=>inventory(root));fs.unlinkSync(path.join(root,'migrations/999_unknown.sql'))
  fs.unlinkSync(path.join(root,migrations.feedback));assert.throws(()=>inventory(root));fs.symlinkSync(path.join(root,migrations.recipes),path.join(root,migrations.feedback));assert.throws(()=>inventory(root))

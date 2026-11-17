@@ -19,8 +19,10 @@ export function inspectRuntimeConfig(raw){
  }
  assert.deepEqual(selected,expectedRuntime)
  assert.ok(!all.has('FRAMEBRIAR_BUILD_SHA'),'Legacy runtime SHA must be removed, not reused')
- // Existing guard rejects all draft settings; absence guarantees this selected disabled mode.
- assert.ok(![...all].some(name=>name.startsWith('MEAL_DRAFT_INGEST_')))
+ // Closed readiness mode rejects the whole draft namespace, including pairing,
+ // workflow, membership-epoch and legacy-ingest settings. A future enabled plan
+ // must replace this with independently reviewed exact values and role snapshots.
+ assert.ok(![...all].some(name=>name.startsWith('MEAL_DRAFT_')))
  return runtimeDigest
 }
 if(process.argv[1]&&process.argv[1].endsWith('/readiness-runtime-config.mjs')){

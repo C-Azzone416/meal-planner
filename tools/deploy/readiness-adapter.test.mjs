@@ -25,6 +25,16 @@ test('synthetic clean observer to authenticated digest to consumer',()=>{
  assert.ok(!r.record.includes('FAKE_SECRET'));assert.equal(r.sha256.length,64)
  assert.equal(consume({...i,record:r.record,expectedDigest:r.sha256,now:11000}).sourceSha,i.sourceSha)
 })
+test('recognized draft migration bytes remain checksum-only in closed mode',()=>{
+ const i=input(),plan=planFor(i.map,i.baseline,i.sourceInventory,i.sourceSha)
+ assert.deepEqual(i.sourceInventory.files.map(file=>file.path),[
+  'hosted/migrations/001_recipes.sql','hosted/migrations/004_draft_ingest.sql',
+  'hosted/migrations/005_draft_pairing.sql','hosted/migrations/006_draft_review_workflow.sql',
+  'migrations/002_framebriar.sql',
+ ])
+ assert.deepEqual(Object.keys(plan.components).sort(),['feedback','recipes'])
+ assert.equal(plan.draft,false)
+})
 for(const [name,mutate] of [
  ['runtime other project',i=>i.runtimeEvidence.projectId='prj_Other'],['wrong branch',i=>i.map.neonBranchId='br-other'],['wrong host',i=>i.map.endpointHost='ep-other.us-east-1.aws.neon.tech'],['wrong project',i=>i.map.vercelProjectId='prj_Other'],['wrong source',i=>i.sourceSha='b'.repeat(40)],['expired record',i=>i.now=10000+15*60*1000],['future runtime',i=>i.runtimeEvidence.observedAtMs=10001],['wrong runtime',i=>i.runtimeEvidence.digest='0'.repeat(64)],
 ])test(`consumer rejects ${name}`,()=>{

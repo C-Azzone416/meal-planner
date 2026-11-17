@@ -9,6 +9,11 @@ export const migrations = Object.freeze({
  feedback: 'migrations/002_framebriar.sql',
  draft: 'hosted/migrations/004_draft_ingest.sql',
 })
+export const migrationFiles = Object.freeze([
+ ...Object.values(migrations),
+ 'hosted/migrations/005_draft_pairing.sql',
+ 'hosted/migrations/006_draft_review_workflow.sql',
+])
 export const relations = Object.freeze({
  recipes: ['meal_planner.recipe_creates','meal_planner.recipe_updates','meal_planner.recipes','meal_planner.schema_migrations'],
  feedback: ['public.framebriar_enrollments'],
@@ -41,7 +46,7 @@ export function inventory(root) {
   walk(target,dir)
  }
  found.sort((a,b)=>a.path.localeCompare(b.path,'en'))
- assert.deepEqual(found.map(x=>x.path).sort(),Object.values(migrations).sort(),'unknown/missing migration: review inventory policy')
+ assert.deepEqual(found.map(x=>x.path).sort(),[...migrationFiles].sort(),'unknown/missing migration: review inventory policy')
  return {files:found,sha256:digest(canonical(found))}
 }
 export function validatePlan(plan) {

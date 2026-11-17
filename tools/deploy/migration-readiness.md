@@ -14,16 +14,21 @@ roles, connect to a live database, or authorize a deployment.
 
 ## Trust and exact data flow
 
-1. A trusted workflow revision, not target code, inventories all three known
-   migration files (recipe 001, feedback 002, draft-ingest 004). Unknown/missing
-   files, links, and nonregular files fail. All checksums bind even disabled
-   features. `inventory(root)` computes the digest from exact source bytes;
-   the caller must bind the root to the authenticated reviewed Git commit.
+1. A trusted workflow revision, not target code, inventories all five known
+   migration files (recipe 001, feedback 002, draft-ingest 004, draft-pairing
+   005, and draft-review 006). Unknown/missing files, links, and nonregular files
+   fail. All checksums bind even disabled features. `inventory(root)` computes
+   the digest from exact source bytes; the caller must bind the root to the
+   authenticated reviewed Git commit. Pairing 005 and review 006 are currently
+   checksum-bound only: this does not claim they were applied or that a runtime
+   role policy was approved. Their schema/grant observations stay unavailable
+   until the separate pairing/workflow role design is reviewed.
 2. The independently reviewed plan binds exact source SHA, Vercel project ID,
    Neon branch ID, inventory hash, schema-policy hash, Preview target, and actual
    deployed feature flags. Recipes are always required. Disabled feedback or
-   draft-ingest can omit their DB observations only when the clean deployment
-   adapter proves the corresponding runtime/build configuration is disabled.
+   draft features can omit their DB observations only when the clean deployment
+   adapter proves the corresponding runtime/build configuration is disabled;
+   current closed mode rejects every `MEAL_DRAFT_*` runtime setting.
    A target-provided flag is not proof. Existing Go configuration returns before
    constructing those stores when disabled; provider runtime settings must also
    match the plan. No production mode exists in this contract.
