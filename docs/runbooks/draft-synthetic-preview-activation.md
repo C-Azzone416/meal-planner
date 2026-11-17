@@ -128,8 +128,12 @@ GitHub workflow selection cannot prevent Vercel's separate Git integration from
 deploying the branch push. Before the first push of this branch, a fresh
 owner-approved run of the plan adapter must report `gitIntegration` as
 `disconnected`. `verifyDraftNoDeployAdmission` combines that authenticated,
-less-than-15-minute observation with the exact local source SHA and the workflow
-source contract. A connected, malformed, stale, altered or cross-project
+less-than-15-minute observation with the exact local source SHA, the workflow
+source contract and a SHA-256 digest of the inspected workflow bytes. The clean
+protected handoff must derive that workflow digest from
+`.github/workflows/ci.yml` in the exact source-SHA checkout; a caller-supplied
+SHA and digest are not self-authenticating. A connected, malformed, stale,
+altered, workflow-mismatched or cross-project
 observation blocks the push. The historical November 1 note that Git integration
 was disconnected is not current evidence. Do not push merely to discover the
 state, and do not disable or reconnect Git integration under this preparation.
