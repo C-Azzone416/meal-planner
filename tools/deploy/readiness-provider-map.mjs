@@ -1,26 +1,33 @@
 // No network or provider settings. An operator independently verifies this map.
 import assert from 'node:assert/strict'
-const keys=['version','target','vercelProjectId','neonProjectId','neonBranchId','endpointHost','databaseName','inspectorRole','recipeRuntimeRole','feedbackRuntimeRole','postgresMajor','feedback','draft']
+const closedKeys=['version','target','vercelProjectId','neonProjectId','neonBranchId','endpointHost','databaseName','inspectorRole','recipeRuntimeRole','feedbackRuntimeRole','postgresMajor','feedback','draft']
+const syntheticDraftKeys=[...closedKeys,'draftRuntimeRole']
 const identifier=x=>assert.match(x??'',/^[A-Za-z_][A-Za-z0-9_-]{0,62}$/)
 export function validateProviderMap(map){
  assert.ok(map&&typeof map==='object'&&!Array.isArray(map))
+ assert.equal(typeof map.draft,'boolean')
+ const keys=map.draft?syntheticDraftKeys:closedKeys
  assert.deepEqual(Object.keys(map).sort(),keys.toSorted())
  assert.equal(map.version,1);assert.equal(map.target,'preview')
  assert.match(map.vercelProjectId??'',/^prj_[A-Za-z0-9]+$/)
  assert.match(map.neonProjectId??'',/^[a-z0-9][a-z0-9-]{1,127}$/)
  assert.match(map.neonBranchId??'',/^br-[a-z0-9-]{1,125}$/)
  assert.match(map.endpointHost??'',/^ep-[a-z0-9-]+(?:\.[a-z0-9-]+)*\.neon\.tech$/)
- for(const k of ['databaseName','inspectorRole','recipeRuntimeRole','feedbackRuntimeRole'])identifier(map[k])
- assert.equal(new Set([map.inspectorRole,map.recipeRuntimeRole,map.feedbackRuntimeRole]).size,3)
+ const roles=['inspectorRole','recipeRuntimeRole','feedbackRuntimeRole',...(map.draft?['draftRuntimeRole']:[])]
+ for(const k of ['databaseName',...roles])identifier(map[k])
+ assert.equal(new Set(roles.map(k=>map[k])).size,roles.length)
  assert.equal(map.postgresMajor,18,'Only independently tested PostgreSQL major supported')
  assert.equal(map.feedback,true,'This adapter selects enabled feedback')
- assert.equal(map.draft,false,'Draft activation is a separate deployment')
  return map
 }
 export function parseProviderMap(raw){
  assert.equal(typeof raw,'string');assert.ok(raw.length>0&&Buffer.byteLength(raw)<=8192)
+ // Every allowed key and value is restricted to unescaped ASCII below. Reject
+ // escapes before parsing so an escaped duplicate cannot override a visible key.
+ assert.ok(!raw.includes('\\'),'Escaped provider-map tokens are not allowed')
  const map=JSON.parse(raw);validateProviderMap(map)
  // Strict duplicate-key detection without requiring operator key ordering.
+ const keys=map.draft?syntheticDraftKeys:closedKeys
  const names=[...raw.matchAll(/"([A-Za-z][A-Za-z0-9]*)"\s*:/g)].map(m=>m[1])
  assert.deepEqual(names.toSorted(),keys.toSorted(),'Unexpected, escaped or duplicate keys')
  return map

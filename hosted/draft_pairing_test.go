@@ -9,39 +9,51 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakePairingRepo struct {
-	created    DraftPairingCreated
-	poll       DraftPairingPollResult
-	pollErr    error
-	approveErr error
-	grants     []DraftGrantSummary
-	revokeErr  error
-	createIn   DraftPairingCreateRequest
-	pollIn     DraftPairingPollRequest
-	approveIn  DraftPairingApproveRequest
-	owner      RecipeOwner
-	revoked    string
+	created     DraftPairingCreated
+	createErr   error
+	poll        DraftPairingPollResult
+	pollErr     error
+	approveErr  error
+	grants      []DraftGrantSummary
+	revokeErr   error
+	createIn    DraftPairingCreateRequest
+	pollIn      DraftPairingPollRequest
+	approveIn   DraftPairingApproveRequest
+	owner       RecipeOwner
+	revoked     string
+	deadline    time.Time
+	hasDeadline bool
 }
 
-func (f *fakePairingRepo) CreatePairing(_ context.Context, _ DraftPairingConfig, in DraftPairingCreateRequest) (DraftPairingCreated, error) {
-	f.createIn = in
-	return f.created, nil
+func (f *fakePairingRepo) observeDeadline(ctx context.Context) {
+	f.deadline, f.hasDeadline = ctx.Deadline()
 }
-func (f *fakePairingRepo) PollPairing(_ context.Context, _ DraftPairingConfig, in DraftPairingPollRequest) (DraftPairingPollResult, error) {
+func (f *fakePairingRepo) CreatePairing(ctx context.Context, _ DraftPairingConfig, in DraftPairingCreateRequest) (DraftPairingCreated, error) {
+	f.observeDeadline(ctx)
+	f.createIn = in
+	return f.created, f.createErr
+}
+func (f *fakePairingRepo) PollPairing(ctx context.Context, _ DraftPairingConfig, in DraftPairingPollRequest) (DraftPairingPollResult, error) {
+	f.observeDeadline(ctx)
 	f.pollIn = in
 	return f.poll, f.pollErr
 }
-func (f *fakePairingRepo) ApprovePairing(_ context.Context, _ DraftPairingConfig, _ UserIdentity, in DraftPairingApproveRequest) error {
+func (f *fakePairingRepo) ApprovePairing(ctx context.Context, _ DraftPairingConfig, _ UserIdentity, in DraftPairingApproveRequest) error {
+	f.observeDeadline(ctx)
 	f.approveIn = in
 	return f.approveErr
 }
-func (f *fakePairingRepo) ListDraftGrants(_ context.Context, _ DraftPairingConfig, owner RecipeOwner) ([]DraftGrantSummary, error) {
+func (f *fakePairingRepo) ListDraftGrants(ctx context.Context, _ DraftPairingConfig, owner RecipeOwner) ([]DraftGrantSummary, error) {
+	f.observeDeadline(ctx)
 	f.owner = owner
 	return f.grants, nil
 }
-func (f *fakePairingRepo) RevokeDraftGrant(_ context.Context, _ DraftPairingConfig, owner RecipeOwner, id string) error {
+func (f *fakePairingRepo) RevokeDraftGrant(ctx context.Context, _ DraftPairingConfig, owner RecipeOwner, id string) error {
+	f.observeDeadline(ctx)
 	f.owner, f.revoked = owner, id
 	return f.revokeErr
 }
@@ -73,6 +85,31 @@ func TestDraftGrantOwnerLockKeyIsTextSafeAndUnambiguous(t *testing.T) {
 	}
 }
 
+func TestDraftPairingCreateLockKeyAndCapacityAreFailClosed(t *testing.T) {
+	a, err := draftPairingCreateLockKey("preview", "ab:c")
+	if err != nil || !json.Valid([]byte(a)) || strings.ContainsRune(a, '\x00') {
+		t.Fatalf("unsafe lock key %q: %v", a, err)
+	}
+	b, err := draftPairingCreateLockKey("preview:ab", "c")
+	if err != nil || a == b {
+		t.Fatalf("ambiguous lock keys %q %q: %v", a, b, err)
+	}
+	for _, tc := range []struct {
+		active, hourly, retained int
+		want                     bool
+	}{
+		{0, 0, 0, true},
+		{maxActiveDraftPairings - 1, maxHourlyDraftPairings - 1, maxRetainedPairings - 1, true},
+		{maxActiveDraftPairings, 0, 0, false},
+		{0, maxHourlyDraftPairings, 0, false},
+		{0, 0, maxRetainedPairings, false},
+	} {
+		if got := draftPairingCapacityAvailable(tc.active, tc.hourly, tc.retained); got != tc.want {
+			t.Fatalf("capacity(%d,%d,%d)=%v want %v", tc.active, tc.hourly, tc.retained, got, tc.want)
+		}
+	}
+}
+
 func testVerifier() (string, string) {
 	verifier := strings.Repeat("a", 43)
 	h := sha256.Sum256([]byte(verifier))
@@ -81,8 +118,37 @@ func testVerifier() (string, string) {
 
 func jsonRequest(method, path, body string) *http.Request {
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r.Host = draftPreviewHost
 	r.Header.Set("Content-Type", "application/json")
 	return r
+}
+
+func TestPairingPublicEndpointsRejectAlternateHostsAndPathsBeforeRepository(t *testing.T) {
+	verifier, challenge := testVerifier()
+	createBody := `{"code_challenge":"` + challenge + `","code_challenge_method":"S256","client_label":"Synthetic Mac"}`
+	pollBody := `{"pairing_id":"11111111-1111-4111-8111-111111111111","poll_token":"` + strings.Repeat("b", 43) + `","code_verifier":"` + verifier + `"}`
+	for _, tc := range []struct {
+		name, path, host, body string
+		handler                func(DraftPairingRepository, DraftPairingConfig) http.Handler
+	}{
+		{"create generated host", "/api/draft-pairings", "meal-planner-git-test-owner.vercel.app", createBody, DraftPairingCreateHandler},
+		{"create Production-like host", "/api/draft-pairings", "meal-planner.vercel.app", createBody, DraftPairingCreateHandler},
+		{"create trailing slash", "/api/draft-pairings/", draftPreviewHost, createBody, DraftPairingCreateHandler},
+		{"create encoded slash", "/api/draft-pairings%2f", draftPreviewHost, createBody, DraftPairingCreateHandler},
+		{"poll generated host", "/api/draft-pairings/poll", "meal-planner-git-test-owner.vercel.app", pollBody, DraftPairingPollHandler},
+		{"poll trailing slash", "/api/draft-pairings/poll/", draftPreviewHost, pollBody, DraftPairingPollHandler},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &fakePairingRepo{}
+			r := jsonRequest("POST", tc.path, tc.body)
+			r.Host = tc.host
+			w := httptest.NewRecorder()
+			tc.handler(repo, testPairingConfig()).ServeHTTP(w, r)
+			if w.Code != http.StatusNotFound || repo.hasDeadline || strings.Contains(w.Body.String(), draftPreviewHost) {
+				t.Fatalf("status=%d repository=%v body=%s", w.Code, repo.hasDeadline, w.Body.String())
+			}
+		})
+	}
 }
 
 func TestPairingCreateContractAndClosedGates(t *testing.T) {
@@ -112,6 +178,9 @@ func TestPairingCreateContractAndClosedGates(t *testing.T) {
 	}
 	if repo.createIn.CodeChallenge != challenge || repo.createIn.CodeChallengeMethod != "S256" || repo.createIn.ClientLabel != "Caroline's Mac" {
 		t.Fatalf("wrong input: %#v", repo.createIn)
+	}
+	if !repo.hasDeadline || time.Until(repo.deadline) <= 0 || time.Until(repo.deadline) > draftPairingStoreLimit {
+		t.Fatalf("repository call deadline: present=%v remaining=%v", repo.hasDeadline, time.Until(repo.deadline))
 	}
 	var got DraftPairingCreated
 	if json.Unmarshal(w.Body.Bytes(), &got) != nil || got.APIVersion != "local-client-v1" || got.VerificationURI != draftPreviewOrigin+"/connect" || strings.Contains(got.VerificationURI, "?") {
@@ -146,6 +215,17 @@ func TestPairingCreateRejectsAliasDuplicateAndBrowserCrossOrigin(t *testing.T) {
 				t.Fatalf("got %d", w.Code)
 			}
 		})
+	}
+}
+
+func TestPairingCreateCapacityReturnsBounded429(t *testing.T) {
+	_, challenge := testVerifier()
+	repo := &fakePairingRepo{createErr: ErrDraftPairingLimit}
+	body := `{"code_challenge":"` + challenge + `","code_challenge_method":"S256","client_label":"Synthetic Mac"}`
+	w := httptest.NewRecorder()
+	DraftPairingCreateHandler(repo, testPairingConfig()).ServeHTTP(w, jsonRequest("POST", "/api/draft-pairings", body))
+	if w.Code != 429 || !strings.Contains(w.Body.String(), `"code":"pairing_limit"`) || strings.Contains(w.Body.String(), "20") || strings.Contains(w.Body.String(), "500") {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
 }
 

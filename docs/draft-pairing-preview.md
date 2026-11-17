@@ -66,9 +66,27 @@ grant. Cross-owner and absent grant IDs have the same 404 behavior.
 - Provider password reset does **not** revoke these grants. No such claim is made
   until the provider supplies a verified event/session-generation integration.
 - The additive migration is `hosted/migrations/005_draft_pairing.sql`. Application
-  startup never applies it. Dedicated least-privilege roles and a retention job
-  remain tomorrow's reviewed hookup. The unauthenticated create route additionally
-  requires deployment-level request throttling/body deadlines before enablement;
-  the database caps are not a global denial-of-service control.
-- Keychain ACL/signing behavior and private credential storage remain unverified
-  on the actual Mac. No plaintext fallback is authorized.
+  startup never applies it. A synthetic PostgreSQL 18 rehearsal now covers the
+  exact shared draft runtime role across migrations 004/005/006; no live role or
+  grant exists. A retention job remains a separate reviewed hookup. The
+  unauthenticated create and poll routes additionally require the exact
+  Preview-only edge throttles and function deadline described in
+  `draft-workflow-preview.md` before enablement. Poll slowdown protects only a
+  found pairing row; random misses still reach the database without the edge
+  rule. The database caps are not a global denial-of-service control.
+- The one shared draft runtime role can bind pairing owners, insert grants and
+  revoke grants for any owner at the SQL privilege layer. Owner isolation is
+  enforced by the reviewed application predicates, not RLS or endpoint-specific
+  roles. Caroline accepted that whole-service credential scope only for one
+  short, controlled synthetic Preview trial. Real content or wider use requires
+  a split-role, RLS, or narrow-procedure design and a new security review.
+- A bounded ad-hoc Mac canary showed that its exact observer returned no
+  credential after the owner chose Deny. That is user-mediated evidence for two
+  test executables, not distribution-package signing/ACL acceptance, universal
+  unrelated-program denial, lock/cancellation behavior, or final private-storage
+  acceptance. No plaintext fallback is authorized.
+
+The November 16, 2026 decision does not authorize a live change or real content.
+The exact prerequisites, action-time approval packets, restoration steps and
+evidence requirements are recorded in
+[`runbooks/draft-synthetic-preview-activation.md`](runbooks/draft-synthetic-preview-activation.md).

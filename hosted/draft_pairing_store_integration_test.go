@@ -49,6 +49,99 @@ func stringsRepeat(s string, n int) string {
 	return string(b)
 }
 
+func syntheticPairingCreateRequest() DraftPairingCreateRequest {
+	verifier := stringsRepeat("a", 43)
+	h := sha256.Sum256([]byte(verifier))
+	return DraftPairingCreateRequest{CodeChallenge: base64.RawURLEncoding.EncodeToString(h[:]), CodeChallengeMethod: "S256", ClientLabel: "Synthetic Mac"}
+}
+
+func TestDraftPairingPostgresCreateCapacityReopensAfterExpiry(t *testing.T) {
+	s, c := pairingTestStore(t)
+	ctx := context.Background()
+	var first DraftPairingCreated
+	for i := 0; i < maxActiveDraftPairings; i++ {
+		created, err := s.CreatePairing(ctx, c, syntheticPairingCreateRequest())
+		if err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+		if i == 0 {
+			first = created
+		}
+	}
+	if _, err := s.CreatePairing(ctx, c, syntheticPairingCreateRequest()); !errors.Is(err, ErrDraftPairingLimit) {
+		t.Fatalf("expected active cap, got %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE public.draft_pairings SET created_at=instant.now-interval '20 minutes',expires_at=instant.now-interval '10 minutes' FROM (SELECT clock_timestamp() AS now) instant WHERE id=$1`, first.PairingID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreatePairing(ctx, c, syntheticPairingCreateRequest()); err != nil {
+		t.Fatalf("capacity did not reopen after expiry: %v", err)
+	}
+}
+
+func TestDraftPairingPostgresHourlyCreateCapacity(t *testing.T) {
+	s, c := pairingTestStore(t)
+	ctx := context.Background()
+	for i := 0; i < maxHourlyDraftPairings; i++ {
+		created, err := s.CreatePairing(ctx, c, syntheticPairingCreateRequest())
+		if err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+		if _, err = s.db.Exec(`UPDATE public.draft_pairings SET created_at=instant.now-interval '20 minutes',expires_at=instant.now-interval '10 minutes' FROM (SELECT clock_timestamp() AS now) instant WHERE id=$1`, created.PairingID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.CreatePairing(ctx, c, syntheticPairingCreateRequest()); !errors.Is(err, ErrDraftPairingLimit) {
+		t.Fatalf("expected hourly cap, got %v", err)
+	}
+}
+
+func TestDraftPairingPostgresRetainedCreateCapacity(t *testing.T) {
+	s, c := pairingTestStore(t)
+	_, err := s.db.Exec(`INSERT INTO public.draft_pairings
+ (id,environment,issuer,user_code,poll_token_hash,code_challenge,challenge_fingerprint,client_label,status,created_at,expires_at)
+ SELECT ('00000000-0000-4000-8000-'||lpad(i::text,12,'0'))::uuid,$1,$2,NULL,
+        decode(lpad(to_hex(i),64,'0'),'hex'),repeat('a',43),'00000000','Synthetic cap','denied',
+		instant.now-interval '2 hours',instant.now-interval '110 minutes'
+	 FROM generate_series(1,$3) AS i CROSS JOIN (SELECT clock_timestamp() AS now) instant`, c.Environment, c.Issuer, maxRetainedPairings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.CreatePairing(context.Background(), c, syntheticPairingCreateRequest()); !errors.Is(err, ErrDraftPairingLimit) {
+		t.Fatalf("expected retained cap, got %v", err)
+	}
+}
+
+func TestDraftPairingPostgresConcurrentCreateCapacityIsSerialized(t *testing.T) {
+	s, c := pairingTestStore(t)
+	results := make(chan error, maxActiveDraftPairings+5)
+	var wg sync.WaitGroup
+	for i := 0; i < cap(results); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := s.CreatePairing(context.Background(), c, syntheticPairingCreateRequest())
+			results <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+	success, limited := 0, 0
+	for err := range results {
+		switch {
+		case err == nil:
+			success++
+		case errors.Is(err, ErrDraftPairingLimit):
+			limited++
+		default:
+			t.Fatalf("unexpected create result: %v", err)
+		}
+	}
+	if success != maxActiveDraftPairings || limited != 5 {
+		t.Fatalf("success=%d limited=%d", success, limited)
+	}
+}
+
 func TestDraftPairingPostgresLifecycleReplayRevocationAndEpoch(t *testing.T) {
 	s, c := pairingTestStore(t)
 	ctx := context.Background()

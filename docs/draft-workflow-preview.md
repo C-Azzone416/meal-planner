@@ -93,27 +93,129 @@ the closed workflow gates, not evidence of authenticated Preview operation.
 
 The credential-store interface has no plaintext or environment fallback. An
 unwired Darwin+cgo Security.framework adapter exists and non-cgo/non-macOS builds
-fail closed. Automated tests inject a synthetic backend and make no real Keychain
-calls; packaged-binary signing, ACL and other-process behavior remain final hookup
-gates. The receipt ledger contains no recipe content or credentials. Its namespace
-includes exact environment, API origin, account binding, local draft ID, local
-revision and canonical content hash. The compiled Preview profile pins the web
-origin to that same exact origin. An ambiguous retry reuses the same operation
-key. A changed revision or account uses a different namespace.
+fail closed. Automated adapter tests still inject a synthetic backend. A separate
+ad-hoc Mac canary showed that its exact observer returned no credential after the
+owner chose Deny, but that is user-mediated evidence for two test executables,
+not distribution-package signing/ACL acceptance or universal other-process
+behavior. The receipt ledger contains no recipe content or credentials. Its
+namespace includes exact environment, API origin, account binding, local draft
+ID, local revision and canonical content hash. The compiled Preview profile pins
+the web origin to that same exact origin. An ambiguous retry reuses the same
+operation key. A changed revision or account uses a different namespace.
+
+## Completed synthetic Preview prerequisites
+
+The source now includes a disposable PostgreSQL 18 rehearsal for the one shared
+draft runtime role used by `MEAL_DRAFTS_DATABASE_URL`. It applies migrations
+004/005/006, exercises pairing, grant redemption, intent creation, browser
+approval, hosted review and the draft side of recipe save under exact
+column-level grants, and includes all seven draft relations in the immutable
+readiness snapshot. The role cannot read the legacy grant table or recipe/auth/
+unrelated tables, update immutable owner/token fields in stored grants, intents
+or submissions, delete or truncate draft state, or create schemas/tables. Recipe
+storage remains a separate connection and role.
+
+This shared role is least-privilege for the complete draft service, not an
+endpoint or tenant-isolation boundary. It can read every owner's rows in the six
+active draft tables; pairing approval can bind owner fields; redemption can
+insert send grants; and the connection-management path can revoke any grant at
+the SQL privilege layer. Application bearer/origin checks and owner predicates
+enforce the intended routes, and the integration tests exercise cross-owner
+isolation, but there is no RLS or separate endpoint role. A compromised runtime
+credential therefore has this whole-service scope. Caroline accepted that
+residual on November 16, 2026 only for a short, controlled synthetic Preview
+trial. Real recipes, personal content, persistent use or broader membership
+remain blocked until split DSNs/roles, RLS, or narrowly owned procedures receive
+a new security review. The decision does not open a source/runtime gate or
+authorize a live change. The staged approval and restoration boundary is in
+[`runbooks/draft-synthetic-preview-activation.md`](runbooks/draft-synthetic-preview-activation.md).
+
+The same rehearsal forces recipe creation to commit and the subsequent draft
+link update to fail. It verifies one recipe and one create receipt exist while
+the draft stays `ready`; a changed projection conflicts; an identical retry
+links the existing recipe; and another identical retry remains a single recipe
+and receipt. This is synthetic local evidence for the retry-safe saga, not a
+distributed transaction or live Preview proof.
+
+The unauthenticated pairing store calls now receive a ten-second application
+deadline, inside the proposed fifteen-second function execution ceiling. Every
+pairing body remains limited to 8 KiB. Pairing poll/approval and intent-creation
+transactions set an eight-second statement timeout and three-second lock timeout.
+The atomic browser decision begins with twelve-second statement and three-second
+lock timeouts; its approval path then enters hosted-draft insertion, which
+tightens the transaction-local statement timeout to eight seconds. Pairing
+creation and grant listing/revocation are single database calls that rely on the
+ten-second pairing-handler context; hosted review/link similarly rely on the
+twelve-second owner-draft handler context. The unwired
+`AuthenticateDraftProposal` seam has no local timeout and accepts its caller's
+context, so any future caller must supply a bounded context before activation.
+These source limits do not replace an edge throttle or establish an upload
+deadline.
+
+Before activation, the project needs the one rate-limit rule available on
+Vercel Hobby. The shared rule applies across every Preview hostname, is
+POST-only, matches exactly `/api/draft-pairings` and
+`/api/draft-pairings/poll`, and permits 150 requests per provider-derived source
+IP per ten-minute fixed window before returning 429 ahead of function
+invocation. A legitimate client polling every five seconds for the complete
+ten-minute pairing lifetime uses at most 120 polls plus one create, leaving 29
+requests of retry and timing headroom. Do not trust a client forwarding header,
+add a bypass, add a Hostname restriction, broaden either path or scope the rule
+to Production. Vercel gives each deployment a generated URL; limiting the rule
+to the stable alias would leave those Preview URLs unthrottled. The Go handlers
+independently accept only the stable alias and exact unescaped paths, rejecting
+alternate hosts and path variants before repository access.
+
+One shared rule cannot independently constrain creates and polls. The pairing
+store therefore serializes creation per exact environment and issuer and fails
+closed before inserting when there are 20 active open pairings, 60 created in
+the last hour or 500 retained pairing rows. The response is a bounded 429. This
+bounds persistent fake-data growth but accepts an availability tradeoff: an
+attacker can fill a cap and block legitimate pairing until expiry or explicit
+operator cleanup. Never widen a cap under pressure. The poll store's five-second
+slowdown applies only after an existing row is found, so random well-formed
+credentials still cause an indexed database lookup. Vercel counters are per
+region rather than a global distributed-abuse cap, and multiple clients behind
+one shared address consume the same budget. This design is limited to Caroline's
+short, synthetic-only Hobby trial and is not sufficient for personal recipes,
+broader membership or durable public availability.
+The proposed Go function `maxDuration` is 15 seconds, leaving time beyond the
+ten-second store deadline for a bounded response. Current Vercel documentation
+states a 4.5 MB function payload ceiling, far above the application limit, and
+does not establish a configurable per-route upload deadline; that exact provider
+behavior must be verified on Preview before enabling the public route. Firewall
+publication, function configuration and any paid usage are owner-approved live
+provider changes and were not performed here.
+
+Provider references reviewed November 16, 2026: [WAF rate limiting](https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting),
+[rule configuration](https://vercel.com/docs/vercel-firewall/vercel-waf/rule-configuration),
+[custom-rule Log guidance](https://vercel.com/docs/vercel-firewall/vercel-waf/custom-rules),
+[generated deployment URLs](https://vercel.com/docs/deployments/generated-urls),
+[function duration configuration](https://vercel.com/docs/functions/configuring-functions/duration),
+and [function payload limits](https://vercel.com/docs/functions/limitations).
+
+Retention remains a decision, not an implicit cleanup policy. The read-only,
+aggregate inspection and the recommended bounded first synthetic acceptance are
+documented in [`draft-retention-preview.md`](draft-retention-preview.md). No
+destructive job or lifetime was added.
 
 ## Tomorrow's live hookup checklist
 
 1. Independently review the final exact commit and all additive SQL.
-2. Prove real macOS Keychain Security-framework behavior, signing and ACL prompts;
-   run argv/environment/process canaries. Do not add a plaintext fallback.
-3. Create least-privilege Preview-only database roles and apply reviewed
-   migrations manually to a disposable rehearsal before the protected Preview.
-4. Add exact Preview origins and server secrets through the protected owner
+2. Complete the code-only readiness and authenticated edge-adapter prerequisites
+   in [`runbooks/draft-synthetic-preview-activation.md`](runbooks/draft-synthetic-preview-activation.md).
+3. Complete distribution-signed package Keychain acceptance, including lock and
+   cancellation behavior; the bounded ad-hoc Deny pass is not final package
+   evidence. Do not add a plaintext fallback.
+4. Review the completed disposable PostgreSQL 18 role/migration rehearsal, then
+   separately authorize creating the equivalent Preview-only role and applying
+   the reviewed migrations to the protected Preview branch.
+5. Add exact Preview origins and server secrets through the protected owner
    workflow; keep both source and environment feature gates off while verifying.
-5. Verify membership-epoch rotation/removal, grant revocation and old deployment
+6. Verify membership-epoch rotation/removal, grant revocation and old deployment
    retirement. Do not claim provider password-reset revocation.
-6. Enable only the protected Preview, issue only a synthetic test grant, and run
+7. Enable only the protected Preview, issue only a synthetic test grant, and run
    Caroline's end-to-end pairing, direct-MCP consent, retry and account-switch
    acceptance with synthetic recipes.
-7. Disable again and inspect receipts/logs/quotas before considering a longer
+8. Disable again and inspect receipts/logs/quotas before considering a longer
    Preview trial. Production and `main` require a separate decision and review.
