@@ -5,14 +5,14 @@ It does not contact Vercel, publish WAF rules, set function duration, authorize 
 deployment, or open either draft feature gate.
 
 The adapter must independently authenticate the exact Vercel project, reviewed
-source SHA, Preview target and stable hostname. It must return every firewall
+source SHA, Preview target and stable alias. It must return every firewall
 rule intersecting either unauthenticated path, every bypass, and the project
 plan, not merely the expected rule.
 `verifyDraftEdgeObservation` accepts only:
 
-- the Hobby plan and its one shared Preview-environment, exact-host, POST-only
-  rule using the `Is any of` operator to match exactly the create and poll
-  paths, with hostname, method and environment combined by AND;
+- the Hobby plan and its one shared Preview-environment, POST-only rule using
+  the `Is any of` operator to match exactly the create and poll paths across all
+  project Preview hostnames, with no Hostname restriction;
 - 150 requests per provider-derived source IP per ten-minute fixed window;
 - fixed-window, provider-derived source-IP keys and 429 before invocation;
 - no bypass, other intersecting rule or Production effect;
@@ -23,7 +23,11 @@ The normalized object is not self-authenticating. A target-supplied JSON file or
 digest is not evidence. A future adapter must retrieve provider state through an
 owner-approved authenticated channel and attribute the resulting digest through
 the clean readiness handoff. Reinspect after any firewall, function, project,
-hostname or deployment change.
+alias or deployment change. A rule limited to the stable alias is rejected
+because each generated Preview deployment URL would otherwise be an
+edge-throttle bypass. The Go handlers also reject alternate hosts and non-exact
+paths before repository access; this is defense in depth, not a substitute for
+provider coverage.
 
 The rule bounds one source address per provider region, not distributed abuse.
 One five-second poller consumes at most 120 of 150 requests during the
@@ -45,7 +49,8 @@ Vercel recommends first observing a custom rule with a non-blocking Log action.
 That phase may use the exact conditions only while every draft gate remains
 closed. It is not accepted by `verifyDraftEdgeObservation`; the final 429 action
 must be independently observed after conversion. A 429 ends the current
-polling attempt with no immediate retry. Do not depend on a `Retry-After`
+polling attempt, clears its in-memory polling secrets and permits no immediate
+retry. Do not depend on a `Retry-After`
 header, which the current provider documentation does not promise.
 
 Verification:

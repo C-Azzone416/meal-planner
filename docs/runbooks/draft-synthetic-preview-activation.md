@@ -26,8 +26,9 @@ as sufficient for personal recipes, an open public service, paid workloads or
 traffic whose availability matters.
 
 Use the one Hobby rule as a shared budget for both unauthenticated pairing
-entrypoints. It is Preview-environment, exact-host, POST-only, keyed by the
-provider-derived source IP, and matches only `/api/draft-pairings` and
+entrypoints across every hostname for this project's Preview environment. It
+is POST-only, keyed by the provider-derived source IP, and matches only
+`/api/draft-pairings` and
 `/api/draft-pairings/poll`. The fixed-window limit is 150 requests per ten
 minutes, with a 429 before function invocation and no bypass. A normal client
 polling every five seconds for the full ten-minute pairing lifetime uses at
@@ -36,9 +37,14 @@ headroom. Multiple clients behind one address share that budget.
 
 Vercel's rule reference supports `Environment`, `Hostname`, `Method` and
 `Request Path` conditions, and the exact-value `Is any of` path operator. Use
-that operator for the two paths, with the other conditions combined by AND;
-do not substitute a prefix or regular expression. Both paths consequently
-consume the same threshold and counter key.
+that operator for the two paths, with Preview environment and POST method
+combined by AND. Deliberately omit a Hostname condition so Vercel's generated
+deployment URLs cannot bypass the only edge rule. Both paths and every Preview
+hostname consequently consume the same threshold and counter key. The Go
+handlers separately require the stable alias and exact unescaped route, so an
+alternate hostname or normalized/trailing-slash path is rejected before any
+repository call. That defense-in-depth rejection still incurs a function
+invocation; it does not replace all-host edge coverage.
 
 The shared rule intentionally cannot give creation and polling independent
 budgets. A source can spend all 150 requests on creates, and distributed or
@@ -100,13 +106,15 @@ bounded synthetic request sequence, observe one ten-minute window, then replace
 the same rule's follow-up action with 429 and obtain fresh authenticated
 evidence. Log mode does not block and is never activation evidence. A 429 is a
 stop condition: the client must stop polling rather than retry aggressively,
-retain no new credential, and begin a fresh pairing only after the fixed window
-has cleared. Vercel's current rate-limit documentation does not promise a
+clear that attempt's in-memory poll token and verifier, retain no new
+credential, and begin a fresh pairing only after the fixed window has cleared.
+Vercel's current rate-limit documentation does not promise a
 `Retry-After` header, so the client and runbook must not depend on one.
 
 Provider references verified November 16, 2026: [WAF rate limiting](https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting),
 [rule configuration](https://vercel.com/docs/vercel-firewall/vercel-waf/rule-configuration),
-and [custom-rule Log guidance](https://vercel.com/docs/vercel-firewall/vercel-waf/custom-rules).
+[custom-rule Log guidance](https://vercel.com/docs/vercel-firewall/vercel-waf/custom-rules),
+and [generated deployment URLs](https://vercel.com/docs/deployments/generated-urls).
 
 The code-only function prerequisite is now prepared: `vercel.json` assigns a
 15-second `maxDuration` to exactly the create and poll entrypoints, ahead of the
@@ -182,13 +190,18 @@ plan. Approval of one packet does not authorize the next.
   non-blocking Log follow-up, run only the bounded synthetic match rehearsal,
   and review one ten-minute observation. This is a separate live-setting
   approval and does not authorize activation.
-- Publish (or convert that same rule to) one Preview-only, exact-host, POST-only
-  fixed-window rule matching
+- Publish (or convert that same rule to) one Preview-environment, POST-only
+  fixed-window rule, with no Hostname condition, matching
   only `/api/draft-pairings` and `/api/draft-pairings/poll`, at 150 requests per
   provider-derived source IP per ten minutes. It must return 429 before function
   invocation. Do not add a bypass or another intersecting rule.
 - Exercise one controlled 429, verify the client stops without immediate retry,
   and wait for the window to clear before starting a new synthetic pairing.
+- Probe the stable alias, one generated Preview deployment URL, trailing-slash
+  and encoded-path variants, and a Production deployment. Provider evidence
+  must show the edge counter covers both Preview hostnames, the Go handler
+  rejects the generated hostname/path variants before repository access, and
+  Production is unaffected.
 - Set a 15-second ceiling only for the create and poll pairing functions. Verify
   no intersecting broad rule, bypass or Production effect.
 - Retrieve the resulting state through the authenticated clean adapter and

@@ -21,6 +21,7 @@ const (
 
 var (
 	ErrUnavailable       = errors.New("the Preview draft bridge is unavailable")
+	ErrRateLimited       = errors.New("the Preview pairing attempt was rate limited; start a new pairing later")
 	ErrCredentialMissing = errors.New("the Preview send credential is unavailable")
 	ErrInvalidResponse   = errors.New("the Preview draft service returned an invalid response")
 	ErrDenied            = errors.New("the owner denied this draft send")

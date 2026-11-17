@@ -134,6 +134,9 @@ func (c *PairingClient) BeginPairing(ctx context.Context, clientLabel string) (*
 	if response.StatusCode >= 300 && response.StatusCode < 400 {
 		return nil, ErrInvalidResponse
 	}
+	if response.StatusCode == http.StatusTooManyRequests {
+		return nil, ErrRateLimited
+	}
 	if response.StatusCode != http.StatusCreated {
 		return nil, ErrUnavailable
 	}
@@ -168,6 +171,10 @@ func (c *PairingClient) PollPairing(ctx context.Context, session *PairingSession
 	defer response.Body.Close()
 	if response.StatusCode >= 300 && response.StatusCode < 400 {
 		return PairingPollResult{}, ErrInvalidResponse
+	}
+	if response.StatusCode == http.StatusTooManyRequests {
+		session.pollToken, session.codeVerifier = "", ""
+		return PairingPollResult{}, ErrRateLimited
 	}
 	var decoded pairingPollResponse
 	if response.StatusCode == http.StatusAccepted {

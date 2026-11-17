@@ -22,6 +22,7 @@ import (
 const (
 	draftPairingAPIVersion = "local-client-v1"
 	draftPreviewOrigin     = "https://athome-meals-dev.vercel.app"
+	draftPreviewHost       = "athome-meals-dev.vercel.app"
 	draftPairingBodyLimit  = 8 * 1024
 	draftPairingStoreLimit = 10 * time.Second
 	// Source authorization is intentionally separate from runtime configuration.
@@ -163,6 +164,10 @@ func pairingOriginAllowed(r *http.Request, c DraftPairingConfig, browser bool) b
 	return !present || (len(origins) == 1 && origins[0] == c.WebOrigin)
 }
 
+func pairingPublicTargetAllowed(r *http.Request, path string) bool {
+	return r.Host == draftPreviewHost && r.URL.Path == path && r.URL.RawPath == "" && r.URL.RawQuery == "" && !r.URL.ForceQuery
+}
+
 func decodePairingBody(w http.ResponseWriter, r *http.Request, allowed map[string]bool) (map[string]json.RawMessage, bool) {
 	values := r.Header.Values("Content-Type")
 	if len(values) != 1 {
@@ -216,12 +221,16 @@ func DraftPairingCreateHandler(repo DraftPairingRepository, c DraftPairingConfig
 		if pairingDisabled(w, c) {
 			return
 		}
+		if !pairingPublicTargetAllowed(r, "/api/draft-pairings") {
+			recipeError(w, http.StatusNotFound, "not_found", "Not found.")
+			return
+		}
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")
 			recipeError(w, 405, "method_not_allowed", "Method not allowed.")
 			return
 		}
-		if r.URL.RawQuery != "" || r.URL.ForceQuery || !pairingOriginAllowed(r, c, false) {
+		if !pairingOriginAllowed(r, c, false) {
 			recipeError(w, 403, "forbidden", "Request origin not allowed.")
 			return
 		}
@@ -266,12 +275,16 @@ func DraftPairingPollHandler(repo DraftPairingRepository, c DraftPairingConfig) 
 		if pairingDisabled(w, c) {
 			return
 		}
+		if !pairingPublicTargetAllowed(r, "/api/draft-pairings/poll") {
+			recipeError(w, http.StatusNotFound, "not_found", "Not found.")
+			return
+		}
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")
 			recipeError(w, 405, "method_not_allowed", "Method not allowed.")
 			return
 		}
-		if r.URL.RawQuery != "" || r.URL.ForceQuery || !pairingOriginAllowed(r, c, false) {
+		if !pairingOriginAllowed(r, c, false) {
 			recipeError(w, 403, "forbidden", "Request origin not allowed.")
 			return
 		}

@@ -3,6 +3,7 @@ package localclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -83,6 +84,45 @@ func TestPairingRejectsVerificationURIWithQuery(t *testing.T) {
 	client.http = &queueDoer{responses: []*http.Response{jsonResponse(201,
 		`{"api_version":"local-client-v1","pairing_id":"`+testIntent+`","poll_token":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","user_code":"2345ABCD","verification_uri":"https://athome-meals-dev.vercel.app/connect?code=2345ABCD","expires_in":600,"interval":5,"challenge_fingerprint":"0123abcd"}`)}}
 	if _, err := client.BeginPairing(context.Background(), "Mac"); err != ErrInvalidResponse {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestPairingRateLimitIsTerminalAndIgnoresRetryAfter(t *testing.T) {
+	for _, retryAfter := range []string{"", "not-a-duration", "999999999999", "https://attacker.invalid/retry"} {
+		t.Run(retryAfter, func(t *testing.T) {
+			store := NewMemoryCredentialStore()
+			client, _ := NewPairingClient(store)
+			response := jsonResponse(http.StatusTooManyRequests, `{"error":{"code":"rate_limited"}}`)
+			if retryAfter != "" {
+				response.Header.Set("Retry-After", retryAfter)
+			}
+			doer := &queueDoer{responses: []*http.Response{response}}
+			client.http = doer
+			session := &PairingSession{
+				PairingID: testIntent, ExpiresAt: time.Now().Add(10 * time.Minute), Interval: 5 * time.Second,
+				pollToken: strings.Repeat("A", 43), codeVerifier: strings.Repeat("A", 43),
+			}
+			if _, err := client.PollPairing(context.Background(), session); !errors.Is(err, ErrRateLimited) {
+				t.Fatalf("error = %v", err)
+			}
+			if session.pollToken != "" || session.codeVerifier != "" {
+				t.Fatal("pairing secrets remained retryable")
+			}
+			if _, err := client.PollPairing(context.Background(), session); !errors.Is(err, ErrExpired) || len(doer.requests) != 1 {
+				t.Fatalf("second poll error=%v requests=%d", err, len(doer.requests))
+			}
+			if _, err := store.Get(context.Background(), credentialKey(testProfile(testBinding))); !errors.Is(err, ErrCredentialMissing) {
+				t.Fatalf("credential stored after 429: %v", err)
+			}
+		})
+	}
+}
+
+func TestPairingCreateRateLimitIsSpecific(t *testing.T) {
+	client, _ := NewPairingClient(NewMemoryCredentialStore())
+	client.http = &queueDoer{responses: []*http.Response{jsonResponse(http.StatusTooManyRequests, "rate limited")}}
+	if _, err := client.BeginPairing(context.Background(), "Mac"); !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("error = %v", err)
 	}
 }

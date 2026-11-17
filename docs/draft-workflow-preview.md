@@ -152,15 +152,19 @@ context, so any future caller must supply a bounded context before activation.
 These source limits do not replace an edge throttle or establish an upload
 deadline.
 
-Before activation, the stable Preview hostname needs the one rate-limit rule
-available on Vercel Hobby. The shared rule is Preview-only, exact-host,
+Before activation, the project needs the one rate-limit rule available on
+Vercel Hobby. The shared rule applies across every Preview hostname, is
 POST-only, matches exactly `/api/draft-pairings` and
 `/api/draft-pairings/poll`, and permits 150 requests per provider-derived source
 IP per ten-minute fixed window before returning 429 ahead of function
 invocation. A legitimate client polling every five seconds for the complete
 ten-minute pairing lifetime uses at most 120 polls plus one create, leaving 29
 requests of retry and timing headroom. Do not trust a client forwarding header,
-add a bypass, broaden either path or scope the rule to Production.
+add a bypass, add a Hostname restriction, broaden either path or scope the rule
+to Production. Vercel gives each deployment a generated URL; limiting the rule
+to the stable alias would leave those Preview URLs unthrottled. The Go handlers
+independently accept only the stable alias and exact unescaped paths, rejecting
+alternate hosts and path variants before repository access.
 
 One shared rule cannot independently constrain creates and polls. The pairing
 store therefore serializes creation per exact environment and issuer and fails
@@ -186,6 +190,7 @@ provider changes and were not performed here.
 Provider references reviewed November 16, 2026: [WAF rate limiting](https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting),
 [rule configuration](https://vercel.com/docs/vercel-firewall/vercel-waf/rule-configuration),
 [custom-rule Log guidance](https://vercel.com/docs/vercel-firewall/vercel-waf/custom-rules),
+[generated deployment URLs](https://vercel.com/docs/deployments/generated-urls),
 [function duration configuration](https://vercel.com/docs/functions/configuring-functions/duration),
 and [function payload limits](https://vercel.com/docs/functions/limitations).
 

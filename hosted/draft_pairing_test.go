@@ -118,8 +118,37 @@ func testVerifier() (string, string) {
 
 func jsonRequest(method, path, body string) *http.Request {
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r.Host = draftPreviewHost
 	r.Header.Set("Content-Type", "application/json")
 	return r
+}
+
+func TestPairingPublicEndpointsRejectAlternateHostsAndPathsBeforeRepository(t *testing.T) {
+	verifier, challenge := testVerifier()
+	createBody := `{"code_challenge":"` + challenge + `","code_challenge_method":"S256","client_label":"Synthetic Mac"}`
+	pollBody := `{"pairing_id":"11111111-1111-4111-8111-111111111111","poll_token":"` + strings.Repeat("b", 43) + `","code_verifier":"` + verifier + `"}`
+	for _, tc := range []struct {
+		name, path, host, body string
+		handler                func(DraftPairingRepository, DraftPairingConfig) http.Handler
+	}{
+		{"create generated host", "/api/draft-pairings", "meal-planner-git-test-owner.vercel.app", createBody, DraftPairingCreateHandler},
+		{"create Production-like host", "/api/draft-pairings", "meal-planner.vercel.app", createBody, DraftPairingCreateHandler},
+		{"create trailing slash", "/api/draft-pairings/", draftPreviewHost, createBody, DraftPairingCreateHandler},
+		{"create encoded slash", "/api/draft-pairings%2f", draftPreviewHost, createBody, DraftPairingCreateHandler},
+		{"poll generated host", "/api/draft-pairings/poll", "meal-planner-git-test-owner.vercel.app", pollBody, DraftPairingPollHandler},
+		{"poll trailing slash", "/api/draft-pairings/poll/", draftPreviewHost, pollBody, DraftPairingPollHandler},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &fakePairingRepo{}
+			r := jsonRequest("POST", tc.path, tc.body)
+			r.Host = tc.host
+			w := httptest.NewRecorder()
+			tc.handler(repo, testPairingConfig()).ServeHTTP(w, r)
+			if w.Code != http.StatusNotFound || repo.hasDeadline || strings.Contains(w.Body.String(), draftPreviewHost) {
+				t.Fatalf("status=%d repository=%v body=%s", w.Code, repo.hasDeadline, w.Body.String())
+			}
+		})
+	}
 }
 
 func TestPairingCreateContractAndClosedGates(t *testing.T) {

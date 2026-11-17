@@ -8,7 +8,7 @@ const exact=(value,keys)=>{assert.ok(value&&typeof value==='object'&&!Array.isAr
 const identity=value=>{assert.equal(typeof value,'string');assert.match(value,/^[A-Za-z0-9_.-]{1,128}$/)}
 
 export const draftEdgeRules=Object.freeze([
- Object.freeze({name:'draft-pairing-shared-budget',environment:'preview',hostname:'athome-meals-dev.vercel.app',paths:Object.freeze(['/api/draft-pairings','/api/draft-pairings/poll']),method:'POST',sourceKey:'provider_source_ip',limit:150,windowSeconds:600,algorithm:'fixed_window',action:'rate_limit_429',beforeFunction:true}),
+ Object.freeze({name:'draft-pairing-shared-budget',environment:'preview',hostnameScope:'all_project_preview_hosts',paths:Object.freeze(['/api/draft-pairings','/api/draft-pairings/poll']),method:'POST',sourceKey:'provider_source_ip',limit:150,windowSeconds:600,algorithm:'fixed_window',action:'rate_limit_429',beforeFunction:true}),
 ])
 
 export const draftFunctionLimits=Object.freeze([
