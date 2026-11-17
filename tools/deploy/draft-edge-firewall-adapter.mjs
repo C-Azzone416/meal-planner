@@ -7,6 +7,8 @@ import {draftEdgeRules} from './draft-edge-readiness.mjs'
 
 const paths=Object.freeze(['/api/draft-pairings','/api/draft-pairings/poll'])
 const allowedConditionKeys=new Set(['key','neg','op','type','value'])
+const conditionOps=new Set(['eq','ex','gt','gte','inc','list','lt','lte','neq','nex','ninc','pre','re','sub','suf'])
+const conditionTypes=new Set(['bot_category','bot_name','bot_protection','bot_status','cookie','domain_environment','environment','geo_as_number','geo_city','geo_continent','geo_country','geo_country_region','header','host','ip_address','ja3_digest','ja4_digest','method','path','protocol','query','rate_limit_api_id','raw_path','region','response_code','response_header','route','ruleset','scheme','server_action','shared_condition','target_path','traffic_source','trusted_source','user_agent'])
 const boundedJSON=async response=>{
  assert.equal(response.status,200)
  const raw=await response.text();assert.ok(Buffer.byteLength(raw)>0&&Buffer.byteLength(raw)<=1024*1024)
@@ -20,6 +22,16 @@ const approvedIdentity=approved=>{
 const exactKeys=(value,allowed)=>{
  assert.ok(value&&typeof value==='object'&&!Array.isArray(value))
  for(const key of Object.keys(value))assert.ok(allowed.has(key),`Unsupported provider field ${key}`)
+}
+const validProviderCondition=condition=>{
+ if(!condition||typeof condition!=='object'||Array.isArray(condition))return false
+ if(Object.keys(condition).some(key=>!allowedConditionKeys.has(key)))return false
+ if(!conditionTypes.has(condition.type)||!conditionOps.has(condition.op))return false
+ if(condition.neg!==undefined&&typeof condition.neg!=='boolean')return false
+ if(condition.key!==undefined&&typeof condition.key!=='string')return false
+ const value=condition.value
+ return value===undefined||typeof value==='string'||(typeof value==='number'&&Number.isFinite(value))||
+  (Array.isArray(value)&&value.every(item=>typeof item==='string'))
 }
 const values=value=>Array.isArray(value)?value:[value]
 const conditionToken=condition=>{
@@ -51,7 +63,7 @@ const expectedRule=rule=>{
  }catch{return false}
 }
 const disjointScalar=(condition,type,target)=>{
- if(condition.type!==type||condition.neg===true)return false
+ if(condition.type!==type||condition.neg===true||!(condition.key===undefined||condition.key===''))return false
  const list=values(condition.value)
  if(condition.op==='eq')return list.length===1&&!list.includes(target)
  if(condition.op==='inc')return !list.includes(target)
@@ -60,7 +72,7 @@ const disjointScalar=(condition,type,target)=>{
  return false
 }
 const disjointPaths=condition=>{
- if(condition.type!=='path'||condition.neg===true)return false
+ if(condition.type!=='path'||condition.neg===true||!(condition.key===undefined||condition.key===''))return false
  const list=values(condition.value)
  if(condition.op==='eq'||condition.op==='inc')return paths.every(path=>!list.includes(path))
  if(condition.op==='neq'||condition.op==='ninc')return paths.every(path=>list.includes(path))
@@ -70,7 +82,8 @@ const mayIntersect=rule=>{
  if(rule.active!==true)return false
  if(!Array.isArray(rule.conditionGroup)||rule.conditionGroup.length===0)return true
  return rule.conditionGroup.some(group=>{
-  if(!group||!Array.isArray(group.conditions)||group.conditions.length===0)return true
+  if(!group||typeof group!=='object'||Array.isArray(group)||Object.keys(group).length!==1||!Object.hasOwn(group,'conditions')||!Array.isArray(group.conditions)||group.conditions.length===0)return true
+  if(group.conditions.some(condition=>!validProviderCondition(condition)))return true
   return !group.conditions.some(condition=>disjointScalar(condition,'environment','preview')||disjointScalar(condition,'method','POST')||disjointPaths(condition))
  })
 }
@@ -92,7 +105,10 @@ export async function inspectDraftEdgeFirewall(approved,request,nowMs){
  const config=await boundedJSON(await request(`https://api.vercel.com/v1/security/firewall/config/active?${query}`))
  assert.equal(config.ownerId,approved.accountId);assert.equal(config.projectKey,approved.projectId)
  assert.equal(typeof config.firewallEnabled,'boolean');assert.ok(Array.isArray(config.rules))
- for(const rule of config.rules)assert.equal(typeof rule?.active,'boolean','Malformed custom-rule activity state')
+ for(const rule of config.rules){
+  assert.equal(typeof rule?.active,'boolean','Malformed custom-rule activity state')
+  assert.equal(typeof rule?.valid,'boolean','Malformed custom-rule validity state')
+ }
  const named=config.rules.filter(rule=>rule?.name===draftEdgeRules[0].name)
  const compliant=named.length===1&&expectedRule(named[0])
  const otherActions=new Set(config.rules.filter(rule=>rule!==named[0]&&mayIntersect(rule)).map(safeAction))

@@ -44,6 +44,28 @@ test('inactive and provably disjoint rules do not block readiness',async()=>{
  assert.deepEqual(JSON.parse(result.evidence).otherIntersectingRules,[])
 })
 
+for(const [name,condition] of [
+ ['non-boolean negation',{type:'environment',op:'eq',value:'production',neg:'true'}],
+ ['unknown condition field',{type:'environment',op:'eq',value:'production',futureMeaning:true}],
+ ['object value',{type:'environment',op:'eq',value:{name:'production'}}],
+ ['numeric operator',{type:'environment',op:7,value:'production'}],
+ ['unknown operator',{type:'environment',op:'future_op',value:'production'}],
+ ['unknown type',{type:'future_environment',op:'eq',value:'production'}],
+ ['unexpected key type',{type:'environment',op:'eq',value:'production',key:7}],
+])test(`malformed disjoint condition is conservatively intersecting: ${name}`,async()=>{
+ const rule={...expectedRule(),id:'other',name:'other-bypass',action:{mitigate:{action:'bypass'}},conditionGroup:[{conditions:[condition]}]}
+ const result=await inspectDraftEdgeFirewall(approved,requestFor({rules:[rule]}),now)
+ assert.deepEqual(JSON.parse(result.evidence).otherIntersectingRules,[{action:'bypass'}])
+ assert.throws(()=>verifyDraftEdgeFirewallEvidence(result.evidence,result.sha256,approved,now+1))
+})
+
+test('malformed condition group is conservatively intersecting',async()=>{
+ const rule={...expectedRule(),id:'other',name:'other-bypass',action:{mitigate:{action:'bypass'}},conditionGroup:[{conditions:[{type:'environment',op:'eq',value:'production'}],futureMeaning:'or'}]}
+ const result=await inspectDraftEdgeFirewall(approved,requestFor({rules:[rule]}),now)
+ assert.deepEqual(JSON.parse(result.evidence).otherIntersectingRules,[{action:'bypass'}])
+ assert.throws(()=>verifyDraftEdgeFirewallEvidence(result.evidence,result.sha256,approved,now+1))
+})
+
 for(const [name,mutate] of [
  ['missing rule',()=>({rule:{...expectedRule(),name:'other'}})],
  ['disabled firewall',()=>({enabled:false})],
@@ -90,6 +112,7 @@ for(const [name,request] of [
  ['provider failure',async()=>({status:403,text:async()=>'FAKE_SECRET_PROVIDER_RESPONSE'})],
  ['oversize response',async()=>({status:200,text:async()=>'{'.repeat(1024*1024+1)})],
  ['malformed custom-rule activity',requestFor({rules:[{...expectedRule(),name:'schema-drift',active:undefined}]})],
+ ['malformed custom-rule validity',requestFor({rules:[{...expectedRule(),name:'schema-drift',valid:undefined}]})],
 ])test(`adapter rejects ${name}`,async()=>assert.rejects(()=>inspectDraftEdgeFirewall(approved,request,now)))
 
 test('consumer rejects stale, future, altered and cross-project evidence',async()=>{
